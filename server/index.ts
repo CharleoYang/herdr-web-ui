@@ -14,6 +14,7 @@ import { remoteAccess, TailnetIdentitySource } from "./tailscale.ts";
 import { paneCommands } from "./commands.ts";
 import { paneFiles } from "./files.ts";
 import { badRequest, errorResponse, isCount, isJsonObject, jsonResponse } from "./http.ts";
+import { listOmpModels } from "./omp-models.ts";
 import { serveStatic } from "./static.ts";
 import { startStatusCollector } from "./collector.ts";
 import { conversationImage, ConversationUnavailable, HistoryChanged, paneConversation, paneRunsOmo, toolOutput } from "./conversation.ts";
@@ -1619,6 +1620,15 @@ export function createServer(
           const limit = limitRaw === null ? 20 : Number(limitRaw);
           if (!Number.isInteger(limit) || limit < 1) return badRequest("invalid_limit", "limit must be a positive integer");
           return jsonResponse({ files: await paneFiles(context.cwd, url.searchParams.get("q") ?? "", Math.min(limit, 100)) });
+        } catch (error) {
+          return errorResponse(error);
+        }
+      }
+
+      if (pathname === "/api/omp/models") {
+        if (request.method !== "GET") return badRequest("method_not_allowed", "use GET");
+        try {
+          return jsonResponse({ models: await listOmpModels() });
         } catch (error) {
           return errorResponse(error);
         }

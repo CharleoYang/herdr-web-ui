@@ -6,22 +6,22 @@ value. When a component needs a value that is not here, add it to both first.
 
 ## 1. Atmosphere & Identity
 
-A warm terminal: an amber-phosphor console on lamp-lit graphite (dark) or ledger paper (light),
-with chat-app clarity. Tonal surfaces and hairlines keep the chrome out of the way. There is ONE
-chrome color, amber: focus, the chosen lens, the terminal cursor and the user's own action (Send, primary
-buttons). Agent states carry the remaining saturated colors and none of them is amber. The user's
-chat turns are neutral raised cards, so a long thread never turns into a wall of color. Dark is the
-default, light follows the same hierarchy, and comfortable or compact density changes scale without
-changing information architecture. A dark report look, a neutral charcoal one, Catppuccin and lilac are
-opt-in palettes (Settings → Appearance → Colors); amber stays the default and the look before settings load.
+A warm terminal: an olive-black Monokai console (dark) or quiet ledger paper (light),
+with chat-app clarity. Tonal surfaces and hairlines keep the chrome out of the way. Orange
+connects focus, the chosen lens, the terminal cursor and the user's own action (Send, primary
+buttons). Agent states carry cyan, pink and green. The user's chat turns are neutral raised
+cards, so a long thread never turns into a wall of color. Dark is the default; light follows
+the same hierarchy, and comfortable or compact density changes scale without changing navigation.
+A dark report look, a neutral charcoal one, Catppuccin, lilac and the previous amber look are
+opt-in palettes (Settings → Appearance → Colors); Monokai is the default before settings load.
 
 The sidebar is one grid: a leading cell that says who or what a row is (the coding agent's brand
 mark, else the place's own glyph), a title, and a trailing cell that says how it is. Workspaces
 and Agents are independent lists, as in herdr's Spaces and Agents panels; tab and pane navigation
 stays over the terminal and in the palette. Sections are parted by space and a dim head, never by
 a rule. Hover and selection are one neutral fill at two strengths. Brand marks are the only color
-there that is not a state, and a ready row draws no state at all. Amber connects focus, the chosen
-lens glyph and the terminal cursor.
+there that is not a state, and a ready row draws no state at all. Orange connects focus, the chosen
+lens glyph and the terminal cursor in the default Monokai palette.
 
 ## 2. Color
 
@@ -31,47 +31,54 @@ Only tokens overridden by `[data-theme="light"]` have a light value. Both column
 
 | Role | Token | Dark | Light |
 |------|-------|------|-------|
-| Surface/base | `--bg` | `#12100e` | `#eeeae2` |
-| Surface/panel | `--bg-panel` | `#181613` | `#faf8f3` |
-| Surface/elevated | `--bg-elevated` | `#211e1a` | `#f2eee6` |
-| Surface/hover | `--bg-hover` | `#2a2621` | `#e8e2d6` |
-| Surface/input | `--bg-input` | `#1c1916` | `#fffdf9` |
-| Border | `--border` | `#2d2924` | `#dcd4c6` |
-| Border/strong | `--border-strong` | `#3e3830` | `#c5baa8` |
-| Chat bubble edge | `--bubble-border` | `transparent` | `var(--border)` |
-| Text/primary | `--text` | `#d8d0c3` | `#2a251f` |
-| Text/dim | `--text-dim` | `#9b9183` | `#685e52` |
-| Text/strong | `--text-strong` | `#f2ebdf` | `#16120d` |
-| Accent | `--accent` | `#f0a830` | `#8c5000` |
-| Accent/tint | `--accent-tint` | `rgba(240, 168, 48, 0.13)` | `rgba(140, 80, 0, 0.1)` |
-| Primary | `--primary` | `#f0a830` | `#c57d12` |
-| Primary/hover | `--primary-hover` | `#f6bb55` | `#d48c1f` |
-| Primary/text | `--primary-text` | `#1b1407` | `#1b1407` |
-| Primary/tint | `--primary-tint` | `rgba(240, 168, 48, 0.16)` | `rgba(197, 125, 18, 0.14)` |
-| Status/idle | `--status-idle` | `#9b9183` | `#685e52` |
-| Status/working | `--status-working` | `#6cb8d6` | `#155a72` |
-| Status/blocked | `--status-blocked` | `#ff7b70` | `#a82323` |
-| Status/done | `--status-done` | `#93c36b` | `#2f6317` |
-| Working/tint | `--status-working-tint` | `rgba(108, 184, 214, 0.14)` | `rgba(21, 90, 114, 0.12)` |
-| Blocked/tint | `--status-blocked-tint` | `rgba(255, 123, 112, 0.14)` | `rgba(168, 35, 35, 0.12)` |
-| Done/tint | `--status-done-tint` | `rgba(147, 195, 107, 0.14)` | `rgba(47, 99, 23, 0.12)` |
-| Danger/tint | `--danger-tint` | `rgba(255, 123, 112, 0.12)` | `rgba(168, 35, 35, 0.1)` |
-| Danger/text | `--danger-text` | `#ffd9d4` | `#8f1d1d` |
-| Overlay/scrim | `--scrim` | `rgba(8, 6, 4, 0.55)` | `rgba(40, 32, 22, 0.35)` |
-| Drawer shadow | `--shadow-drawer` | `0 0 40px rgba(0, 0, 0, 0.6)` | `0 0 40px rgba(40, 32, 22, 0.22)` |
-| Popover shadow | `--shadow-pop` | `0 16px 48px rgba(0, 0, 0, 0.55), 0 0 0 1px var(--border)` | `0 16px 48px rgba(40, 32, 22, 0.16), 0 0 0 1px var(--border)` |
-| Card shadow | `--shadow-card` | `0 4px 16px rgba(0, 0, 0, 0.35)` | `0 4px 16px rgba(40, 32, 22, 0.07)` |
+| Surface/base | `--bg` | `#1e1f1c` | `#f5f4ef` |
+| Surface/panel | `--bg-panel` | `#272822` | `#faf9f5` |
+| Surface/elevated | `--bg-elevated` | `#2e2f29` | `#eeede6` |
+| Surface/hover | `--bg-hover` | `#33342d` | `#e5e3dc` |
+| Surface/input | `--bg-input` | `#1e1f1c` | `#ffffff` |
+| Border | `--border` | `#3e3d32` | `#dcd9cd` |
+| Border/strong | `--border-strong` | `#49483e` | `#cac6b6` |
+| Chat bubble edge | `--bubble-border` | `transparent` | `transparent` |
+| Text/primary | `--text` | `#f8f8f2` | `#272822` |
+| Text/dim | `--text-dim` | `#b0ab95` | `#605d52` |
+| Text/strong | `--text-strong` | `#ffffff` | `#141411` |
+| Accent | `--accent` | `#fd971f` | `#d46b00` |
+| Accent/tint | `--accent-tint` | `rgba(253, 151, 31, 0.16)` | `rgba(212, 107, 0, 0.12)` |
+| Primary | `--primary` | `#fd971f` | `#d46b00` |
+| Primary/hover | `--primary-hover` | `#ffad42` | `#eb7802` |
+| Primary/text | `--primary-text` | `#1b1407` | `#ffffff` |
+| Primary/tint | `--primary-tint` | `rgba(253, 151, 31, 0.18)` | `rgba(212, 107, 0, 0.14)` |
+| Status/idle | `--status-idle` | `#a6a28c` | `#605d52` |
+| Status/working | `--status-working` | `#66d9ef` | `#0b5c9e` |
+| Status/blocked | `--status-blocked` | `#ff9eaa` | `#ad0c3d` |
+| Status/done | `--status-done` | `#a6e22e` | `#1e6122` |
+| Working/tint | `--status-working-tint` | `rgba(102, 217, 239, 0.14)` | `rgba(11, 92, 158, 0.12)` |
+| Blocked/tint | `--status-blocked-tint` | `rgba(255, 158, 170, 0.14)` | `rgba(173, 12, 61, 0.12)` |
+| Done/tint | `--status-done-tint` | `rgba(166, 226, 46, 0.14)` | `rgba(30, 97, 34, 0.12)` |
+| Danger/tint | `--danger-tint` | `rgba(255, 158, 170, 0.12)` | `rgba(173, 12, 61, 0.1)` |
+| Danger/text | `--danger-text` | `#ffd6df` | `#880e4f` |
+| Overlay/scrim | `--scrim` | `rgba(10, 10, 8, 0.65)` | `rgba(39, 40, 34, 0.35)` |
+| Drawer shadow | `--shadow-drawer` | `0 0 40px rgba(0, 0, 0, 0.65)` | `0 0 40px rgba(39, 40, 34, 0.2)` |
+| Popover shadow | `--shadow-pop` | `0 16px 48px rgba(0, 0, 0, 0.6), 0 0 0 1px var(--border)` | `0 16px 48px rgba(39, 40, 34, 0.16), 0 0 0 1px var(--border)` |
+| Card shadow | `--shadow-card` | `0 4px 16px rgba(0, 0, 0, 0.35)` | `0 4px 16px rgba(39, 40, 34, 0.08)` |
 
 ### Opt-in palettes
 
-`settings.palette` (`amber` default, `report`, `charcoal`, `catppuccin`, `lilac`) is written as `data-palette`. The
-tables above are amber, the base blocks; the four opt-in palettes override them in
+`settings.palette` (`monokai` default, `amber`, `report`, `charcoal`, `catppuccin`, `lilac`) is written as `data-palette`. The
+tables above are monokai, the base blocks; the other palettes override them in
 `[data-theme][data-palette]` blocks of `src/styles.css`, which hold the complete values.
 
-`--bubble-border` is the edge of the chat's user bubble. It is `transparent` where `--bg-elevated`
-alone parts the bubble from `--bg`: dark amber, dark report, dark charcoal and dark lilac. It is `var(--border)`
-where the two surfaces sit close: every light theme (the `[data-theme="light"]` block sets it for
-all palettes) and dark Catppuccin, whose elevated surface is darker than its canvas.
+`--bubble-border` is the edge of the chat's user bubble. It is `transparent` on the monokai default,
+where the elevated surface already parts from the canvas, and on dark report, charcoal and lilac.
+It is `var(--border)` where the two surfaces sit close: light amber, report, charcoal, catppuccin
+and lilac, and dark Catppuccin, whose elevated surface is darker than its canvas.
+
+- **Monokai (OMP)** is the default: olive-black surfaces with orange actions, cyan working,
+  pink blocked and green completed states. Its smaller corners are `4/6/8px` for
+  `--radius-sm/md/lg`. Markdown headings and inline code use `--chat-heading` and
+  `--chat-code-accent` (`#ae81ff` dark, `#7040b0` light); work blocks and todo cards use
+  `--chat-work-bg` (`#242520` dark, `--bg-elevated` light). Component styles read tokens in
+  both themes, never dark-only colors. Amber remains an explicit choice for existing users.
 
 - **Dark report** is a near-black blue-grey canvas with hairlines: `--bg` `#0a0d12`, panel and
   terminal `#0f1319`, text `#b4bdc9` / `#8792a3` / `#e8ecf2`. Primary (the user's action) is white
@@ -117,17 +124,20 @@ CSS tokens verbatim for each resolved theme and palette (`settings.test.ts` chec
 
 | Role | Token | Dark | Light | xterm key |
 |------|-------|------|-------|-----------|
-| Background | `--term-bg` | `#181613` | `#faf8f3` | `background` |
-| Foreground | `--term-fg` | `#d8d0c3` | `#2a251f` | `foreground` |
-| Cursor | `--term-cursor` | `#f0a830` | `#8c5000` | `cursor` |
-| Selection | `--term-selection` | `#4a3d26` | `#f0d9ae` | `selectionBackground` |
+| Background | `--term-bg` | `#272822` | `#faf9f5` | `background` |
+| Foreground | `--term-fg` | `#f8f8f2` | `#272822` | `foreground` |
+| Cursor | `--term-cursor` | `#fd971f` | `#d46b00` | `cursor` |
+| Selection | `--term-selection` | `#49483e` | `#e0dccf` | `selectionBackground` |
+
+Dark Monokai also sets xterm's ANSI colors in `PaneTerminal.tsx`: pink red, green, yellow,
+cyan blue/cyan and purple magenta, with olive-black black and off-white white. Other palettes
+and light Monokai retain xterm's standard ANSI colors.
 
 ### Rules
-- Amber is the one chrome color. Accent (selected, focused, informational) and primary (the user's
-  action: Send, primary buttons) are both amber; in light, accent is the darker text-safe ochre and
-  primary the brighter fill carrying ink text. Agent states never use amber. The report palette
-  keeps the same split, accent (blue) marks and primary (white, or ink on paper) acts, and there
-  agent states never use blue.
+- Orange is the default chrome color. Accent (selected, focused, informational) and primary
+  (the user's action: Send, primary buttons) share the Monokai hue; light uses a darker
+  text-safe orange. Agent states use cyan, pink and green. Amber remains the previous
+  lamp-lit palette, while report keeps blue informational marks and white or ink actions.
 - Agent state has a written label as well as color. The sidebar's compact glyphs keep their labels
   in tooltips and screen-reader text; other surfaces draw the words. In the sidebar ready and
   unknown draw no glyph and keep their label for assistive tech; elsewhere unknown uses dim text
@@ -195,7 +205,7 @@ CSS tokens verbatim for each resolved theme and palette (`settings.test.ts` chec
 
 ### Settings
 - `theme`: `dark`, `light`, or `system`; default `dark`.
-- `palette`: `amber`, `report`, `charcoal`, `catppuccin` or `lilac`; default `amber`.
+- `palette`: `monokai`, `amber`, `report`, `charcoal`, `catppuccin` or `lilac`; default `monokai`.
 - `density`: `comfortable` or `compact`; default `comfortable`.
 - `sidebarRows`: `one` or `two`; default `two`.
 - Terminal font size is independent: default `13px`, clamped to `10–22px`.
@@ -689,6 +699,16 @@ One set for both themes: the card is island black wherever it shows.
 - An OmO or omp `task` row opens to the tasks it starts (`.chat-task-calls`): each summary in
   `--text`, the agent as a hairline mono pill, the prompt in the bounded mono input box.
 
+### Turn todo list (`.chat-todo`)
+- A turn's newest todo tool call provides one collapsible list outside the work block, so
+  folding the commands does not hide progress. Claude `TodoWrite` and Codex `update_plan`
+  inputs provide complete lists; OMP/OmO tool answers provide phase-grouped states, with
+  flat OMP `init.items` input as the fallback. A later empty list clears the earlier state.
+- The summary shows completed/total counts, an active item or blocked state, and a caret.
+  Phase headings and tree rows retain completed, active, blocked and dropped status icons
+  and notes. These states use the same semantic color tokens as the rest of the interface.
+
+
 ### Background tasks ended (`.chat-task-results`)
 - Where OmO reports background tasks that ended, the transcript shows one `--bg-elevated` card
   (hairline edge, `--radius-lg`) on the prose column: a dim `--fs-xs` line with the layers icon,
@@ -807,12 +827,16 @@ One set for both themes: the card is island black wherever it shows.
   `--fw-medium`; the level follows a middle dot in `--text-dim`, as the agent's own words with
   only the first letter drawn as a capital (`::first-letter`, the text is not rewritten); a pane
   that records no level draws no dot and no dash, only the name. On the
-  fill the ring's track is `--border-strong`; a ring left bare on the card keeps `--border`. It is display only: a `span` with no role, no
-  focus, no hover or pressed state, no pointer cursor and no chevron; the ring inside it is the
-  one thing to press on desktop; mobile keeps the ring inert. The `title` of the model is the id as received, and the level's is its
-  sentence; behind a name the id is also repeated as `.visually-hidden` text, since a touch
-  cannot reach a title. A pane that names no model draws no pill: the mark and the ring stand
-  alone, with a dim `Model —` and the level between them if the pane records only a level.
+  fill the ring's track is `--border-strong`; a ring left bare on the card keeps `--border`.
+  Other agents' model labels are display-only. OMP's model is a button, present even before
+  the first recorded model, opening a searchable session-only switcher. The selected PC's
+  `/api/omp/models` supplies chat choices from `omp models --json` (60-second server cache).
+  Selection submits `/switch provider/id` through the existing terminal input receipt path,
+  not a second model authority. It is disabled offline, while working or blocked, or while
+  a prompt or switch waits. The transcript's next metadata read updates the pill; failures
+  leave the dialog open and show the composer's error note. Other panes and defaults do not change.
+  The full recorded id remains in the model's title; known names also repeat it for assistive
+  tech. The context ring stays interactive on desktop and inert on mobile.
 - The model is drawn by name only where its id is one `modelLabel` (`src/lib/modelName.ts`) can
   name for certain, from the vendor's own regular naming and matched whole:
   `claude-<family>-<major>[-<minor>]`, also behind `anthropic/`, is `<Family> <major>.<minor>`
@@ -822,9 +846,9 @@ One set for both themes: the card is island black wherever it shows.
   well-formed id of a version that does not exist is named too. Any other id — a dated snapshot, another tier or
   product suffix, another provider's prefix, another vendor, a spelling that is not the vendor's
   canonical one (a leading zero as in `claude-sonnet-5-05`, uppercase, a stray separator or
-  space) — is drawn exactly as received in
-  `--font-mono` at regular weight (`.composer-model.is-id`), so it reads as an identifier and no
-  suffix is dropped.
+  space) — uses `--font-mono` at regular weight (`.composer-model.is-id`), so it reads as an
+  identifier. A provider/id selector shows its final id segment to fit the pill; the full
+  selector remains in its title and in the switcher's model rows. No model name is guessed.
 - What does not fit the row gives way in this order: the task chip's words (icon and count below
   a `640px` card), then the reasoning level and model name according to the measured row. A long
   identifier can shorten inside the pill; the context ring remains visible. The row is measured

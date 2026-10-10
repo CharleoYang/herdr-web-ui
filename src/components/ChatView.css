@@ -1183,6 +1183,179 @@
 .chat-goal-text { white-space: pre-wrap; }
 .chat-goal-reason, .chat-goal-spent { color: var(--text-dim); }
 
+
+/* Agent todo list (omp, claude, codex): one card on the turn, matching OMP's TUI look */
+.chat-todo {
+  min-width: 0;
+  max-width: 100%;
+  margin-bottom: var(--space-2);
+  border: var(--hairline) solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-elevated);
+  font-size: var(--fs-xs);
+}
+
+.chat-todo > summary {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2);
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+}
+
+.chat-todo > summary::-webkit-details-marker { display: none; }
+
+.chat-todo-mark {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+.chat-todo-mark svg {
+  width: 14px;
+  height: 14px;
+  color: var(--accent);
+}
+
+.chat-todo.is-done .chat-todo-mark svg {
+  color: var(--status-done);
+}
+
+.chat-todo.is-blocked .chat-todo-mark svg {
+  color: var(--status-blocked);
+}
+
+.chat-todo-label {
+  font-weight: var(--fw-semibold);
+  color: var(--text-strong);
+}
+
+.chat-todo-progress {
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+  font-size: var(--fs-2xs);
+}
+
+.chat-todo-active-task {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text);
+  font-size: var(--fs-xs);
+}
+
+.chat-todo[open] .chat-todo-active-task {
+  visibility: hidden;
+}
+
+.chat-todo[open] .chat-skill-caret {
+  transform: rotate(180deg);
+}
+
+.chat-todo-detail {
+  padding: 0 var(--space-2) var(--space-2);
+  overflow-wrap: anywhere;
+}
+
+.chat-todo-phase {
+  margin: var(--space-2) 0 var(--space-1);
+  color: var(--text-dim);
+  font-size: var(--fs-2xs);
+  font-weight: var(--fw-medium);
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-caps);
+}
+
+.chat-todo-tree {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+}
+
+.chat-todo-item {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  padding: 2px 0;
+  color: var(--text);
+}
+
+.chat-todo-branch {
+  color: var(--text-dim);
+  font-family: monospace;
+  user-select: none;
+  flex-shrink: 0;
+}
+
+.chat-todo-status-icon {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+
+.chat-todo-status-icon svg {
+  width: 12px;
+  height: 12px;
+}
+
+.chat-todo-item.is-completed {
+  color: var(--text-dim);
+}
+.chat-todo-item.is-completed .chat-todo-status-icon svg {
+  color: var(--status-done);
+}
+
+.chat-todo-item.is-in_progress {
+  color: var(--text-strong);
+  font-weight: var(--fw-medium);
+}
+.chat-todo-item.is-in_progress .chat-todo-status-icon svg {
+  color: var(--status-working);
+}
+
+.chat-todo-item.is-blocked .chat-todo-status-icon svg {
+  color: var(--status-blocked);
+}
+
+.chat-todo-item.is-dropped {
+  color: var(--text-dim);
+  text-decoration: line-through;
+}
+
+.chat-todo-item-label {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.chat-todo-item-note {
+  margin-left: var(--space-1);
+  color: var(--text-dim);
+}
+
+/* Monokai styling */
+[data-palette="monokai"] .chat-todo {
+  background: var(--chat-work-bg);
+  border-color: var(--border);
+}
+[data-palette="monokai"] .chat-todo-mark svg {
+  color: var(--accent);
+}
+[data-palette="monokai"] .chat-todo.is-done .chat-todo-mark svg {
+  color: var(--status-done);
+}
+[data-palette="monokai"] .chat-todo-item.is-in_progress .chat-todo-status-icon svg {
+  color: var(--status-working);
+}
+[data-palette="monokai"] .chat-todo-item.is-completed .chat-todo-status-icon svg {
+  color: var(--status-done);
+}
 /* OmO's background tasks reporting back: one card in the transcript's column, a row per task
    whose status is written and colored as in the background-task list, its result on request */
 .chat-task-results {
@@ -1281,3 +1454,102 @@
 .chat-abandoned { margin: var(--space-2) 0; }
 .chat-abandoned > summary { font-style: italic; }
 .chat-abandoned-note { margin: var(--space-2) 0 0; color: var(--text-dim); }
+
+/* Monokai / OMP markdown and chat styling; palette tokens also resolve in light mode. */
+[data-palette="monokai"] .chat-turn-agent {
+  color: var(--text);
+}
+
+[data-palette="monokai"] .markdown h1,
+[data-palette="monokai"] .markdown h2,
+[data-palette="monokai"] .markdown h3 {
+  color: var(--chat-heading);
+  font-weight: var(--fw-semibold);
+}
+
+[data-palette="monokai"] .markdown h4,
+[data-palette="monokai"] .markdown h5,
+[data-palette="monokai"] .markdown h6 {
+  color: var(--accent);
+  font-weight: var(--fw-semibold);
+}
+
+[data-palette="monokai"] .markdown strong,
+[data-palette="monokai"] .markdown b {
+  color: var(--accent);
+  font-weight: var(--fw-semibold);
+}
+
+[data-palette="monokai"] .markdown :not(pre) > code {
+  color: var(--chat-code-accent);
+  background: var(--bg-input);
+  border: var(--hairline) solid var(--border);
+}
+
+[data-palette="monokai"] .chat-bubble .markdown :not(pre) > code {
+  background: var(--bg-panel);
+}
+
+[data-palette="monokai"] .markdown-code {
+  background: var(--bg-panel);
+  border: var(--hairline) solid var(--border-strong);
+}
+
+[data-palette="monokai"] .markdown-code pre code {
+  color: var(--text);
+}
+
+[data-palette="monokai"] .markdown-code-header {
+  border-bottom: var(--hairline) solid var(--border-strong);
+  color: var(--text-dim);
+}
+
+[data-palette="monokai"] .markdown a {
+  color: var(--status-working);
+  text-decoration-color: color-mix(in srgb, var(--status-working) 40%, transparent);
+}
+
+[data-palette="monokai"] .markdown blockquote {
+  border-left-color: var(--chat-heading);
+  color: var(--text-dim);
+}
+
+[data-palette="monokai"] .markdown-list li::marker {
+  color: var(--accent);
+  font-weight: var(--fw-semibold);
+}
+
+[data-palette="monokai"] .chat-bubble {
+  background: var(--bg-input);
+  border: var(--hairline) solid var(--border);
+  color: var(--text);
+}
+
+[data-palette="monokai"] .work-block {
+  background: var(--chat-work-bg);
+  border: var(--hairline) solid var(--border);
+  border-radius: var(--radius-md);
+  padding: var(--space-2) var(--space-3);
+  margin: var(--space-2) 0;
+}
+
+[data-palette="monokai"] .work-block-title {
+  color: var(--accent);
+  font-weight: var(--fw-medium);
+}
+
+[data-palette="monokai"] .work-row-name {
+  color: var(--status-done);
+}
+
+[data-palette="monokai"] .work-row-name.is-verb {
+  color: var(--status-working);
+}
+
+[data-palette="monokai"] .work-row-summary {
+  color: var(--text);
+}
+
+[data-palette="monokai"] .chat-task-result-body {
+  background: var(--bg-input);
+}

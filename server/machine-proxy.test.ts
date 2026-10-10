@@ -12,6 +12,7 @@ const remote = Bun.serve({
     if (path === "/api/pane/conversation/image") return new Response(new Uint8Array([137, 80, 78, 71]), { headers: { "content-type": "image/png" } });
     if (path === "/api/pane/conversation/tool-output") return new Response("complete remote output", { headers: { "content-type": "text/plain; charset=utf-8" } });
     if (path === "/api/fs/file") return new Response("%PDF-1.7", { headers: { "content-type": "application/pdf" } });
+    if (path === "/api/omp/models") return Response.json({ models: [{ provider: "demo", id: "chat", selector: "demo/chat", name: "Demo chat" }] });
     const ifNoneMatch = request.headers.get("if-none-match");
     asked.push(ifNoneMatch);
     if (ifNoneMatch === "\"v1\"") return new Response(null, { status: 304, headers: { etag: "\"v1\"" } });
@@ -38,6 +39,14 @@ describe("PC proxy", () => {
     expect(await unchanged.text()).toBe("");
     expect(asked).toEqual([null, "\"v1\""]);
   });
+});
+
+it("reads the selected PC's OMP catalogue and rejects paths beyond that endpoint", async () => {
+  const url = "http://127.0.0.1/api/machines/pc1/omp/models";
+  const response = await handleMachineRequest(new Request(url), manager);
+  expect(response.status).toBe(200);
+  expect(await response.json()).toEqual({ models: [{ provider: "demo", id: "chat", selector: "demo/chat", name: "Demo chat" }] });
+  expect((await handleMachineRequest(new Request(`${url}/private`), manager)).status).toBe(404);
 });
 
 it("forwards conversation images and complete output, while rejecting arbitrary nested paths", async () => {

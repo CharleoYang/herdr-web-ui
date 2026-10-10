@@ -7,6 +7,16 @@ between releases do not reach them. Remote-PC runtime bundles are versioned sepa
 
 ## [Unreleased]
 
+### Added
+- OMP chat panes offer a searchable, session-only model switcher backed by the selected PC's
+  installed chat models. Switching waits for an idle agent and uses the existing terminal submit path.
+- Chat turns show phase-grouped todo progress outside folded tool activity, including flat OMP
+  initialization, Claude TodoWrite and Codex plans; clearing a list no longer revives older items.
+
+### Changed
+- Monokai (OMP) is the default color palette, with theme-aware chat styling and dark terminal
+  ANSI colors. Amber and all existing palette choices remain available.
+
 ### Fixed
 - Secret input and the Codex follow-up fallback validate the live screen, so a password
   prompt or collapsed question queue in scrollback cannot send input into the current program.

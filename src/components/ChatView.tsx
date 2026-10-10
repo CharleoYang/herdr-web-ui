@@ -1,7 +1,7 @@
 import { createContext, memo, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type ComponentType } from "react";
 import { createPortal } from "react-dom";
 import {
-  ArrowDown, BookOpen, Check, ChevronDown, ChevronRight, Circle, CircleAlert, CircleCheck, CircleDot, CircleSlash, CircleX, Copy, Layers, Target,
+  ArrowDown, BookOpen, Check, CheckSquare, ChevronDown, ChevronRight, Circle, CircleAlert, CircleCheck, CircleDot, CircleSlash, CircleX, Copy, Layers, ListTodo, Target,
   type LucideProps,
 } from "lucide-react";
 
@@ -18,8 +18,8 @@ import { ApiError } from "../lib/api.ts";
 import { useMachineApi } from "../lib/machineContext.tsx";
 import { toTranscriptMessages, type TranscriptMessage } from "../lib/transcript.ts";
 import { isLiveWorkTurn, isWaitingWorkTurn, formatWorkDuration, splitTurn, workFailed, workStartsOpen, workSummary, type ToolPart as ToolPartType } from "../lib/workBlocks.ts";
-import { phaseRows, planRows, taskRows, todoRows, type ChecklistRow } from "../lib/checklist.ts";
-import { isTodoTool, parseTodoAnswer, todoCallSummary, type TodoItem, type TodoStatus } from "../lib/todos.ts";
+import { itemsRows, phaseRows, planRows, taskRows, todoRows, type ChecklistRow } from "../lib/checklist.ts";
+import { isTodoTool, parseTodoAnswer, todoCallSummary, turnTodos, type TodoItem, type TodoStatus } from "../lib/todos.ts";
 import { formatGoalTime, turnGoal, type GoalState, type GoalStatus } from "../lib/goals.ts";
 import { useSettings } from "../lib/settings.ts";
 import { statusEdgeRead } from "../lib/status.ts";
@@ -234,7 +234,7 @@ function ToolInputView({ part }: { part: ToolPartType }) {
   if (content !== undefined) return <div className="chat-tool-io">{(str("file_path") ?? str("path")) !== undefined && <ToolFile path={(str("file_path") ?? str("path"))!} />}<pre>{content}</pre></div>;
   const path = str("file_path") ?? str("path");
   if (path !== undefined) return <div className="chat-tool-io"><ToolFile path={path} suffix={str("pattern") !== undefined ? ` — /${str("pattern")}/` : undefined} /></div>;
-  for (const [key, toRows] of [["list", phaseRows], ["todos", todoRows], ["plan", planRows], ["tasks", taskRows]] as const) {
+  for (const [key, toRows] of [["list", phaseRows], ["items", itemsRows], ["todos", todoRows], ["plan", planRows], ["tasks", taskRows]] as const) {
     const value = parsed[key];
     if (Array.isArray(value)) {
       const rows = toRows(value);
@@ -380,6 +380,63 @@ function GoalActivity({ goal }: { goal: GoalState }) {
   </details>;
 }
 
+/** A turn's todo list (omp, claude, codex): visible while the work block is folded, matching OMP's TUI look. */
+function TodoActivity({ items }: { items: TodoItem[] }) {
+  const t = useT();
+  const total = items.length;
+  const completed = items.filter((i) => i.status === "completed").length;
+  const inProgress = items.find((i) => i.status === "in_progress");
+  const blocked = items.find((i) => i.status === "blocked");
+  const allDone = total > 0 && completed === total;
+
+  const groups: { phase: string | null; items: TodoItem[] }[] = [];
+  for (const item of items) {
+    const group = groups[groups.length - 1];
+    if (group && group.phase === item.phase) group.items.push(item);
+    else groups.push({ phase: item.phase, items: [item] });
+  }
+
+  return (
+    <details className={`chat-todo${allDone ? " is-done" : blocked ? " is-blocked" : inProgress ? " is-active" : ""}`} open>
+      <summary>
+        <span className="chat-todo-mark" aria-hidden="true">
+          {allDone ? <CheckSquare /> : <ListTodo />}
+        </span>
+        <span className="chat-todo-label">{t("Todo")}</span>
+        <span className="chat-todo-progress">{total > 0 ? `${completed}/${total} done` : ""}</span>
+        {inProgress && <span className="chat-todo-active-task">· {inProgress.label}</span>}
+        {blocked && !inProgress && <span className="chat-todo-blocked-task">· {t("blocked")}</span>}
+        <ChevronDown className="chat-skill-caret" aria-hidden="true" />
+      </summary>
+      <div className="chat-todo-detail">
+        {groups.map((group, gIdx) => (
+          <div key={gIdx} className="chat-todo-group">
+            {group.phase !== null && <p className="chat-todo-phase">{group.phase}</p>}
+            <ul className="chat-todo-tree">
+              {group.items.map((item, row) => {
+                const isLast = row === group.items.length - 1;
+                const Icon = TODO_ICONS[item.status] ?? Circle;
+                return (
+                  <li key={row} className={`chat-todo-item is-${item.status}`}>
+                    <span className="chat-todo-branch" aria-hidden="true">{isLast ? "└" : "├"}</span>
+                    <span className="chat-todo-status-icon" aria-hidden="true">
+                      <Icon />
+                    </span>
+                    <span className="chat-todo-item-label">
+                      {item.label}
+                      {item.note && <span className="chat-todo-item-note">({item.note})</span>}
+                    </span>
+                  </li>
+                );
+              })}
+            </ul>
+          </div>
+        ))}
+      </div>
+    </details>
+  );
+}
+
 /** Image files a message mentions as `@path`, the way this app attaches them: shown as thumbnails. */
 const IMAGE_MENTION = /(?:^|\s)@(\S+\.(?:png|jpe?g|gif|webp))(?=\s|$)/gi;
 
@@ -497,9 +554,11 @@ const Turn = memo(function Turn({ paneId, turn, live, waiting, showThinking }: T
   const { work, answer } = splitTurn(turn.parts);
   const answerText = answer.map((part) => part.text).join("\n\n");
   const goal = turnGoal(turn.parts);
+  const todos = turnTodos(turn.parts);
   return <article className="chat-turn chat-turn-agent">
     <SkillActivityList parts={turn.parts} />
     {goal !== null && <GoalActivity goal={goal} />}
+    {todos !== null && <TodoActivity items={todos} />}
     {work.length > 0 && <WorkBlockView paneId={paneId} parts={work} duration={formatWorkDuration(turn.ts, turn.end_ts ?? null)} live={live} waiting={waiting} defaultOpen={workStartsOpen(live, turn.parts)} showThinking={showThinking} />}
     {answer.map((part, index) => <Markdown key={index}>{part.text}</Markdown>)}
     {answerText.length > 0 && <div className="chat-turn-meta chat-agent-meta">

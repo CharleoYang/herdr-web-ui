@@ -35,6 +35,12 @@ https://github.com/user-attachments/assets/db788c07-cd68-486d-8ce9-e676a2889c2d
 
 A browser and phone client for [herdr](https://github.com/herdrdev/herdr). Read and reply to the same agent sessions running on your computer — on desktop or phone, as chat, with the terminal when you need it.
 
+OMP chat panes also offer session-only model switching: when the agent is idle, click the
+model in the composer, search the models installed on that pane's PC, and pick one. The app
+submits `/switch provider/id` to that OMP session; it does not change your global defaults.
+Todo progress stays visible beside the folded work block. **Settings → Appearance → Colors**
+offers Monokai (OMP), the new default, and the existing palettes including Amber.
+
 <table>
   <tr>
     <td width="50%" valign="top">

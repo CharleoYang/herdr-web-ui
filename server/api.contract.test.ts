@@ -37,6 +37,20 @@ afterAll(() => {
 
 const base = () => `http://localhost:${server.port}`;
 
+describe("OMP model catalogue API", () => {
+  it("requires the bridge token and refuses a non-GET request", async () => {
+    const state = mkdtempSync(join(tmpdir(), "herdr-omp-catalogue-"));
+    const gated = createServer({ port: 0, stateDir: state, token: "catalogue-test-token" });
+    const url = `http://localhost:${gated.port}/api/omp/models`;
+    try {
+      expect((await fetch(url)).status).toBe(401);
+      const response = await fetch(url, { method: "POST", headers: { authorization: "Bearer catalogue-test-token" } });
+      expect(response.status).toBe(400);
+      expect(await response.json()).toMatchObject({ error: { code: "method_not_allowed" } });
+    } finally { gated.stop(); rmSync(state, { recursive: true, force: true }); }
+  });
+});
+
 describe("usage API", () => {
   it("returns OpenCode Go windows without exposing its credential", async () => {
     const usageState = mkdtempSync(join(tmpdir(), "herdr-opencode-contract-"));

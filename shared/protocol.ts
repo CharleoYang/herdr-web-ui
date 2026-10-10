@@ -30,6 +30,15 @@ export type HerdrTab = TabInfo;
 /** `background_tasks`: an OmO pane's `task` children still running, counted by the server; absent when none */
 export type HerdrPane = PaneInfo & { background_tasks?: number };
 
+export interface OmpModelChoice {
+  provider: string;
+  id: string;
+  selector: string;
+  name: string;
+}
+
+export interface OmpModelsResponse { models: OmpModelChoice[] }
+
 export type { Machine, MachineEvent, PaneTarget, SetupJob, SetupRequest, SetupAction, BridgeIdentity, BridgeHealth } from "./machines.ts";
 
 /** Machine API (same token gate; mutations require X-Herdr-Machine: 1 + same origin)
@@ -59,6 +68,8 @@ export type { Machine, MachineEvent, PaneTarget, SetupJob, SetupRequest, SetupAc
  *  GET    /api/agents                    -> { agents: AgentKind[] } (herdr's agent manifests: the
  *         kinds `agent.start` accepts, plus omo and gjc when they are on this server's PATH,
  *         for the new-session dialog)
+ *  GET    /api/omp/models                -> OmpModelsResponse (chat models from this PC's
+ *         `omp models --json`, cached for 60 seconds; selection uses terminal submit)
  *  GET    /api/pane/read?pane_id=&source=&format=&lines=  -> { read: PaneReadResult }
  *  GET    /api/pane/scroll?pane_id=      -> { scroll: PaneScrollInfo | null } (where the
  *         viewport sits: its top row in the history is max_offset_from_bottom - offset_from_bottom)

@@ -62,7 +62,14 @@ export function parseConversationMetadata(text: string, source: ConversationResp
       // A new complete context without effort must not retain an older value.
       if (model || effort !== undefined) metadata.reasoning_effort = label(effort);
     } else if (source === "omp-transcript" || source === "omo-transcript" || source === "gjc-transcript" || source === "pi-transcript") {
-      if (entry.type === "model_change") { metadata.model = label(entry.modelId); piProvider = label(entry.provider); }
+      if (entry.type === "model_change") {
+        // omp writes `model` as provider/id; pi and omo write `modelId`. A change that
+        // names neither must not wipe the model the last answer ran at.
+        const raw = label(entry.modelId) ?? label(entry.model);
+        if (raw) metadata.model = raw;
+        const provider = label(entry.provider) ?? (raw?.includes("/") ? raw.slice(0, raw.lastIndexOf("/")) : null);
+        if (provider) piProvider = provider;
+      }
       if (entry.type === "thinking_level_change") metadata.reasoning_effort = label(entry.thinkingLevel);
       const message = piMessage(entry) ?? {};
       // a turn answers at whatever model it ran at, and that is the one the window belongs to

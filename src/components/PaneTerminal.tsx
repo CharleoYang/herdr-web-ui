@@ -104,6 +104,30 @@ function useMediaQuery(query: string): boolean {
   }, [query]);
   return matches;
 }
+
+const MONOKAI_DARK_ANSI = {
+  black: "#272822",
+  red: "#f92672",
+  green: "#a6e22e",
+  yellow: "#e6db74",
+  blue: "#66d9ef",
+  magenta: "#ae81ff",
+  cyan: "#66d9ef",
+  white: "#f8f8f2",
+  brightBlack: "#75715e",
+  brightRed: "#f92672",
+  brightGreen: "#a6e22e",
+  brightYellow: "#e6db74",
+  brightBlue: "#66d9ef",
+  brightMagenta: "#ae81ff",
+  brightCyan: "#66d9ef",
+  brightWhite: "#ffffff",
+};
+
+function getTermTheme(theme: ResolvedTheme, palette: Palette) {
+  const base = terminalTheme(theme, palette);
+  return palette === "monokai" && theme === "dark" ? { ...base, ...MONOKAI_DARK_ANSI } : base;
+}
 export function PaneTerminal({
   paneId,
   restoreError = null,
@@ -359,7 +383,7 @@ export function PaneTerminal({
       fontSize: terminalFontSize,
       // a chosen family follows in the font effect below, once its faces have loaded
       fontFamily: TERMINAL_FONT_STACK,
-      theme: terminalTheme(theme, palette),
+      theme: getTermTheme(theme, palette),
       linkHandler: {
         activate: (event, uri) => {
           if (!linkPressed(event)) return;
@@ -1203,7 +1227,7 @@ export function PaneTerminal({
   // the theme follows the settings without a remount
   useEffect(() => {
     const term = termRef.current;
-    if (term) term.options.theme = terminalTheme(theme, palette);
+    if (term) term.options.theme = getTermTheme(theme, palette);
   }, [theme, palette]);
 
   // the font follows too, and a font change moves the grid. xterm measures the cell (and the DOM
@@ -1865,6 +1889,14 @@ export function PaneTerminal({
             </div>
           ) : null}
           onSend={composerSend}
+          onSwitchModel={agent === "omp" ? (selector) => {
+            if (agentStatus === "working" || agentStatus === "blocked" || heldRef.current || answering !== null) return t("Wait until the agent is idle to switch models");
+            const sent = sendTerminalLine(`/switch ${selector}`);
+            return sent === false ? false : sent.then((answer) => {
+              if (answer === true) setChatRefresh((current) => current + 1);
+              return answer;
+            });
+          } : undefined}
           onAbort={abortTurn}
           onUploadImage={uploadImage}
         />

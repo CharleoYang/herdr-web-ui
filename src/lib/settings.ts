@@ -21,9 +21,9 @@ export type SidebarRows = "one" | "two";
 export type UsageCount = "used" | "left";
 /** the limit a plan meter shows: the plan's week, or its short session (5 hours on Claude and Codex) */
 export type UsageGlance = "week" | "session";
-/** amber: the herdr look (the default); report: the dark technical report look; charcoal: neutral Ghostty-style dark;
- *  catppuccin: Catppuccin Mocha in dark, Latte in light; lilac: lavender surfaces and indigo accents */
-export type Palette = "amber" | "report" | "charcoal" | "catppuccin" | "lilac";
+/** monokai: the default OMP look; amber: the previous herdr look; report: the dark technical report look;
+ *  charcoal: neutral Ghostty-style dark; catppuccin: Mocha in dark, Latte in light; lilac: lavender and indigo */
+export type Palette = "amber" | "report" | "charcoal" | "catppuccin" | "lilac" | "monokai";
 /** the chat lane's widest: the transcript, the composer column and the held list share it (--chat-w in src/styles.css).
  *  narrow: 820px; default: follows the pane, up to 60rem (chatLaneWidth); wide: 72rem; full: the pane, less the gutters */
 export type ChatWidth = "narrow" | "default" | "wide" | "full";
@@ -112,7 +112,7 @@ export const DEFAULT_SETTINGS: Settings = {
   theme: "dark",
   density: "comfortable",
   sidebarRows: "two",
-  palette: "amber",
+  palette: "monokai",
   terminalFontSize: 13,
   terminalWheelSpeed: 1,
   terminalFontFamily: "",
@@ -254,7 +254,7 @@ export function sanitizeSettings(raw: unknown): Settings {
     theme: theme === "dark" || theme === "light" || theme === "system" ? theme : DEFAULT_SETTINGS.theme,
     density: density === "compact" || density === "comfortable" ? density : DEFAULT_SETTINGS.density,
     sidebarRows: record["sidebarRows"] === "one" || record["sidebarRows"] === "two" ? record["sidebarRows"] : DEFAULT_SETTINGS.sidebarRows,
-    palette: record["palette"] === "amber" || record["palette"] === "report" || record["palette"] === "charcoal" || record["palette"] === "catppuccin" || record["palette"] === "lilac" ? record["palette"] : DEFAULT_SETTINGS.palette,
+    palette: record["palette"] === "amber" || record["palette"] === "report" || record["palette"] === "charcoal" || record["palette"] === "catppuccin" || record["palette"] === "lilac" || record["palette"] === "monokai" ? record["palette"] : DEFAULT_SETTINGS.palette,
     terminalFontSize: typeof font === "number" && Number.isFinite(font) ? clampFont(font) : DEFAULT_SETTINGS.terminalFontSize,
     terminalWheelSpeed: typeof record["terminalWheelSpeed"] === "number" && Number.isFinite(record["terminalWheelSpeed"])
       ? Math.min(TERMINAL_WHEEL_SPEED_MAX, Math.max(TERMINAL_WHEEL_SPEED_MIN, Math.round(record["terminalWheelSpeed"])))
@@ -340,9 +340,13 @@ const TERMINAL_THEMES: Record<Palette, Record<ResolvedTheme, TerminalColors>> = 
     light: { background: "#f8f7fe", foreground: "#2b2d4d", cursor: "#4a42c2", selectionBackground: "#dcd7f8" },
     dark: { background: "#18172f", foreground: "#dcdaf4", cursor: "#b3abff", selectionBackground: "#3a3768" },
   },
+  monokai: {
+    light: { background: "#faf9f5", foreground: "#272822", cursor: "#d46b00", selectionBackground: "#e0dccf" },
+    dark: { background: "#272822", foreground: "#f8f8f2", cursor: "#fd971f", selectionBackground: "#49483e" },
+  },
 };
 
-export function terminalTheme(theme: ResolvedTheme, palette: Palette = "amber"): TerminalColors {
+export function terminalTheme(theme: ResolvedTheme, palette: Palette = "monokai"): TerminalColors {
   return TERMINAL_THEMES[palette][theme];
 }
 
@@ -353,6 +357,7 @@ const THEME_COLOR: Record<Palette, Record<ResolvedTheme, string>> = {
   charcoal: { dark: "#171717", light: "#fafaf9" },
   catppuccin: { dark: "#181825", light: "#e6e9ef" },
   lilac: { dark: "#1c1b34", light: "#f6f5fe" },
+  monokai: { dark: "#272822", light: "#faf9f5" },
 };
 
 function applyToDocument(settings: Settings, resolved: ResolvedTheme, language: Language): void {

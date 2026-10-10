@@ -5,9 +5,9 @@
  * mirror of this block and the two must not drift. Dark is the default theme and
  * `[data-theme="light"]` overrides the color group only (src/lib/settings.ts sets
  * the attribute); `[data-density="compact"]` overrides the type scale and row
- * heights. The base blocks are the amber palette, the default and the look before
- * settings load; `[data-palette]` blocks override them for the opt-in report,
- * charcoal and catppuccin palettes. xterm cannot read CSS custom properties, so the --term-* group
+ * heights. The base blocks are the monokai palette, the default and the look before
+ * settings load; `[data-palette]` blocks override them for amber, report,
+ * charcoal, catppuccin and lilac. xterm cannot read CSS custom properties, so the --term-* group
  * is mirrored in settings.ts `terminalTheme()`.
  * Component-scoped rules live beside their component (Sidebar.css,
  * PaneTerminal.css, ...); this file owns the app shell, the header and the
@@ -18,52 +18,50 @@
 :root {
   color-scheme: dark;
 
-  /* surfaces (tonal steps, darkest to lightest): lamp-lit graphite, warm not tinted */
-  --bg: #12100e;
-  --bg-panel: #181613;
-  --bg-elevated: #211e1a;
-  --bg-hover: #2a2621;
-  --bg-input: #1c1916;
-  --border: #2d2924;
-  --border-strong: #3e3830;
-  /* the chat's user bubble: no edge where --bg-elevated alone parts it from --bg (the dark
-     amber, report and charcoal palettes), --border where the two surfaces sit close */
+  /* surfaces: Monokai / OMP, the default palette */
+  --bg: #1e1f1c;
+  --bg-panel: #272822;
+  --bg-elevated: #2e2f29;
+  --bg-hover: #33342d;
+  --bg-input: #1e1f1c;
+  --border: #3e3d32;
+  --border-strong: #49483e;
+  /* the chat's user bubble: no edge where --bg-elevated alone parts it from --bg */
   --bubble-border: transparent;
 
   /* text */
-  --text: #d8d0c3;
-  --text-dim: #9b9183;
-  --text-strong: #f2ebdf;
+  --text: #f8f8f2;
+  --text-dim: #b0ab95;
+  --text-strong: #ffffff;
 
-  /* the saturated colors: ONE amber (selection, focus, cursor and the user's own
-     action - an amber-phosphor terminal) and the four agent states, none of them amber */
-  --accent: #f0a830;
-  --accent-tint: rgba(240, 168, 48, 0.13);
-  --primary: #f0a830;
-  --primary-hover: #f6bb55;
+  /* Monokai: orange for the user's action, cyan / pink / green for agent states */
+  --accent: #fd971f;
+  --accent-tint: rgba(253, 151, 31, 0.16);
+  --primary: #fd971f;
+  --primary-hover: #ffad42;
   --primary-text: #1b1407;
-  --primary-tint: rgba(240, 168, 48, 0.16);
-  --status-idle: #9b9183;
-  --status-working: #6cb8d6;
-  --status-blocked: #ff7b70;
-  --status-done: #93c36b;
-  --status-working-tint: rgba(108, 184, 214, 0.14);
-  --status-blocked-tint: rgba(255, 123, 112, 0.14);
-  --status-done-tint: rgba(147, 195, 107, 0.14);
-  --danger-tint: rgba(255, 123, 112, 0.12);
-  --danger-text: #ffd9d4;
+  --primary-tint: rgba(253, 151, 31, 0.18);
+  --status-idle: #a6a28c;
+  --status-working: #66d9ef;
+  --status-blocked: #ff9eaa;
+  --status-done: #a6e22e;
+  --status-working-tint: rgba(102, 217, 239, 0.14);
+  --status-blocked-tint: rgba(255, 158, 170, 0.14);
+  --status-done-tint: rgba(166, 226, 46, 0.14);
+  --danger-tint: rgba(255, 158, 170, 0.12);
+  --danger-text: #ffd6df;
 
   /* overlays */
-  --scrim: rgba(8, 6, 4, 0.55);
-  --shadow-drawer: 0 0 40px rgba(0, 0, 0, 0.6);
-  --shadow-pop: 0 16px 48px rgba(0, 0, 0, 0.55), 0 0 0 1px var(--border);
+  --scrim: rgba(10, 10, 8, 0.65);
+  --shadow-drawer: 0 0 40px rgba(0, 0, 0, 0.65);
+  --shadow-pop: 0 16px 48px rgba(0, 0, 0, 0.6), 0 0 0 1px var(--border);
   --shadow-card: 0 4px 16px rgba(0, 0, 0, 0.35);
 
   /* terminal theme: mirrored verbatim in src/lib/settings.ts terminalTheme() */
-  --term-bg: #181613;
-  --term-fg: #d8d0c3;
-  --term-cursor: #f0a830;
-  --term-selection: #4a3d26;
+  --term-bg: #272822;
+  --term-fg: #f8f8f2;
+  --term-cursor: #fd971f;
+  --term-selection: #49483e;
 
   /* type (comfortable density; compact overrides below) */
   --font-ui: "Pretendard Variable", Pretendard, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Noto Sans KR", "Malgun Gothic", sans-serif;
@@ -169,8 +167,84 @@
   --droplet-shadow: rgba(0, 0, 0, 0.35);
 }
 
+
 [data-theme="light"] {
   color-scheme: light;
+  --bg: #f5f4ef;
+  --bg-panel: #faf9f5;
+  --bg-elevated: #eeede6;
+  --bg-hover: #e5e3dc;
+  --bg-input: #ffffff;
+  --border: #dcd9cd;
+  --border-strong: #cac6b6;
+  --bubble-border: transparent;
+  --text: #272822;
+  --text-dim: #605d52;
+  --text-strong: #141411;
+  --accent: #d46b00;
+  --accent-tint: rgba(212, 107, 0, 0.12);
+  --primary: #d46b00;
+  --primary-hover: #eb7802;
+  --primary-text: #ffffff;
+  --primary-tint: rgba(212, 107, 0, 0.14);
+  --status-idle: #605d52;
+  --status-working: #0b5c9e;
+  --status-blocked: #ad0c3d;
+  --status-done: #1e6122;
+  --status-working-tint: rgba(11, 92, 158, 0.12);
+  --status-blocked-tint: rgba(173, 12, 61, 0.12);
+  --status-done-tint: rgba(30, 97, 34, 0.12);
+  --danger-tint: rgba(173, 12, 61, 0.1);
+  --danger-text: #880e4f;
+  --scrim: rgba(39, 40, 34, 0.35);
+  --shadow-drawer: 0 0 40px rgba(39, 40, 34, 0.2);
+  --shadow-pop: 0 16px 48px rgba(39, 40, 34, 0.16), 0 0 0 1px var(--border);
+  --shadow-card: 0 4px 16px rgba(39, 40, 34, 0.08);
+  --term-bg: #faf9f5;
+  --term-fg: #272822;
+  --term-cursor: #d46b00;
+  --term-selection: #e0dccf;
+}
+
+/* Amber, the previous default, kept as an explicit palette. */
+[data-theme="dark"][data-palette="amber"] {
+  --bg: #12100e;
+  --bg-panel: #181613;
+  --bg-elevated: #211e1a;
+  --bg-hover: #2a2621;
+  --bg-input: #1c1916;
+  --border: #2d2924;
+  --border-strong: #3e3830;
+  --bubble-border: transparent;
+  --text: #d8d0c3;
+  --text-dim: #9b9183;
+  --text-strong: #f2ebdf;
+  --accent: #f0a830;
+  --accent-tint: rgba(240, 168, 48, 0.13);
+  --primary: #f0a830;
+  --primary-hover: #f6bb55;
+  --primary-text: #1b1407;
+  --primary-tint: rgba(240, 168, 48, 0.16);
+  --status-idle: #9b9183;
+  --status-working: #6cb8d6;
+  --status-blocked: #ff7b70;
+  --status-done: #93c36b;
+  --status-working-tint: rgba(108, 184, 214, 0.14);
+  --status-blocked-tint: rgba(255, 123, 112, 0.14);
+  --status-done-tint: rgba(147, 195, 107, 0.14);
+  --danger-tint: rgba(255, 123, 112, 0.12);
+  --danger-text: #ffd9d4;
+  --scrim: rgba(8, 6, 4, 0.55);
+  --shadow-drawer: 0 0 40px rgba(0, 0, 0, 0.6);
+  --shadow-pop: 0 16px 48px rgba(0, 0, 0, 0.55), 0 0 0 1px var(--border);
+  --shadow-card: 0 4px 16px rgba(0, 0, 0, 0.35);
+  --term-bg: #181613;
+  --term-fg: #d8d0c3;
+  --term-cursor: #f0a830;
+  --term-selection: #4a3d26;
+}
+
+[data-theme="light"][data-palette="amber"] {
   --bg: #eeeae2;
   --bg-panel: #faf8f3;
   --bg-elevated: #f2eee6;
@@ -282,6 +356,16 @@
   --term-fg: #242424;
   --term-cursor: #1f5fcc;
   --term-selection: #cfe0fb;
+  --bubble-border: var(--border);
+  --status-idle: #685e52;
+  --status-working: #155a72;
+  --status-blocked: #a82323;
+  --status-done: #2f6317;
+  --status-working-tint: rgba(21, 90, 114, 0.12);
+  --status-blocked-tint: rgba(168, 35, 35, 0.12);
+  --status-done-tint: rgba(47, 99, 23, 0.12);
+  --danger-tint: rgba(168, 35, 35, 0.1);
+  --danger-text: #8f1d1d;
 }
 
 /* Charcoal: neutral charcoal, a Ghostty-style terminal (the panel is its #171717), no
@@ -381,6 +465,7 @@
   --bg-input: #eff1f5;
   --border: #ccd0da;
   --border-strong: #bcc0cc;
+  --bubble-border: var(--border);
   --text: #4c4f69;
   --text-dim: #5c5f77;
   --text-strong: #4c4f69;
@@ -455,6 +540,7 @@
   --bg-input: #fdfcff;
   --border: #e0dcf4;
   --border-strong: #c8c2ea;
+  --bubble-border: var(--border);
   --text: #2b2d4d;
   --text-dim: #545779;
   --text-strong: #17193a;
@@ -481,6 +567,95 @@
   --term-fg: #2b2d4d;
   --term-cursor: #4a42c2;
   --term-selection: #dcd7f8;
+}
+
+/* Monokai palette (OMP dark-monokai): warm olive-black canvas, purple/orange/green accents */
+[data-palette="monokai"] {
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 8px;
+  --chat-heading: var(--accent);
+  --chat-code-accent: var(--accent);
+  --chat-work-bg: var(--bg-elevated);
+}
+
+[data-theme="dark"][data-palette="monokai"] {
+  --bg: #1e1f1c;
+  --bg-panel: #272822;
+  --bg-elevated: #2e2f29;
+  --bg-hover: #33342d;
+  --bg-input: #1e1f1c;
+  --border: #3e3d32;
+  --border-strong: #49483e;
+  --bubble-border: transparent;
+  --text: #f8f8f2;
+  --text-dim: #b0ab95;
+  --text-strong: #ffffff;
+  --accent: #fd971f;
+  --accent-tint: rgba(253, 151, 31, 0.16);
+  --primary: #fd971f;
+  --primary-hover: #ffad42;
+  --primary-text: #1b1407;
+  --primary-tint: rgba(253, 151, 31, 0.18);
+  --status-idle: #a6a28c;
+  --status-working: #66d9ef;
+  --status-blocked: #ff9eaa;
+  --status-done: #a6e22e;
+  --status-working-tint: rgba(102, 217, 239, 0.14);
+  --status-blocked-tint: rgba(255, 158, 170, 0.14);
+  --status-done-tint: rgba(166, 226, 46, 0.14);
+  --danger-tint: rgba(255, 158, 170, 0.12);
+  --danger-text: #ffd6df;
+  --scrim: rgba(10, 10, 8, 0.65);
+  --shadow-drawer: 0 0 40px rgba(0, 0, 0, 0.65);
+  --shadow-pop: 0 16px 48px rgba(0, 0, 0, 0.6), 0 0 0 1px var(--border);
+  --shadow-card: 0 4px 16px rgba(0, 0, 0, 0.35);
+  --term-bg: #272822;
+  --term-fg: #f8f8f2;
+  --term-cursor: #fd971f;
+  --term-selection: #49483e;
+  --chat-heading: #ae81ff;
+  --chat-code-accent: #ae81ff;
+  --chat-work-bg: #242520;
+}
+
+[data-theme="light"][data-palette="monokai"] {
+  --bg: #f5f4ef;
+  --bg-panel: #faf9f5;
+  --bg-elevated: #eeede6;
+  --bg-hover: #e5e3dc;
+  --bg-input: #ffffff;
+  --border: #dcd9cd;
+  --border-strong: #cac6b6;
+  --bubble-border: transparent;
+  --text: #272822;
+  --text-dim: #605d52;
+  --text-strong: #141411;
+  --accent: #d46b00;
+  --accent-tint: rgba(212, 107, 0, 0.12);
+  --primary: #d46b00;
+  --primary-hover: #eb7802;
+  --primary-text: #ffffff;
+  --primary-tint: rgba(212, 107, 0, 0.14);
+  --status-idle: #605d52;
+  --status-working: #0b5c9e;
+  --status-blocked: #ad0c3d;
+  --status-done: #1e6122;
+  --status-working-tint: rgba(11, 92, 158, 0.12);
+  --status-blocked-tint: rgba(173, 12, 61, 0.12);
+  --status-done-tint: rgba(30, 97, 34, 0.12);
+  --danger-tint: rgba(173, 12, 61, 0.1);
+  --danger-text: #880e4f;
+  --scrim: rgba(39, 40, 34, 0.35);
+  --shadow-drawer: 0 0 40px rgba(39, 40, 34, 0.2);
+  --shadow-pop: 0 16px 48px rgba(39, 40, 34, 0.16), 0 0 0 1px var(--border);
+  --shadow-card: 0 4px 16px rgba(39, 40, 34, 0.08);
+  --term-bg: #faf9f5;
+  --term-fg: #272822;
+  --term-cursor: #d46b00;
+  --term-selection: #e0dccf;
+  --chat-heading: #7040b0;
+  --chat-code-accent: #7040b0;
 }
 
 [data-chat-width="narrow"] {
