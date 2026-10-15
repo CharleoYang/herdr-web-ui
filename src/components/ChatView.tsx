@@ -39,7 +39,7 @@ import { PAGE_OVERLAP_ROWS, pageScrollDistance } from "../lib/pageScroll.ts";
 import { followGlides } from "../lib/followScroll.ts";
 import { useMediaQuery } from "../lib/useMediaQuery.ts";
 import { statusEdgeRead } from "../lib/status.ts";
-import { ConversationRefresh } from "../lib/conversationRefresh.ts";
+import { ConversationRefresh, type ConversationUpdate } from "../lib/conversationRefresh.ts";
 import { usePageVisible } from "../lib/visibility.ts";
 import { dismissKeyboardOn } from "../lib/keyboard.ts";
 import { useFacesArrived } from "../lib/fontFaces.ts";
@@ -105,6 +105,8 @@ export interface ChatViewProps {
   onConversationWatch?: (paneId: string, enabled: boolean) => void;
   /** the bridge pushes this pane's transcript changes; without, the chat reads every 2s as before */
   conversationPushes?: boolean;
+  /** Direct current-connection frames and lifecycle edges; never stored for replay. */
+  onConversationUpdate?: (listener: ((update: ConversationUpdate) => void) | null) => void;
   /** while the chat shows herdr's scrollback, the pane's terminal output invalidates it */
   onTerminalOutput?: (listener: (() => void) | null) => void;
   /** bumped when a composer message goes out, before the transcript holds it */
@@ -772,7 +774,7 @@ function TerminalFallback({ paneId, visible }: { paneId: string; visible: boolea
 }
 
 // the app re-renders on every pane-status and poll; an unchanged transcript sits those out
-export const ChatView = memo(function ChatView({ paneId, active = true, visible: paneVisible = true, pageScroll, refreshKey, invalidationKey = 0, onConversationWatch, conversationPushes = false, onTerminalOutput, sentKey = 0, connected, ended, agent, agentStatus, onMetadata, onRead, greeted = false, onPrompt, onSuggestion, onRestored, promptRefreshKey = 0, pendingAnswer = null, onPendingAnswerDone, promptDock = null, onPromptAnswered }: ChatViewProps) {
+export const ChatView = memo(function ChatView({ paneId, active = true, visible: paneVisible = true, pageScroll, refreshKey, invalidationKey = 0, onConversationWatch, conversationPushes = false, onConversationUpdate, onTerminalOutput, sentKey = 0, connected, ended, agent, agentStatus, onMetadata, onRead, greeted = false, onPrompt, onSuggestion, onRestored, promptRefreshKey = 0, pendingAnswer = null, onPendingAnswerDone, promptDock = null, onPromptAnswered }: ChatViewProps) {
   const t = useT();
   const { fetchPaneConversation, peekPaneConversation, fetchPanePromptState, fetchPaneTranscript } = useMachineApi();
   const { settings } = useSettings();
@@ -907,6 +909,38 @@ export const ChatView = memo(function ChatView({ paneId, active = true, visible:
     // cancelled mid-way (a pane switch, the page hidden during a gap fill) is redone
     lastAnswer.current = conversation;
   };
+  // Register after each commit so frames read the current pane/visibility, not a captured page.
+  useLayoutEffect(() => {
+    const updateConversation = (update: ConversationUpdate): void => {
+      if (update === "disconnect") {
+        conversationRefresh.resetConnection();
+        olderGeneration.current += 1;
+        loadingOlder.current = false; setOlderState("idle");
+        return;
+      }
+      if (update === "reconnect") {
+        conversationRefresh.resetConnection();
+        if (visible) conversationRefresh.refresh();
+        return;
+      }
+      if (!visible || document.visibilityState === "hidden" || shownPane.current !== paneId || loadingOlder.current) return;
+      const conversation = conversationRefresh.replacePage(update, paneId, lastAnswer.current, olderCount.current > 0 || heldFrom.current !== null);
+      if (conversation === null) return;
+      // No history setters, role merging or asynchronous chunk loads on the push path.
+      if (heldFrom.current === null) setOlderCursor(conversation.source === "scrollback" ? undefined : conversation.cursor);
+      showAnswer(conversation, conversation.source === "scrollback"
+        ? { source: "scrollback", turns: conversation.turns, messages: state.messages, truncated: state.truncated }
+        : conversationState(conversation));
+    };
+    onConversationUpdate?.(updateConversation);
+    // A quick hide/show can be batched into one React render. Fence it synchronously too.
+    const visibilityChanged = (): void => updateConversation(document.visibilityState === "hidden" ? "disconnect" : "reconnect");
+    document.addEventListener("visibilitychange", visibilityChanged);
+    return () => {
+      document.removeEventListener("visibilitychange", visibilityChanged);
+      onConversationUpdate?.(null);
+    };
+  });
 
   useLayoutEffect(() => {
     shownPane.current = paneId;
@@ -927,6 +961,16 @@ export const ChatView = memo(function ChatView({ paneId, active = true, visible:
       showAnswer(cached, conversationState(cached));
     }
   }, [paneId, machineId]);
+
+  // Fence a hidden/replaced screen at commit, before passive reader cleanup or a late REST result.
+  useLayoutEffect(() => {
+    conversationRefresh.resetConnection();
+    return () => {
+      conversationRefresh.resetConnection();
+      olderGeneration.current += 1;
+      loadingOlder.current = false;
+    };
+  }, [paneId, machineId, visible, conversationRefresh]);
 
 
   useEffect(() => {
@@ -950,12 +994,12 @@ export const ChatView = memo(function ChatView({ paneId, active = true, visible:
     if (!visible) return;
     let cancelled = false;
     /** The turns between the held start and where the newest page now starts, a page at a time; null when they cannot be joined. */
-    const turnsBetween = async (held: string | null, start: string): Promise<ConversationTurn[] | null> => {
+    const turnsBetween = async (held: string | null, start: string, isCurrent: () => boolean): Promise<ConversationTurn[] | null> => {
       const pages: ConversationTurn[][] = [];
       let before = start;
       try {
         for (let step = 0; step < 32 && before !== held; step++) {
-          if (cancelled) return null;
+          if (cancelled || !isCurrent()) return null;
           const page = await fetchPaneConversation(paneId, { before, ...(held === null ? {} : { since: held }) });
           if (page.cursor === held) {
             pages.unshift(page.turns);
@@ -970,7 +1014,7 @@ export const ChatView = memo(function ChatView({ paneId, active = true, visible:
       }
       return before === held ? pages.flat() : null;
     };
-    const read = async (): Promise<void> => {
+    const read = async (isCurrent: () => boolean): Promise<void> => {
       let generation = olderGeneration.current;
       try {
         let conversation;
@@ -979,16 +1023,16 @@ export const ChatView = memo(function ChatView({ paneId, active = true, visible:
         } catch (cause) {
           // a new session or a Codex backtrack replaced the transcript the older pages came from
           if (heldFrom.current === null || !(cause instanceof ApiError) || cause.status !== 409) throw cause;
-          if (cancelled || generation !== olderGeneration.current) return;
+          if (cancelled || !isCurrent() || generation !== olderGeneration.current) return;
           dropOlder(); setState(EMPTY_STATE); setLoaded(false); signature.current = ""; lastAnswer.current = null;
           generation = olderGeneration.current;
           conversation = await fetchPaneConversation(paneId);
         }
-        if (cancelled || generation !== olderGeneration.current) return;
+        if (cancelled || !isCurrent() || generation !== olderGeneration.current) return;
         // the timeline's chunk is in hand before any turn is: the list mounts once, with the refs bound
         if (conversation.source !== "scrollback" && loadedChatTimeline() === null) {
           await loadChatTimeline();
-          if (cancelled || generation !== olderGeneration.current) return;
+          if (cancelled || !isCurrent() || generation !== olderGeneration.current) return;
         }
         if (history.current !== conversation.history_id) {
           dropOlder(); generation = olderGeneration.current;
@@ -1003,8 +1047,8 @@ export const ChatView = memo(function ChatView({ paneId, active = true, visible:
         const held = heldFrom.current ?? (previous?.source !== "scrollback" && previous?.history_id === conversation.history_id ? previous?.cursor : undefined);
         let moved: ConversationTurn[] = [];
         if (held !== undefined && conversation.source !== "scrollback" && typeof conversation.cursor === "string" && conversation.cursor !== held) {
-          const between = await turnsBetween(held, conversation.cursor);
-          if (cancelled || generation !== olderGeneration.current) return;
+          const between = await turnsBetween(held, conversation.cursor, isCurrent);
+          if (cancelled || !isCurrent() || generation !== olderGeneration.current) return;
           if (between === null) {
             dropOlder(); setState(EMPTY_STATE); setLoaded(false); signature.current = ""; lastAnswer.current = null;
             setPollKey((key) => key + 1); return;
@@ -1028,12 +1072,12 @@ export const ChatView = memo(function ChatView({ paneId, active = true, visible:
             signature.current = ""; lastAnswer.current = null;
           }
           const result = await fetchPaneTranscript(paneId, TRANSCRIPT_LINES);
-          if (cancelled || generation !== olderGeneration.current) return;
+          if (cancelled || !isCurrent() || generation !== olderGeneration.current) return;
           next = { source: "scrollback", turns: [], messages: toTranscriptMessages(result.text).filter((message) => message.role !== "status"), truncated: result.truncated === true };
         }
         showAnswer(conversation, next);
       } catch (cause) {
-        if (cancelled || generation !== olderGeneration.current) return;
+        if (cancelled || !isCurrent() || generation !== olderGeneration.current) return;
         setLoaded(true);
         setError(cause instanceof Error ? cause.message : String(cause));
         setErrorStatus(cause instanceof ApiError ? cause.status : null);
@@ -1078,6 +1122,8 @@ export const ChatView = memo(function ChatView({ paneId, active = true, visible:
   // connection after the pane shows (a fresh attach) is no reconnect: while the mount read is
   // still in flight, that read already answers for it, and a second full read would only repeat it.
   useEffect(() => {
+    // The socket callback fences disconnects synchronously, including edges React batches away.
+    if (onConversationUpdate !== undefined) return;
     const before = seenConnected.current;
     seenConnected.current = connected;
     const reconnect = wasConnected.current;
@@ -1085,7 +1131,7 @@ export const ChatView = memo(function ChatView({ paneId, active = true, visible:
     if (!connected || before || !visible) return;
     if (!reconnect && conversationRefresh.reading) return;
     conversationRefresh.refresh();
-  }, [connected, visible, conversationRefresh]);
+  }, [connected, visible, conversationRefresh, onConversationUpdate]);
 
   const loadOlder = useCallback(async (): Promise<void> => {
     const node = scroller.current;

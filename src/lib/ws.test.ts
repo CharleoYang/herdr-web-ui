@@ -1683,3 +1683,66 @@ it("ends the connection when the page is left, and connects again only when it i
     jest.useRealTimers();
   }
 });
+
+it("ignores unadvertised deltas before snapshot and on an old watch-only bridge while preserving invalidations", () => {
+  const client = new HerdrSocket("ws://test/ws");
+  const received: unknown[] = [];
+  client.on((message) => { if (message.type === "conversation-delta" || message.type === "conversation-changed") received.push(message); });
+  client.connect();
+  const socket = FakeSocket.last; socket.open();
+  client.attach("w1:p1", 80, 24, true); client.watchConversation("w1:p1", true);
+  const delta = { type: "conversation-delta", pane_id: "w1:p1", signature: "a", delta: { base_signature: null, source: "omp-transcript", turns: [] } };
+  try {
+    socket.receive(delta);
+    socket.receive(snapshot(["conversation-watch"]));
+    socket.receive(delta);
+    const changed = { type: "conversation-changed", pane_id: "w1:p1", signature: "a" };
+    socket.receive(changed);
+    expect(received).toEqual([changed]);
+    expect(client.conversationPushes()).toBe(false);
+  } finally { client.close(); }
+});
+
+it("delivers complete-page frames only for an advertised, attached, interested pane", () => {
+  const client = new HerdrSocket("ws://test/ws");
+  const received: unknown[] = [];
+  client.on((message) => { if (message.type === "conversation-delta") received.push(message); });
+  client.connect();
+  const socket = FakeSocket.last; socket.open(); socket.receive(snapshot(["conversation-watch", "conversation-delta"]));
+  const delta = { type: "conversation-delta", pane_id: "w1:p1", signature: "a", delta: { base_signature: null, source: "omp-transcript", turns: [] } };
+  try {
+    expect(client.conversationPushes()).toBe(true);
+    socket.receive(delta); // neither attached nor interested
+    client.attach("w1:p1", 80, 24, true);
+    socket.receive(delta); // attached alone is insufficient
+    client.watchConversation("w1:p1", true);
+    socket.receive({ ...delta, pane_id: "w1:p2" });
+    socket.receive(delta);
+    client.detach("w1:p1"); socket.receive({ ...delta, signature: "detached" });
+    client.attach("w1:p1", 80, 24, true);
+    client.watchConversation("w1:p1", false); socket.receive({ ...delta, signature: "unwatched" });
+    expect(received).toEqual([delta]);
+  } finally { client.close(); }
+});
+
+it("never forwards a stale connection's page or inherits its delta feature across reconnects", () => {
+  const client = new HerdrSocket("ws://test/ws");
+  const received: unknown[] = [];
+  client.on((message) => { if (message.type === "conversation-delta") received.push(message); });
+  client.connect();
+  const old = FakeSocket.last; old.open(); old.receive(snapshot(["conversation-watch", "conversation-delta"]));
+  client.attach("w1:p1", 80, 24, true); client.watchConversation("w1:p1", true);
+  const delta = { type: "conversation-delta", pane_id: "w1:p1", signature: "a", delta: { base_signature: null, source: "omp-transcript", turns: [] } };
+  try {
+    old.disconnect(); client.connect();
+    const fresh = FakeSocket.last; fresh.open();
+    old.receive(delta); fresh.receive(delta);
+    expect(client.conversationPushes()).toBe(false);
+    fresh.receive(snapshot(["conversation-watch"])); fresh.receive(delta);
+    expect(received).toEqual([]);
+    fresh.receive(snapshot(["conversation-watch", "conversation-delta"]));
+    const current = { ...delta, signature: "current" }; fresh.receive(current);
+    old.receive({ ...delta, signature: "late" });
+    expect(received).toEqual([current]);
+  } finally { client.close(); }
+});
