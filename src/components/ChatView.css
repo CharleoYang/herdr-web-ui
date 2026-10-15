@@ -1442,13 +1442,14 @@
   font-size: var(--fs-xs);
 }
 
-/* the pinned panel (ChatView.tsx TodoPanel): one row above the transcript, the whole list under it
-   while it is open. It takes a row of its own — nothing over the conversation — and a long list
-   scrolls inside itself instead of pushing the transcript off the pane. */
+/* the pinned panel (ChatView.tsx TodoPanel): the chat's last row, just above the input card — one
+   row there, the whole list above it while it is open. It takes a row of its own, so the transcript
+   above it shrinks instead of being covered, and a long list scrolls inside itself. */
 .chat-todo-pinned {
   flex: 0 0 auto;
   width: min(calc(100% - 2 * var(--space-4)), var(--chat-w));
-  margin: var(--space-2) auto 0;
+  /* a phone's input card rises into the row above it (--composer-over): keep clear of the glass */
+  margin: 0 auto calc(var(--space-2) + var(--composer-over, 0px));
 }
 
 .chat-todo-pinned[open] .chat-todo-detail {

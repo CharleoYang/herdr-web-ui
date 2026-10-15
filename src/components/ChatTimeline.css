@@ -15,18 +15,12 @@
   flex-direction: column;
 }
 
-/* the transcript region: the frame's whole height, less whatever the pinned panel took. The minimap
-   and the jump button are inside it, so both stay within the conversation's own box. */
+/* the transcript region: the frame's whole height, less whatever the pinned todo panel took. The
+   minimap and the jump button are inside it, so both stay within the conversation's own box. */
 .chat-frame-scroll {
   position: relative;
   flex: 1 1 auto;
   min-height: 0;
-}
-
-/* with a panel above it, the transcript starts under it rather than sliding up behind a phone's
-   glass header, which the panel already clears */
-.chat-frame-body:has(> .chat-todo-pinned) > .chat-frame-scroll > .chat-view {
-  top: 0;
 }
 
 .chat-view.chat-view-virtual {

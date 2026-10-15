@@ -485,9 +485,10 @@ function GoalActivity({ goal }: { goal: GoalState }) {
   </ChatDetails>;
 }
 
-/** The agent's todo list, pinned above the transcript rather than inside it: folding the tool rows
- *  never hides it, and it stands outside the `role="log"` scroller, so a change to the list is not
- *  read as a new message. Closed it is one row: the mark, the word, the count and the running step. */
+/** The agent's todo list, pinned to the chat's last row, above the input card rather than inside the
+ *  transcript: folding the tool rows never hides it, and it stands outside the `role="log"` scroller,
+ *  so a change to the list is not read as a new message. Closed it is one row: the mark, the word,
+ *  the count and the running step. */
 function TodoPanel({ items, open, onToggle }: { items: TodoItem[]; open: boolean; onToggle: (open: boolean) => void }) {
   const t = useT();
   const total = items.length;
@@ -1452,8 +1453,6 @@ export const ChatView = memo(function ChatView({ paneId, active = true, visible:
   return <ChatPaneContext.Provider value={paneId}><ChatHistoryContext.Provider value={historyId ?? ""}><ImageViewerContext.Provider value={openViewer}>
     <div className="chat-frame">
     <div className="chat-frame-body">
-    {/* the agent's own list: a row above the transcript, never inside it */}
-    {state.source === "conversation" && currentTodos !== null && <TodoPanel items={currentTodos} open={todosOpen} onToggle={setTodosOpen} />}
     <div className="chat-frame-scroll">
     {state.source === "conversation" ? ChatTimeline === null
       // its chunk is still loading: no turn is read until it arrives, so this is the loading state
@@ -1487,6 +1486,8 @@ export const ChatView = memo(function ChatView({ paneId, active = true, visible:
     {state.source === "conversation" && <ChatMinimap turns={minimap} rowKeys={rowKeys} scroller={scroller} onJump={jumpToTurn} />}
     {jump}
     </div>
+    {/* the agent's own list: the chat's last row, just above the input card */}
+    {state.source === "conversation" && currentTodos !== null && <TodoPanel items={currentTodos} open={todosOpen} onToggle={setTodosOpen} />}
     </div>
     </div>
   {/* The prompt card is not part of the transcript: it is drawn on the composer's column, over the
