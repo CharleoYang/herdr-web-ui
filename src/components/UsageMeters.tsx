@@ -89,20 +89,22 @@ export function UsageMeters() {
   const rootRef = useRef<HTMLDivElement>(null);
   const stripRef = useRef<HTMLButtonElement>(null);
 
-  // turned off in Settings, the popover closes: its clock and listener go with it
+  // turned off in Settings, the popover closes: its listener and the clock go with it
   useEffect(() => { if (!settings.showUsage) setOpen(false); }, [settings.showUsage]);
+  // reset countdowns and run-out warnings move on between reports, popover closed or open
   useEffect(() => {
-    if (!open) return;
+    if (!settings.showUsage) return;
     setNow(Date.now());
     const tick = setInterval(() => setNow(Date.now()), 30_000);
+    return () => clearInterval(tick);
+  }, [settings.showUsage, open]);
+  useEffect(() => {
+    if (!open) return;
     const onPointerDown = (event: PointerEvent): void => {
       if (!rootRef.current?.contains(event.target as Node)) setOpen(false);
     };
     document.addEventListener("pointerdown", onPointerDown);
-    return () => {
-      clearInterval(tick);
-      document.removeEventListener("pointerdown", onPointerDown);
-    };
+    return () => document.removeEventListener("pointerdown", onPointerDown);
   }, [open]);
 
   // Escape and focus belong to the meters only while focus is in them: other dialogs keep theirs

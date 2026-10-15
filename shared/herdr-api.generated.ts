@@ -64,6 +64,10 @@ export interface AgentStartParams {
 
 export type AgentStatus = "blocked" | "done" | "idle" | "unknown" | "working" | (string & {});
 
+export interface AgentTarget {
+  target: string;
+}
+
 export interface EventsSubscribeParams {
   subscriptions: Subscription[];
 }
@@ -124,6 +128,27 @@ export interface PaneLayoutSplit {
   id: string;
   ratio: number;
   rect: PaneLayoutRect;
+}
+
+export interface PaneProcessInfo {
+  foreground_process_group_id?: number | null;
+  foreground_processes?: PaneProcessInfoProcess[];
+  pane_id: string;
+  shell_pid?: number | null;
+  tty?: string | null;
+}
+
+export interface PaneProcessInfoParams {
+  pane_id?: string | null;
+}
+
+export interface PaneProcessInfoProcess {
+  argv?: string[] | null;
+  argv0?: string | null;
+  cmdline?: string | null;
+  cwd?: string | null;
+  name: string;
+  pid: number;
 }
 
 export interface PaneReadParams {

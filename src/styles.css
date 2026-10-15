@@ -5,9 +5,9 @@
  * mirror of this block and the two must not drift. Dark is the default theme and
  * `[data-theme="light"]` overrides the color group only (src/lib/settings.ts sets
  * the attribute); `[data-density="compact"]` overrides the type scale and row
- * heights. The base blocks are the monokai palette, the default and the look before
- * settings load; `[data-palette]` blocks override them for amber, report,
- * charcoal, catppuccin and lilac. xterm cannot read CSS custom properties, so the --term-* group
+ * heights. The base blocks are the monokai palette, this checkout's default and the look before
+ * settings load; `[data-palette]` blocks override them for the opt-in amber, charcoal and
+ * catppuccin palettes. xterm cannot read CSS custom properties, so the --term-* group
  * is mirrored in settings.ts `terminalTheme()`.
  * Component-scoped rules live beside their component (Sidebar.css,
  * PaneTerminal.css, ...); this file owns the app shell, the header and the
@@ -50,12 +50,30 @@
   --status-done-tint: rgba(166, 226, 46, 0.14);
   --danger-tint: rgba(255, 158, 170, 0.12);
   --danger-text: #ffd6df;
+  /* herdr's TUI state colors, in Monokai's own terms: its yellow, pink, cyan and green */
+  --indicator-working: #e6db74;
+  --indicator-blocked: #f92672;
+  --indicator-done: #66d9ef;
+  --indicator-idle: #a6e22e;
+  --indicator-unknown: #75715e;
+  /* a note that the view is partial (a file cut short, code left plain): warning yellow */
+  --notice: #e6db74;
 
   /* overlays */
   --scrim: rgba(10, 10, 8, 0.65);
+  /* glass: a phone's header over the chat and the input card over the transcript's end, as an
+     iPhone's bars are. Mixed from the theme's own surfaces, so every theme and palette has them */
+  --bar-bg: color-mix(in srgb, var(--bg-panel) 72%, transparent);
+  --card-glass: color-mix(in srgb, var(--bg-elevated) 80%, transparent);
+  --glass-blur: saturate(180%) blur(20px);
   --shadow-drawer: 0 0 40px rgba(0, 0, 0, 0.65);
   --shadow-pop: 0 16px 48px rgba(0, 0, 0, 0.6), 0 0 0 1px var(--border);
   --shadow-card: 0 4px 16px rgba(0, 0, 0, 0.35);
+
+  /* document surfaces: NOT theme-driven. A PDF page is paper, not UI — it is white in either
+     theme, so it is named here and never overridden by the theme blocks below
+     (FileViewer's .file-viewer-pdf) */
+  --pdf-page: #ffffff;
 
   /* terminal theme: mirrored verbatim in src/lib/settings.ts terminalTheme() */
   --term-bg: #272822;
@@ -63,19 +81,40 @@
   --term-cursor: #fd971f;
   --term-selection: #49483e;
 
+  /* syntax highlighting (components/HighlightedCode.css): the four derived roles follow the
+     palette because they are resolved on <html>, where data-theme and data-palette sit */
+  /* the file viewer's line numbers: tertiary text, quieter than the code beside them */
+  --line-number: var(--text-dim);
+  --syntax-comment: var(--text-dim);
+  --syntax-function: var(--accent);
+  --syntax-inserted: var(--status-done);
+  --syntax-deleted: var(--status-blocked);
+  --syntax-keyword: #f92672;
+  --syntax-string: #e6db74;
+  --syntax-number: #ae81ff;
+  --syntax-type: #66d9ef;
+  --syntax-variable: #fd971f;
+  --syntax-meta: #a6e22e;
+
   /* type (comfortable density; compact overrides below) */
   --font-ui: -apple-system, BlinkMacSystemFont, "PingFang SC", "Hiragino Sans GB", sans-serif;
   /* "JetBrains Mono Web" is the bundled face (fonts/fonts.css): after the icon font, which draws
      the private use area alone, and never in the terminal's own stack (lib/fontFamily.ts) */
-  --font-mono: ui-monospace, "SF Mono", Menlo, Monaco, "Symbols Nerd Font Mono", "PingFang SC", monospace;
-  --fs-2xs: 11px;
-  --fs-xs: 12px;
-  --fs-sm: 13px;
-  --fs-md: 14px;
-  --fs-chat: 15px; /* text that is read at length: chat prose, the user's bubble, the message box with a mouse */
-  --fs-lg: 16px;
-  --fs-xl: 18px;
-  --fs-display: 22px;
+  --font-mono: "Symbols Nerd Font Mono", "JetBrains Mono Web", ui-monospace, "SF Mono", Menlo, Monaco, "PingFang SC", "Hiragino Sans GB", monospace;
+  /* Settings → Appearance → Interface font size: the chosen body size over the density's (lib/settings.ts
+     writes it on <html>). Every size below is the scale at 1, except --fs-input: the floor under which
+     iOS Safari zooms a focused field stays a floor */
+  --ui-scale: 1;
+  --fs-2xs: calc(11px * var(--ui-scale));
+  --fs-xs: calc(12px * var(--ui-scale));
+  --fs-sm: calc(13px * var(--ui-scale));
+  --fs-md: calc(14px * var(--ui-scale));
+  --fs-chat: calc(15px * var(--ui-scale)); /* text that is read at length: chat prose, the user's bubble, the message box with a mouse */
+  --fs-lg: calc(16px * var(--ui-scale));
+  --fs-xl: calc(18px * var(--ui-scale));
+  --fs-display: calc(22px * var(--ui-scale));
+  /* the pairing code: a size of its own, still on the density scale (compact overrides it) */
+  --fs-pairing: calc(32px * var(--ui-scale));
   --fs-input: 16px; /* the one size iOS Safari does not zoom on focus */
   --lh-tight: 1.2;
   --lh-base: 1.5;
@@ -125,10 +164,19 @@
   --content-w: 820px;
   /* the chat lane: transcript, composer column, held list (Settings → Chat width, lib/settings.ts).
      At the Default step PaneTerminal writes the pane's own lane on .terminal-stack, as one
-     length (chatLaneLength: 71.43% of the pane in px, min 820px, max 60rem); this is that rule's floor, for a
+     length (chatLaneLength: 71.43% of the pane in px, min 820px, max 60rem), and a file viewer
+     writes the lane of the pane that opened it on itself; this is that rule's floor, for a
      pane not measured yet. Never a percentage here: each column would resolve it against its
      own box and the columns would differ by their gutters */
   --chat-w: var(--content-w);
+  /* a long user message folds to this many lines of its prose (ChatView.css caps the bubble's body
+     at the count; lib/userMessageFold.ts folds a message past it) */
+  --chat-fold-lines: 12;
+  /* the chat's own accents (ChatView.css): headings and inline code follow the palette's accent and
+     a folded block of tool rows sits one step off the canvas. Monokai names its own purple below */
+  --chat-heading: var(--accent);
+  --chat-code-accent: var(--accent);
+  --chat-work-bg: var(--bg-elevated);
   --pending-max-h: min(20dvh, 12rem);
   --palette-w: 640px;
   --palette-top: 12vh;
@@ -141,19 +189,29 @@
   --dur-fast: 120ms;
   --dur-base: 180ms;
   --dur-pulse: 1600ms;
+  /* one turn of a stepped spinner: it draws its steps and nothing else, so the step count is
+     the frame rate and this only sets how fast it looks */
+  --dur-spin: 1600ms;
+  /* one breath of the sidebar's working dot: held full, dimmed, held, back (Sidebar.css) */
+  --dur-breathe: 2000ms;
   --ease-out: cubic-bezier(0.2, 0, 0, 1);
   --ease-spring: cubic-bezier(0.32, 0.72, 0, 1);
   /* the pulse jumps between its two looks: a smooth one has the browser draw a new frame at
      every display refresh for as long as an agent works (60+ a second), which stutters a
      video playing beside the app; two steps draw about one frame a second */
   --ease-pulse: steps(2, jump-none);
+  /* a phone's sheet rises on the spring and drops faster than it rose */
+  --dur-sheet: 360ms;
+  --dur-sheet-out: 240ms;
 
   /* layers */
+  --z-header: 4;
   --z-banner: 5;
   --z-popover: 10;
   --z-scrim: 15;
   --z-drawer: 20;
   --z-modal: 30;
+  --z-palette: 35;
   --z-droplet: 40;
 
   /* in-app alert (components/Droplet.css): island black in either theme, so one set */
@@ -204,6 +262,18 @@
   --term-fg: #272822;
   --term-cursor: #d46b00;
   --term-selection: #e0dccf;
+  --indicator-working: #9a7d0a;
+  --indicator-blocked: #a3183c;
+  --indicator-done: #0f7b8a;
+  --indicator-idle: #4e7a13;
+  --indicator-unknown: #7a7566;
+  --notice: #7a5a00;
+  --syntax-keyword: #a3234a;
+  --syntax-string: #6b7a00;
+  --syntax-number: #7040b0;
+  --syntax-type: #0b6e8a;
+  --syntax-variable: #8a5a00;
+  --syntax-meta: #4b6b18;
 }
 
 /* Amber, the previous default, kept as an explicit palette. */
@@ -234,6 +304,19 @@
   --status-done-tint: rgba(147, 195, 107, 0.14);
   --danger-tint: rgba(255, 123, 112, 0.12);
   --danger-text: #ffd9d4;
+  /* herdr's TUI state colors, from its default theme (Catppuccin Mocha) */
+  --indicator-working: #f9e2af;
+  --indicator-blocked: #f38ba8;
+  --indicator-done: #94e2d5;
+  --indicator-idle: #a6e3a1;
+  --indicator-unknown: #6c7086;
+  --notice: #e8c55c;
+  --syntax-keyword: #e8875f;
+  --syntax-string: #a8c17c;
+  --syntax-number: #d6a0c9;
+  --syntax-type: #6cb8d6;
+  --syntax-variable: #e0c08f;
+  --syntax-meta: #b49dd6;
   --scrim: rgba(8, 6, 4, 0.55);
   --shadow-drawer: 0 0 40px rgba(0, 0, 0, 0.6);
   --shadow-pop: 0 16px 48px rgba(0, 0, 0, 0.55), 0 0 0 1px var(--border);
@@ -270,7 +353,13 @@
   --status-blocked-tint: rgba(168, 35, 35, 0.12);
   --status-done-tint: rgba(47, 99, 23, 0.12);
   --danger-tint: rgba(168, 35, 35, 0.1);
+  --indicator-working: #df8e1d;
+  --indicator-blocked: #d20f39;
+  --indicator-done: #179299;
+  --indicator-idle: #40a02b;
+  --indicator-unknown: #9ca0b0;
   --danger-text: #8f1d1d;
+  --notice: #7a5a00;
   --scrim: rgba(40, 32, 22, 0.35);
   --shadow-drawer: 0 0 40px rgba(40, 32, 22, 0.22);
   --shadow-pop: 0 16px 48px rgba(40, 32, 22, 0.16), 0 0 0 1px var(--border);
@@ -279,59 +368,17 @@
   --term-fg: #2a251f;
   --term-cursor: #8c5000;
   --term-selection: #f0d9ae;
+  --syntax-keyword: #a33a17;
+  --syntax-string: #4b6b18;
+  --syntax-number: #8a3f7a;
+  --syntax-type: #155a72;
+  --syntax-variable: #7a5418;
+  --syntax-meta: #5d4791;
 }
 
-/* Dark report palette (Settings → Appearance → Colors): a near-black blue-grey canvas
-   with 1px hairlines and near-square panels. The user's own action (Send, primary
-   buttons) is white on the canvas; electric blue is kept for small marks only - the
-   selected row's rail, focus, links, the cursor. Agent states carry the report's
-   meaning colors: amber working, red input, green done, none of them blue. */
-[data-palette="report"] {
-  --radius-sm: 2px;
-  --radius-md: 3px;
-  --radius-lg: 3px;
-  --radius-xl: 4px;
-  --radius-2xl: 6px;
-}
-
-[data-theme="dark"][data-palette="report"] {
-  --bg: #0a0d12;
-  --bg-panel: #0f1319;
-  --bg-elevated: #141922;
-  --bg-hover: #1a212c;
-  --bg-input: #0c1016;
-  --border: #1e2530;
-  --border-strong: #2a3340;
-  --text: #b4bdc9;
-  --text-dim: #8792a3;
-  --text-strong: #e8ecf2;
-  --accent: #4c9aff;
-  --accent-tint: rgba(76, 154, 255, 0.12);
-  --primary: #e8ecf2;
-  --primary-hover: #ffffff;
-  --primary-text: #0a0d12;
-  --primary-tint: rgba(232, 236, 242, 0.1);
-  --status-idle: #8792a3;
-  --status-working: #f5b544;
-  --status-blocked: #ff6b7a;
-  --status-done: #3ddc97;
-  --status-working-tint: rgba(245, 181, 68, 0.14);
-  --status-blocked-tint: rgba(255, 107, 122, 0.14);
-  --status-done-tint: rgba(61, 220, 151, 0.14);
-  --danger-tint: rgba(255, 107, 122, 0.12);
-  --danger-text: #ffd6db;
-  --scrim: rgba(4, 6, 10, 0.6);
-  /* resting surfaces carry no shadow: the one card, the composer's box, is a hairline */
-  --shadow-card: none;
-  --term-bg: #0f1319;
-  --term-fg: #c9d1dc;
-  --term-cursor: #4c9aff;
-  --term-selection: #1f3a66;
-}
-
-/* Report and charcoal share plain paper in light; charcoal's own light block below
-   swaps the blue for ink */
-[data-theme="light"]:is([data-palette="report"], [data-palette="charcoal"]) {
+/* Charcoal in light: plain paper with ink for the accent and the cursor */
+[data-theme="light"][data-palette="charcoal"] {
+  --notice: #8a5300;
   --bg: #f2f2f0;
   --bg-panel: #fafaf9;
   --bg-elevated: #efefed;
@@ -342,8 +389,8 @@
   --text: #242424;
   --text-dim: #5f5b56;
   --text-strong: #111111;
-  --accent: #1f5fcc;
-  --accent-tint: rgba(31, 95, 204, 0.1);
+  --accent: #242424;
+  --accent-tint: rgba(36, 36, 36, 0.08);
   --primary: #242424;
   --primary-hover: #3a3a3a;
   --primary-text: #fafaf9;
@@ -354,8 +401,8 @@
   --shadow-card: 0 4px 16px rgba(20, 20, 20, 0.06);
   --term-bg: #fafaf9;
   --term-fg: #242424;
-  --term-cursor: #1f5fcc;
-  --term-selection: #cfe0fb;
+  --term-cursor: #242424;
+  --term-selection: #dedad3;
   --bubble-border: var(--border);
   --status-idle: #685e52;
   --status-working: #155a72;
@@ -366,12 +413,19 @@
   --status-done-tint: rgba(47, 99, 23, 0.12);
   --danger-tint: rgba(168, 35, 35, 0.1);
   --danger-text: #8f1d1d;
+  --syntax-keyword: #b3261e;
+  --syntax-string: #22743a;
+  --syntax-number: #8a5300;
+  --syntax-type: #0b6e8a;
+  --syntax-variable: #3b3b3b;
+  --syntax-meta: #6f42c1;
 }
 
 /* Charcoal: neutral charcoal, a Ghostty-style terminal (the panel is its #171717), no
    chrome hue - selection, focus, cursor and the user's action are near-white; agent
-   states are muted as in the terminal palette. Light keeps the base paper with ink. */
+   states are muted as in the terminal palette. Light is the paper block above. */
 [data-theme="dark"][data-palette="charcoal"] {
+  --notice: #d9b26a;
   --bg: #0f0f0f;
   --bg-panel: #171717;
   --bg-elevated: #1f1f1f;
@@ -403,13 +457,12 @@
   --term-fg: #cbc7c0;
   --term-cursor: #cbc7c0;
   --term-selection: #49443d;
-}
-
-[data-theme="light"][data-palette="charcoal"] {
-  --accent: #242424;
-  --accent-tint: rgba(36, 36, 36, 0.08);
-  --term-cursor: #242424;
-  --term-selection: #dedad3;
+  --syntax-keyword: #d7a08a;
+  --syntax-string: #a7b789;
+  --syntax-number: #c2a2af;
+  --syntax-type: #9fb4c2;
+  --syntax-variable: #dcd8d0;
+  --syntax-meta: #b8a5c9;
 }
 
 /* Catppuccin (catppuccin.com/palette): Mocha in dark, Latte in light, mapped by the
@@ -423,6 +476,9 @@
    surfaces, so the style guide's "legibility first" applies: each keeps its hue and is
    darkened until it passes AA (Mauve 17%, Red 18%, Blue 22%, Green 37%). */
 [data-theme="dark"][data-palette="catppuccin"] {
+  --notice: #f9e2af;
+  /* overlay2: --text-dim (subtext1) is nearly --text here */
+  --line-number: #9399b2;
   --bg: #1e1e2e;
   --bg-panel: #181825;
   --bg-elevated: #181825;
@@ -455,9 +511,20 @@
   --term-fg: #cdd6f4;
   --term-cursor: #f5e0dc;
   --term-selection: #3b3d4f;
+  /* Catppuccin's own mapping: keywords mauve, so functions take blue instead of --accent */
+  --syntax-keyword: #cba6f7;
+  --syntax-string: #a6e3a1;
+  --syntax-number: #fab387;
+  --syntax-type: #f9e2af;
+  --syntax-variable: #f5e0dc;
+  --syntax-meta: #f5c2e7;
+  --syntax-function: #89b4fa;
 }
 
 [data-theme="light"][data-palette="catppuccin"] {
+  --notice: #8a5710;
+  /* subtext0, darkened to 4.5:1 on --bg */
+  --line-number: #64677d;
   --bg: #eff1f5;
   --bg-panel: #e6e9ef;
   --bg-elevated: #e6e9ef;
@@ -492,168 +559,30 @@
   --term-fg: #4c4f69;
   --term-cursor: #dc8a78;
   --term-selection: #d2d4dc;
+  --syntax-keyword: #712fc6;
+  --syntax-string: #2f7620;
+  --syntax-number: #b44201;
+  --syntax-type: #905c13;
+  --syntax-variable: #4c4f69;
+  --syntax-meta: #bc1d91;
+  --syntax-function: #0b59f4;
 }
 
-/* Lilac: one quiet lavender. Light is the look it was drawn for: a lavender canvas (`--bg`)
-   under paler lavender chrome (`--bg-panel`: sidebar, header, tabs), indigo ink, and an indigo
-   accent for the user's own action. Dark is the same hue at night: an indigo-black canvas, violet
-   chrome and a pale lilac accent. No gradient and no translucency: every surface is flat. */
-[data-theme="dark"][data-palette="lilac"] {
-  --bg: #16152b;
-  --bg-panel: #1c1b34;
-  --bg-elevated: #23223f;
-  --bg-hover: #2c2a4f;
-  --bg-input: #13122a;
-  --border: #2f2d52;
-  --border-strong: #423f6e;
-  --text: #dcdaf4;
-  --text-dim: #a5a2cc;
-  --text-strong: #f2f1ff;
-  --accent: #b3abff;
-  --accent-tint: rgba(179, 171, 255, 0.13);
-  --primary: #b3abff;
-  --primary-hover: #c5bfff;
-  --primary-text: #17163a;
-  --primary-tint: rgba(179, 171, 255, 0.16);
-  --status-idle: #a5a2cc;
-  --status-working: #85b8ff;
-  --status-blocked: #ff94ad;
-  --status-done: #92d9ab;
-  --status-working-tint: rgba(133, 184, 255, 0.14);
-  --status-blocked-tint: rgba(255, 148, 173, 0.14);
-  --status-done-tint: rgba(146, 217, 171, 0.14);
-  --danger-tint: rgba(255, 148, 173, 0.12);
-  --danger-text: #ffd6df;
-  --scrim: rgba(9, 8, 22, 0.6);
-  --shadow-card: 0 4px 16px rgba(0, 0, 0, 0.35);
-  --term-bg: #18172f;
-  --term-fg: #dcdaf4;
-  --term-cursor: #b3abff;
-  --term-selection: #3a3768;
-}
-
-[data-theme="light"][data-palette="lilac"] {
-  --bg: #f0eefc;
-  --bg-panel: #f6f5fe;
-  --bg-elevated: #fbfaff;
-  --bg-hover: #e8e5f8;
-  --bg-input: #fdfcff;
-  --border: #e0dcf4;
-  --border-strong: #c8c2ea;
-  --bubble-border: var(--border);
-  --text: #2b2d4d;
-  --text-dim: #545779;
-  --text-strong: #17193a;
-  --accent: #4a42c2;
-  --accent-tint: rgba(74, 66, 194, 0.12);
-  --primary: #4a42c2;
-  --primary-hover: #5951d0;
-  --primary-text: #ffffff;
-  --primary-tint: rgba(74, 66, 194, 0.14);
-  --status-idle: #545779;
-  --status-working: #1f4aa6;
-  --status-blocked: #9c2044;
-  --status-done: #1f5c39;
-  --status-working-tint: rgba(31, 74, 166, 0.12);
-  --status-blocked-tint: rgba(156, 32, 68, 0.12);
-  --status-done-tint: rgba(31, 92, 57, 0.12);
-  --danger-tint: rgba(156, 32, 68, 0.1);
-  --danger-text: #8c1f3a;
-  --scrim: rgba(43, 35, 100, 0.32);
-  --shadow-drawer: 0 0 40px rgba(60, 50, 130, 0.22);
-  --shadow-pop: 0 16px 48px rgba(60, 50, 130, 0.16), 0 0 0 1px var(--border);
-  --shadow-card: 0 4px 16px rgba(60, 50, 130, 0.08);
-  --term-bg: #f8f7fe;
-  --term-fg: #2b2d4d;
-  --term-cursor: #4a42c2;
-  --term-selection: #dcd7f8;
-}
-
-/* Monokai palette (OMP dark-monokai): warm olive-black canvas, purple/orange/green accents */
+/* Monokai (this checkout's default palette) is the base blocks above; what is left here is what
+   the base does not carry: its smaller corners, and the chat accents of a Monokai turn. */
 [data-palette="monokai"] {
   --radius-sm: 4px;
   --radius-md: 6px;
   --radius-lg: 8px;
-  --chat-heading: var(--accent);
-  --chat-code-accent: var(--accent);
-  --chat-work-bg: var(--bg-elevated);
 }
 
 [data-theme="dark"][data-palette="monokai"] {
-  --bg: #1e1f1c;
-  --bg-panel: #272822;
-  --bg-elevated: #2e2f29;
-  --bg-hover: #33342d;
-  --bg-input: #1e1f1c;
-  --border: #3e3d32;
-  --border-strong: #49483e;
-  --bubble-border: transparent;
-  --text: #f8f8f2;
-  --text-dim: #b0ab95;
-  --text-strong: #ffffff;
-  --accent: #fd971f;
-  --accent-tint: rgba(253, 151, 31, 0.16);
-  --primary: #fd971f;
-  --primary-hover: #ffad42;
-  --primary-text: #1b1407;
-  --primary-tint: rgba(253, 151, 31, 0.18);
-  --status-idle: #a6a28c;
-  --status-working: #66d9ef;
-  --status-blocked: #ff9eaa;
-  --status-done: #a6e22e;
-  --status-working-tint: rgba(102, 217, 239, 0.14);
-  --status-blocked-tint: rgba(255, 158, 170, 0.14);
-  --status-done-tint: rgba(166, 226, 46, 0.14);
-  --danger-tint: rgba(255, 158, 170, 0.12);
-  --danger-text: #ffd6df;
-  --scrim: rgba(10, 10, 8, 0.65);
-  --shadow-drawer: 0 0 40px rgba(0, 0, 0, 0.65);
-  --shadow-pop: 0 16px 48px rgba(0, 0, 0, 0.6), 0 0 0 1px var(--border);
-  --shadow-card: 0 4px 16px rgba(0, 0, 0, 0.35);
-  --term-bg: #272822;
-  --term-fg: #f8f8f2;
-  --term-cursor: #fd971f;
-  --term-selection: #49483e;
   --chat-heading: #ae81ff;
   --chat-code-accent: #ae81ff;
   --chat-work-bg: #242520;
 }
 
 [data-theme="light"][data-palette="monokai"] {
-  --bg: #f5f4ef;
-  --bg-panel: #faf9f5;
-  --bg-elevated: #eeede6;
-  --bg-hover: #e5e3dc;
-  --bg-input: #ffffff;
-  --border: #dcd9cd;
-  --border-strong: #cac6b6;
-  --bubble-border: transparent;
-  --text: #272822;
-  --text-dim: #605d52;
-  --text-strong: #141411;
-  --accent: #d46b00;
-  --accent-tint: rgba(212, 107, 0, 0.12);
-  --primary: #d46b00;
-  --primary-hover: #eb7802;
-  --primary-text: #ffffff;
-  --primary-tint: rgba(212, 107, 0, 0.14);
-  --status-idle: #605d52;
-  --status-working: #0b5c9e;
-  --status-blocked: #ad0c3d;
-  --status-done: #1e6122;
-  --status-working-tint: rgba(11, 92, 158, 0.12);
-  --status-blocked-tint: rgba(173, 12, 61, 0.12);
-  --status-done-tint: rgba(30, 97, 34, 0.12);
-  --danger-tint: rgba(173, 12, 61, 0.1);
-  --danger-text: #880e4f;
-  --scrim: rgba(39, 40, 34, 0.35);
-  --shadow-drawer: 0 0 40px rgba(39, 40, 34, 0.2);
-  --shadow-pop: 0 16px 48px rgba(39, 40, 34, 0.16), 0 0 0 1px var(--border);
-  --shadow-card: 0 4px 16px rgba(39, 40, 34, 0.08);
-  --term-bg: #faf9f5;
-  --term-fg: #272822;
-  --term-cursor: #d46b00;
-  --term-selection: #e0dccf;
   --chat-heading: #7040b0;
   --chat-code-accent: #7040b0;
 }
@@ -672,14 +601,15 @@
 }
 
 [data-density="compact"] {
-  --fs-2xs: 10px;
-  --fs-xs: 11px;
-  --fs-sm: 12px;
-  --fs-md: 13px;
-  --fs-chat: 14px;
-  --fs-lg: 15px;
-  --fs-xl: 17px;
-  --fs-display: 21px;
+  --fs-2xs: calc(10px * var(--ui-scale));
+  --fs-xs: calc(11px * var(--ui-scale));
+  --fs-sm: calc(12px * var(--ui-scale));
+  --fs-md: calc(13px * var(--ui-scale));
+  --fs-chat: calc(14px * var(--ui-scale));
+  --fs-lg: calc(15px * var(--ui-scale));
+  --fs-xl: calc(17px * var(--ui-scale));
+  --fs-display: calc(21px * var(--ui-scale));
+  --fs-pairing: calc(26px * var(--ui-scale));
   --lh-base: 1.45;
   --header-h: 46px;
   --sidebar-w: 300px;
@@ -708,6 +638,14 @@ body,
 #root {
   height: 100%;
   margin: 0;
+}
+
+/* No pull-to-refresh: a reload drops held drafts and the terminal client. Chrome before 144
+   ignores a container's overscroll-behavior when it has nothing to scroll (a short chat), so the
+   drag chains to the page; there it takes both html and body, html alone still reloads (#427). */
+html,
+body {
+  overscroll-behavior-y: contain;
 }
 
 body {
@@ -819,6 +757,16 @@ button {
   min-height: 0;
 }
 
+/* a refusal of a palette layout call, over the pane for a moment: the tab strip's own line, with no strip to sit at the end of */
+.pane-notice {
+  flex: 0 0 auto;
+  margin: 0;
+  padding: var(--space-1) var(--space-3);
+  border-bottom: var(--hairline) solid var(--border);
+  color: var(--status-blocked);
+  font-size: var(--fs-xs);
+}
+
 .terminal-host {
   position: relative;
   flex: 1 1 auto;
@@ -831,10 +779,91 @@ button {
   padding: 0 env(safe-area-inset-right, 0px) env(safe-area-inset-bottom, 0px) env(safe-area-inset-left, 0px);
 }
 
+/* the pane area: one pane, or two side by side (lib/split.ts). Each half is a pane slot with its
+   own tab strip and terminal; slot b exists only while split, and the halves keep their slots
+   when they trade sides, drawn by order */
+.pane-split {
+  position: relative;
+  display: flex;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+}
+
+.pane-slot {
+  display: flex;
+  flex: 1 1 0;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+
+.pane-slot[data-side="left"] {
+  order: 0;
+  border-right: var(--hairline) solid var(--border-strong);
+}
+
+.pane-slot[data-side="right"] {
+  order: 1;
+}
+
+/* a half's own bar: its pane's mark and title, its lens, and its close. The active half's bar
+   carries the accent, as the pane the header, the palette and the shortcuts act on */
+.pane-slot-bar {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: var(--space-2);
+  height: 30px;
+  padding: 0 var(--space-1) 0 var(--space-3);
+  border-bottom: var(--hairline) solid var(--border);
+  background: var(--bg-panel);
+  color: var(--text-dim);
+  font-size: var(--fs-xs);
+}
+
+.pane-slot.is-active .pane-slot-bar {
+  color: var(--text);
+  box-shadow: inset 0 2px 0 var(--accent);
+}
+
+.pane-slot-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pane-slot-machine {
+  flex: none;
+  color: var(--text-dim);
+}
+
+.pane-slot-bar .pane-slot-action {
+  width: 24px;
+  height: 24px;
+}
+
+.pane-slot-bar .pane-slot-action svg {
+  width: 14px;
+  height: 14px;
+}
+
+/* the inactive half is a step quieter, so the one keys go to reads at a glance */
+.pane-slot.is-inactive .terminal-host {
+  opacity: 0.88;
+}
+
 /* the chat's composer takes the home-indicator inset itself (Composer.css): kept here as
    well, it stacked under the composer's own padding as a band of another colour */
 .terminal-host:has(.composer) {
   padding-bottom: 0;
+}
+
+/* the tab strip's panel inside .terminal-host: a role for screen readers, no box of its own */
+.terminal-tabpanel {
+  display: contents;
 }
 
 /* ---------- header ---------- */
@@ -1010,11 +1039,6 @@ button {
 .header-more {
   position: relative;
   display: inline-flex;
-}
-
-/* nothing to offer but the palette, which has its own button above phone width */
-.header-more.is-phone-only {
-  display: none;
 }
 
 /* alerts are off on this device: the one state of the menu worth a glance. The button's name
@@ -1301,6 +1325,12 @@ button {
   background: var(--status-done-tint);
 }
 
+/* BG: the turn ended on work still running in the background. The working colours, holding still */
+.badge-waiting {
+  color: var(--status-working);
+  background: var(--status-working-tint);
+}
+
 /* unknown keeps the dim text color (contrast) and is told apart by the dashed edge */
 .badge-unknown {
   color: var(--text-dim);
@@ -1435,6 +1465,59 @@ button {
     border-radius: var(--radius-xl) var(--radius-xl) 0 0;
     padding-bottom: env(safe-area-inset-bottom, 0px);
   }
+}
+
+/* A phone's sheet moves as an iPhone's does: it rises from the bottom edge over a scrim that
+   darkens with it, follows a finger dragged down, and drops back down however it was closed.
+   lib/sheets.ts drives the drag and puts a closed sheet's last frame back for .is-leaving.
+   Every surface on a .modal-scrim is a sheet here: the dialogs, the palette, the row sheet. */
+@media (max-width: 640px) {
+  .modal-scrim {
+    animation: scrim-in var(--dur-sheet) var(--ease-out);
+  }
+
+  .modal-scrim > * {
+    animation: sheet-in var(--dur-sheet) var(--ease-spring);
+  }
+
+  /* A stroke on a sheet or its scrim is the sheet's: it pans nothing behind it, the chat
+     included. Its own lists still scroll, each a scroll container where touch-action starts
+     afresh, and keep their overscroll to themselves; a drag down is lib/sheets.ts's. Two
+     fingers still zoom the page, begun on a sheet as anywhere else (WCAG 1.4.4). */
+  .modal-scrim,
+  .modal-scrim > * {
+    touch-action: pinch-zoom;
+  }
+
+  .modal-scrim * {
+    overscroll-behavior: contain;
+  }
+
+  .modal-scrim.is-leaving {
+    pointer-events: none;
+    animation: scrim-out var(--dur-sheet-out) var(--ease-out) forwards;
+  }
+
+  .modal-scrim.is-leaving > * {
+    animation: sheet-out var(--dur-sheet-out) var(--ease-out) forwards;
+  }
+}
+
+@keyframes scrim-in {
+  from { background-color: transparent; }
+}
+
+@keyframes scrim-out {
+  to { background-color: transparent; }
+}
+
+@keyframes sheet-in {
+  from { transform: translateY(100%); }
+}
+
+/* no `from`: a sheet let go mid-drag drops from where the finger left it */
+@keyframes sheet-out {
+  to { transform: translateY(100%); }
 }
 
 /* A phone's keyboard is up (lib/viewport.ts): the scrim ends where the keyboard begins, as the
@@ -1613,9 +1696,8 @@ button {
     display: inline-flex;
   }
 
-  /* drawer mode: the collapse toggle has nothing to collapse, and sign out is in the palette */
-  .sidebar-toggle,
-  .lock-button {
+  /* drawer mode: the collapse toggle has nothing to collapse */
+  .sidebar-toggle {
     display: none;
   }
 
@@ -1632,6 +1714,7 @@ button {
     width: min(88vw, var(--sidebar-w));
     transform: translateX(-100%);
     visibility: hidden;
+    touch-action: pan-y;
     box-shadow: var(--shadow-drawer);
     transition:
       transform var(--dur-base) var(--ease-out),
@@ -1644,16 +1727,28 @@ button {
     transition-delay: 0s;
   }
 
+  /* on the page while the drawer is closed too: a swipe begun on it closes the drawer, and an
+     element that left the page would take the rest of the stroke's touches with it (lib/edgeSwipe.ts) */
   .scrim {
     display: block;
     position: fixed;
     inset: calc(var(--header-h) + env(safe-area-inset-top, 0px)) 0 0 0;
     z-index: var(--z-scrim);
     background: var(--scrim);
+    opacity: 0;
+    pointer-events: none;
+    touch-action: none;
+    transition: opacity var(--dur-base) var(--ease-out);
+  }
+
+  .scrim.is-open {
+    opacity: 1;
+    pointer-events: auto;
   }
 }
 
-/* the key bar (KeyBar.css) shows under the same query and carries env(safe-area-inset-bottom) itself */
+/* the key bar (KeyBar.css) shows under the same query and carries env(safe-area-inset-bottom) itself,
+   the one bar that reaches the bottom of the screen (KeyBar.tsx) */
 @media (pointer: coarse), (max-width: 768px) {
   .terminal-host:has(.key-bar) {
     padding-bottom: 0; /* no pane = no bar, and the host keeps the inset */
@@ -1676,10 +1771,6 @@ button {
   .header-desktop-only {
     display: none;
   }
-
-  .header-more.is-phone-only {
-    display: inline-flex;
-  }
 }
 
 /* just above phone width the lens labels would squeeze the pane title to a glyph: icons only */
@@ -1687,12 +1778,102 @@ button {
   .view-switch .header-desktop-only { display: none; }
 }
 
+/* ---------- phone: an app, not a page ---------- */
+
+/* Over the chat on a phone the header is glass, as an iPhone's bar is: the transcript scrolls on
+   under it, blurred, instead of stopping at a ruled edge. Only when the transcript is right under
+   the header; a tab strip or a notice between them keeps the plain bar. The header pulls the body
+   up under itself by its own height (--header-over), and the stack gives that height back above
+   everything in it, so a prompt card, the held messages and the composer never go under the bar:
+   only the transcript reaches up into it (ChatView.css), its first line still below it, and the
+   banners start below it (PaneTerminal.css). The terminal lens keeps the bar in the flow as before. */
+@media (max-width: 768px) {
+  .app:has(> .app-body > .pane-column.is-chat > .pane-split:first-child > .pane-slot > .terminal-host:first-child) {
+    --header-over: calc(var(--header-h) + env(safe-area-inset-top, 0px));
+  }
+
+  .app:has(> .app-body > .pane-column.is-chat > .pane-split:first-child > .pane-slot > .terminal-host:first-child) > .app-header {
+    z-index: var(--z-header);
+    margin-bottom: calc(-1 * var(--header-over));
+    background: var(--bar-bg);
+    -webkit-backdrop-filter: var(--glass-blur);
+    backdrop-filter: var(--glass-blur);
+  }
+}
+
+/* A finger, not a mouse. The app's own controls are not text: a long press on a row, a tab or a
+   button opens no loupe, selection or link callout, while what is read (the transcript, code,
+   a file, a field) keeps them. Page pinch zoom stays available on ordinary content; the terminal's
+   own pinch sizes its font. A press shows at once, as a dim, in place of the amber box a mouse's
+   :active draws. */
+@media (hover: none) and (pointer: coarse) {
+  html {
+    -webkit-text-size-adjust: 100%;
+    text-size-adjust: 100%;
+  }
+
+  .app-header,
+  .sidebar,
+  .tab-strip,
+  .key-bar,
+  .menu,
+  .row-sheet,
+  .modal-header,
+  .modal-footer,
+  .settings-nav,
+  button,
+  [role="button"],
+  [role="tab"],
+  [role="menuitem"],
+  label,
+  summary {
+    -webkit-user-select: none;
+    user-select: none;
+    -webkit-touch-callout: none;
+  }
+
+  input,
+  textarea,
+  [contenteditable] {
+    -webkit-user-select: text;
+    user-select: text;
+  }
+
+  .icon-button:active,
+  .icon-button[aria-expanded="true"] {
+    background: transparent;
+    border-color: transparent;
+  }
+
+  .icon-button.is-outlined:active,
+  .icon-button.is-outlined[aria-expanded="true"] {
+    border-color: var(--border);
+  }
+
+  /* no weight of its own: a row that fills when pressed (an iPhone list row) says so in its own
+     stylesheet, with its opacity left whole */
+  :where(button, [role="button"], a):where(:active:not(:disabled)) {
+    opacity: 0.55;
+  }
+
+  .menu-item:active {
+    opacity: 1;
+    background: var(--bg-hover);
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .sidebar,
+  .scrim,
   .icon-button,
   .btn,
   .error-retry {
     transition: none;
+  }
+
+  .modal-scrim,
+  .modal-scrim > * {
+    animation: none;
   }
 
   .badge-working::before,

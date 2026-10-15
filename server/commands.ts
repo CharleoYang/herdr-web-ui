@@ -1,11 +1,11 @@
-import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { piAgentDir } from "./pi-models.ts";
 import { join, relative, sep } from "node:path";
 
 import type { SlashCommand } from "../shared/protocol.ts";
 
 const BUILTINS: Record<string, readonly string[]> = {
-  claude: ["clear", "compact", "config", "cost", "goal", "help", "init", "memory", "model", "permissions", "review", "status", "doctor", "login", "logout", "pr-comments", "release-notes", "terminal-setup", "vim"],
+  claude: ["clear", "compact", "config", "cost", "effort", "goal", "help", "init", "memory", "model", "permissions", "review", "status", "doctor", "login", "logout", "pr-comments", "release-notes", "terminal-setup", "vim"],
   omp: ["help", "clear", "compact", "model", "new", "sessions", "exit"],
   codex: ["clear", "compact", "diff", "help", "model", "new", "quit", "review", "status"],
   // pi 0.87.1, as its own palette lists them, less /tree — the way omp's list curates its own
@@ -40,6 +40,7 @@ const DESCRIPTIONS: Record<string, string> = {
   vim: "Toggle Vim mode", new: "Start a new session", sessions: "List sessions", exit: "Exit the agent",
   diff: "Show the current diff", quit: "Exit the agent",
   goal: "[condition|clear] — Keep working until a condition is met",
+  effort: "Set effort level for model usage",
 };
 
 function description(markdown: string): string {
@@ -64,11 +65,13 @@ function skills(root: string, source: SlashCommand["source"], options: { prefix?
   if (!existsSync(root)) return [];
   const result: SlashCommand[] = [];
   for (const entry of readdirSync(root, { withFileTypes: true })) {
-    if (!entry.isDirectory() || entry.name.startsWith(".")) continue;
-    const file = join(root, entry.name, "SKILL.md");
-    if (!existsSync(file)) continue;
+    if (entry.name.startsWith(".")) continue;
+    const directory = join(root, entry.name);
     let markdown: string;
-    try { markdown = readFileSync(file, "utf8"); } catch { continue; }
+    try {
+      if (!statSync(directory).isDirectory()) continue;
+      markdown = readFileSync(join(directory, "SKILL.md"), "utf8");
+    } catch { continue; }
     const name = skillName(markdown, entry.name);
     result.push({ name: options.prefix ? `${options.prefix}:${name}` : name, description: description(markdown), source, ...(options.trigger ? { trigger: options.trigger } : {}) });
   }
@@ -97,15 +100,26 @@ function pluginCommands(home: string): SlashCommand[] {
 
 function customCommands(root: string, source: SlashCommand["source"]): SlashCommand[] {  if (!existsSync(root)) return [];
   const result: SlashCommand[] = [];
+  // Guard only the current ancestry: sibling links can expose different command namespaces.
+  const ancestors = new Set<string>();
   const visit = (directory: string): void => {
-    for (const entry of readdirSync(directory, { withFileTypes: true })) {
-      const path = join(directory, entry.name);
-      if (entry.isDirectory()) visit(path);
-      else if (entry.isFile() && entry.name.endsWith(".md")) {
-        const relativeName = relative(root, path).slice(0, -3).split(sep).join(":");
-        result.push({ name: relativeName, description: description(readFileSync(path, "utf8")), source });
+    let canonical: string;
+    try { canonical = realpathSync(directory); } catch { return; }
+    if (ancestors.has(canonical)) return;
+    ancestors.add(canonical);
+    try {
+      for (const entry of readdirSync(directory, { withFileTypes: true })) {
+        const path = join(directory, entry.name);
+        try {
+          const target = statSync(path);
+          if (target.isDirectory()) visit(path);
+          else if (target.isFile() && entry.name.endsWith(".md")) {
+            const relativeName = relative(root, path).slice(0, -3).split(sep).join(":");
+            result.push({ name: relativeName, description: description(readFileSync(path, "utf8")), source });
+          }
+        } catch { continue; }
       }
-    }
+    } finally { ancestors.delete(canonical); }
   };
   visit(root);
   return result;

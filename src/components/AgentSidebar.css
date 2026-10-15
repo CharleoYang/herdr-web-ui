@@ -12,6 +12,11 @@
 .agents-sidebar.is-collapsed,
 .agents-sidebar.is-empty { flex: 0 0 auto; }
 
+/* A visible Agents list fills the space released by folded PC groups, up to its existing cap. */
+.sidebar-shell:not(:has(.machine-list .machine-workspaces)):has(.agents-sidebar:not(.is-collapsed):not(.is-empty)) .agents-sidebar {
+  flex: 1 1 auto;
+}
+
 /* positioned: a row's visually hidden label is absolute, and must not size the page instead */
 .agent-list-contents {
   position: relative;
@@ -74,11 +79,25 @@
   list-style: none;
 }
 
-/* an agent's row */
-.agent-row {
+/* Pinned agents stand first in a card (Sidebar.css), each with a pin; the Agents head stays the list's only head. */
+
+/* The agent row selects its pane; its ⋯ (or a right-click) opens its pin menu. */
+/* The trailing padding keeps the state cell, which the row draws at its right edge after the ⋯, as
+   a workspace row does; the fill is the whole row's. */
+.agent-item {
+  position: relative;
   display: flex;
   align-items: center;
-  width: 100%;
+  padding-right: var(--side-box);
+  border-radius: var(--radius-md);
+  transition: background-color var(--dur-fast) var(--ease-out);
+}
+
+.agent-row {
+  display: flex;
+  flex: 1 1 auto;
+  align-items: center;
+  min-width: 0;
   min-height: var(--side-row-2);
   padding: 0;
   border: 0;
@@ -88,17 +107,48 @@
   font: inherit;
   text-align: left;
   cursor: pointer;
-  transition: background-color var(--dur-fast) var(--ease-out);
 }
 
 .agent-row:focus-visible { outline-offset: calc(var(--ring-offset) * -1); }
 .agent-row:disabled { cursor: default; }
 
 @media (hover: hover) {
-  .agent-row:enabled:hover { background: var(--side-hover); }
+  .agent-item:has(> .agent-row:enabled):hover { background: var(--side-hover); }
 }
 
-.agent-item.is-selected > .agent-row { background: var(--side-selected); }
+.agent-item.is-selected { background: var(--side-selected); }
+
+/* As a workspace row's: the ⋯ takes no room until the row is hovered, focused, selected or its
+   menu is open, and stays in the focus order, since the menu hands the focus back to it. */
+.agent-actions {
+  display: flex;
+  align-items: center;
+  flex: 0 0 auto;
+  width: 0;
+  overflow: hidden;
+  opacity: 0;
+}
+
+.agent-item:focus-within > .agent-actions,
+.agent-item.is-selected > .agent-actions,
+.agent-actions:has([aria-expanded="true"]) {
+  width: auto;
+  overflow: visible;
+  opacity: 1;
+}
+
+@media (hover: hover) {
+  .agent-item:hover > .agent-actions {
+    width: auto;
+    overflow: visible;
+    opacity: 1;
+  }
+}
+
+/* as a workspace row's (Sidebar.css): no "..." button where there is a mouse and room for a right-click */
+@media (pointer: fine) and (min-width: 769px) {
+  .agent-actions { display: none; }
+}
 
 .agent-copy {
   display: flex;
@@ -124,15 +174,39 @@
 
 .agent-item.is-selected .agent-title { color: var(--text-strong); }
 
+/* the title gives way to its pin, which follows it as a quiet mark */
+.agent-title-line {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
 .agent-context {
   color: var(--text-dim);
   font-size: var(--fs-xs);
+}
+
+/* the live name is what a command names the agent by: it reads in the command's face */
+.agent-name {
+  color: var(--text);
+  font-family: var(--font-mono);
 }
 
 .agent-row-status {
   display: inline-flex;
   flex: 0 0 auto;
   align-items: center;
+}
+
+.agent-row > .agent-row-state {
+  position: absolute;
+  inset-block: 0;
+  right: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--side-box);
 }
 
 .agent-item.is-offline { opacity: 0.5; }
@@ -146,8 +220,21 @@
 
 @media (pointer: coarse) {
   .agent-section-caret { opacity: 1; }
+
+  /* Row menus stay visible on touch. */
+  .agent-actions {
+    width: auto;
+    overflow: visible;
+    opacity: 1;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .agent-row { transition: none; }
+  .agent-item { transition: none; }
+}
+
+/* a finger presses a row as an iPhone list row is pressed: it fills, it does not dim (styles.css) */
+@media (hover: none) and (pointer: coarse) {
+  .agent-row:enabled:active { opacity: 1; }
+  .agent-item:has(> .agent-row:enabled:active) { background: var(--side-hover); }
 }

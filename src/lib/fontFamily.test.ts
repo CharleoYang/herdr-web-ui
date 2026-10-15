@@ -24,9 +24,10 @@ describe("terminal font stack", () => {
     expect([...bundled].sort()).toEqual(["JetBrains Mono Web"]);
     const named = TERMINAL_FONT_STACK.split(",").map((name) => name.trim().replace(/["']/g, ""));
     for (const family of bundled) expect(named).not.toContain(family);
-    // the chat's and the chrome's code face takes the native monospace stack
+    // the chat's and the chrome's code face opens with the bundled face, keeps the system monospace
+    // stack behind it, and ends on the Chinese fallbacks this checkout asks for
     const mono = /--font-mono:\s*([^;]+);/.exec(readFileSync(new URL("../styles.css", import.meta.url), "utf8"))![1]!;
-    expect(mono.startsWith('ui-monospace, "SF Mono", Menlo, ')).toBe(true);
+    expect(mono).toBe('"Symbols Nerd Font Mono", "JetBrains Mono Web", ui-monospace, "SF Mono", Menlo, Monaco, "PingFang SC", "Hiragino Sans GB", monospace');
   });
 
   it("never lets an unsanitized list through", () => {

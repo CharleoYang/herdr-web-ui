@@ -7,9 +7,10 @@ import "./SettingsControls.css";
  * The parts every Settings page is built from: a group is a caption over one card, a card holds
  * rows parted by hairlines, and a row is a label with its one control at the end of the line.
  */
-export function SettingsGroup({ title, note, className, children }: { title?: string; note?: ReactNode; className?: string; children: ReactNode }) {
+/** `section`: the group's name in a link to it (`?settings=<page>&section=<name>`, lib/deepLink.ts) */
+export function SettingsGroup({ title, note, className, section, children }: { title?: string; note?: ReactNode; className?: string; section?: string; children: ReactNode }) {
   return (
-    <section className={className ? `settings-section ${className}` : "settings-section"}>
+    <section className={className ? `settings-section ${className}` : "settings-section"} data-section={section} tabIndex={section ? -1 : undefined}>
       {title !== undefined && <h3>{title}</h3>}
       {note !== undefined && <p className="settings-description settings-note">{note}</p>}
       <div className="settings-card">{children}</div>
@@ -33,9 +34,9 @@ export function SettingsRow({ label, description, htmlFor, wide = false, childre
   );
 }
 
-export function Toggle({ checked, label, onChange }: { checked: boolean; label: string; onChange: (checked: boolean) => void }) {
+export function Toggle({ checked, label, onChange, disabled }: { checked: boolean; label: string; onChange: (checked: boolean) => void; disabled?: boolean }) {
   return (
-    <button type="button" className="settings-toggle" role="switch" aria-checked={checked} aria-label={label} onClick={() => onChange(!checked)}>
+    <button type="button" className="settings-toggle" role="switch" aria-checked={checked} aria-label={label} disabled={disabled} onClick={() => onChange(!checked)}>
       <span className="settings-toggle-thumb" />
     </button>
   );

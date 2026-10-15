@@ -1,17 +1,17 @@
 import { afterEach, describe, expect, it } from "bun:test";
-import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, win32 } from "node:path";
 import { describeProgress } from "../src/lib/bridgeProgress.ts";
 import type { SetupJob } from "../shared/machines.ts";
 import { paneNotificationTag } from "../shared/notify-policy.ts";
-import { machinePath, paneStorageId, REMOTE_BUNDLE_VERSION } from "../shared/machines.ts";
+import { BRIDGE_PROTOCOL, machinePath, paneStorageId, REMOTE_BUNDLE_VERSION } from "../shared/machines.ts";
 import { canSendSecret, sameOrigin, shellQuote, validateTarget } from "./machine-security.ts";
 import { handleMachineRequest, MACHINE_PROXY_PATH } from "./machine-api.ts";
 import type { BridgeDescriptor } from "./bridge.ts";
 import { createServer } from "./index.ts";
 import { MachineManager } from "./machines.ts";
-import { detectHost, psQuote, UNSUPPORTED_HOST, windowsBridgeFiles } from "./remote-host.ts";
+import { detectHost, psQuote, UNSUPPORTED_HOST, windowsBridgeFiles, windowsHost } from "./remote-host.ts";
 import { decodeClixml, SshConnection } from "./ssh.ts";
 import { terminalAttachSupported } from "./herdr/client.ts";
 import { attachableIdentity, isRealNode, sidecarAvailable } from "./pty/sidecar.ts";
@@ -57,6 +57,9 @@ describe("machine boundaries", () => {
     for (const destination of ["-oProxyCommand=touch /tmp/no", "host;id", "x\ny", "$(id)", "user@host -p 22", ""]) expect(() => validateTarget({ destination })).toThrow();
     expect(validateTarget({ destination: "user@[::1]", port: 2222, session: "work" }).port).toBe(2222);
     for (const session of ["../default", "$(id)", "work;id"]) expect(() => validateTarget({ destination: "host", session })).toThrow();
+    // a key path on the web server, which may be a Windows one; never an option or a relative path
+    for (const identity_file of ["/home/u/.ssh/id", "~/.ssh/id", "~\\.ssh\\id", "C:\\Users\\u\\.ssh\\id", "D:/keys/id"]) expect(validateTarget({ destination: "host", identity_file }).identity_file).toBe(identity_file);
+    for (const identity_file of ["-oProxyCommand=x", "keys/id", "C:id", "~user/id", "/k\nx"]) expect(() => validateTarget({ destination: "host", identity_file })).toThrow();
     const value = "a'$(touch /tmp/no)";
     expect(Bun.spawnSync(["sh", "-c", `printf %s ${shellQuote(value)}`]).stdout.toString()).toBe(value);
   });
@@ -68,8 +71,11 @@ describe("machine boundaries", () => {
     expect(canSendSecret(new Request("http://127.0.0.1/api/machines"))).toBe(true);
   });
   it("proxies only pane/workspace data and never remote management credentials", () => {
-    for (const path of ["auth", "push", "updates/install", "machines/setup", "bridge", "../auth", "pane/../../auth", "pane/prompt/answer/extra", "tab/move", "tab/close/extra"]) expect(MACHINE_PROXY_PATH.test(path)).toBe(false);
-    for (const path of ["session", "agents", "pane/files", "pane/image", "pane/prompt/answer", "workspace/create", "tab/create", "tab/rename", "tab/close"]) expect(MACHINE_PROXY_PATH.test(path)).toBe(true);
+    for (const path of ["pane/focus", "layout/ratio", "tab/move"]) expect(MACHINE_PROXY_PATH.test(path)).toBe(true);
+    for (const path of ["pane/focus/extra", "pane/move", "layout/apply", "layout/ratio/extra", "layout/../auth"]) expect(MACHINE_PROXY_PATH.test(path)).toBe(false);
+    for (const path of ["auth", "push", "updates/install", "machines/setup", "bridge", "../auth", "pane/../../auth", "pane/prompt/answer/extra", "tab/move/extra", "tab/close/extra"]) expect(MACHINE_PROXY_PATH.test(path)).toBe(false);
+    for (const path of ["session", "agents", "integrations", "pane/files", "pane/find", "pane/image", "pane/prompt/answer", "workspace/create", "tab/create", "tab/rename", "tab/close"]) expect(MACHINE_PROXY_PATH.test(path)).toBe(true);
+    for (const path of ["session", "agents", "integrations", "pane/files", "pane/find", "pane/image", "pane/prompt/answer", "pane/split", "pane/zoom", "pane/swap", "pane/resize", "pane/clear", "workspace/create", "tab/create", "tab/rename", "tab/close"]) expect(MACHINE_PROXY_PATH.test(path)).toBe(true);
   });
 });
 
@@ -195,7 +201,7 @@ describe("SSH output during setup", () => {
 // never see the swapped PATH), so setup() fails inside its own catch — where the action is set.
 describe("a first connect that finds a bridge of another version", () => {
   const socket = "/home/u/.config/herdr/herdr.sock";
-  const descriptor = { pid: 4242, port: 29431, token: "a".repeat(64), socket_path: socket, bridge_protocol: 1, bundle_version: "999", managed_remote: true };
+  const descriptor = { pid: 4242, port: 29431, token: "a".repeat(64), socket_path: socket, bridge_protocol: 1, bundle_version: "0", managed_remote: true };
   const real = { start: SshConnection.prototype.start, run: SshConnection.prototype.run, close: SshConnection.prototype.close };
   afterEach(() => { Object.assign(SshConnection.prototype, real); });
 
@@ -223,6 +229,169 @@ describe("a first connect that finds a bridge of another version", () => {
       expect(await response.json()).toMatchObject({ phase: "failed", action_required: "update_bridge" });
       // and the PC was never registered, so the job is the dialog's only signal
       expect(manager.list().map((machine) => machine.kind)).toEqual(["local"]);
+    } finally { manager.stop(); rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  it("sends a newer bridge of an independently managed web server to that server's own Settings", async () => {
+    const independent = { ...descriptor, bridge_protocol: BRIDGE_PROTOCOL, bundle_version: String(Number(REMOTE_BUNDLE_VERSION) + 1), managed_remote: false };
+    SshConnection.prototype.start = async () => {};
+    SshConnection.prototype.run = (async (script: string) => {
+      if (script.includes("uname")) return `Linux\nx86_64\n/home/u\n/home/u/.config\n\n${JSON.stringify(independent)}\n`;
+      if (script.includes("socket=")) return socket;
+      if (script.includes("kill -0")) return "live";
+      throw new Error("Unexpected remote mutation");
+    }) as typeof real.run;
+    SshConnection.prototype.close = () => {};
+    const dir = mkdtempSync(join(tmpdir(), "herdr-independent-bridge-"));
+    const manager = new MachineManager(dir, {} as PushService, new CompletionTracker(null));
+    try {
+      const started = manager.setup({ destination: "independent-pc" });
+      for (let i = 0; i < 100 && !["failed", "connected"].includes(manager.job(started.id)?.phase ?? ""); i += 1) await Bun.sleep(25);
+      const job = manager.job(started.id)!;
+      // this app cannot update that server, so "update this app" is not the way out here
+      expect(job).toMatchObject({ phase: "failed", action_required: "setup" });
+      expect(job.error).toContain("independently managed");
+    } finally { manager.stop(); rmSync(dir, { recursive: true, force: true }); }
+  });
+});
+
+// A bridge update that cannot reach its PC (switched off, asleep, gone in the middle) learned
+// nothing about the bridge: the PC waits as offline and checks the version again once it answers,
+// instead of asking for an update it cannot run. A PC that refuses the key keeps the button.
+describe("a bridge update on a PC that cannot be reached", () => {
+  const id = "0b9d6a52-7a5e-4f8e-9a51-2f3c4d5e6f70";
+  const socket = "/home/u/.config/herdr/herdr.sock";
+  const descriptor = { pid: 4242, port: 29431, token: "a".repeat(64), socket_path: socket, bridge_protocol: BRIDGE_PROTOCOL, bundle_version: "0", managed_remote: true };
+  const real = { start: SshConnection.prototype.start, run: SshConnection.prototype.run, close: SshConnection.prototype.close, connected: SshConnection.prototype.connected };
+  afterEach(() => { Object.assign(SshConnection.prototype, real); });
+
+  async function updateOnce(options: { start: () => Promise<void>; connected?: boolean; failRun?: boolean }) {
+    const dir = mkdtempSync(join(tmpdir(), "herdr-offline-update-"));
+    writeFileSync(join(dir, "machines.json"), JSON.stringify([{ id, name: "macbook", enabled: false, target: { destination: "macbook" }, snapshot: null }]));
+    SshConnection.prototype.start = options.start;
+    SshConnection.prototype.connected = () => options.connected ?? true;
+    SshConnection.prototype.run = (async (script: string) => {
+      if (script.includes("uname")) return `Linux\nx86_64\n/home/u\n/home/u/.config\n\n${JSON.stringify(descriptor)}\n`;
+      if (script.includes("socket=")) return socket;
+      // the bridge check after the host was read: the connection drops (or the check fails) here
+      if (script.includes("kill -0")) { if (options.failRun) throw new Error("Connection to macbook closed by remote host."); return "live"; }
+      throw new Error("Unexpected remote mutation");
+    }) as typeof real.run;
+    SshConnection.prototype.close = () => {};
+    const manager = new MachineManager(dir, {} as PushService, new CompletionTracker(null), async () => { throw new Error("local offline"); });
+    // registered disabled so no reconnect of its own runs; enabled again without a reconnect,
+    // as a PC that was connected when its update began
+    (manager as unknown as { machines: Map<string, { machine: { enabled: boolean } }> }).machines.get(id)!.machine.enabled = true;
+    try {
+      const started = manager.updateBridge(id);
+      for (let i = 0; i < 100 && manager.job(started.id)?.phase !== "failed"; i += 1) await Bun.sleep(25);
+      // copied: stop() below disconnects the live record
+      return structuredClone({ job: manager.job(started.id)!, machine: manager.list().find((machine) => machine.id === id)! });
+    } finally { manager.stop(); rmSync(dir, { recursive: true, force: true }); }
+  }
+
+  it("waits as offline when SSH cannot reach the PC", async () => {
+    const { job, machine } = await updateOnce({ start: async () => { throw new Error("ssh: connect to host macbook port 22: Operation timed out"); } });
+    expect(job.phase).toBe("failed");
+    expect(machine).toMatchObject({ state: "reconnecting", action_required: null });
+    expect(machine.error).toContain("Operation timed out");
+  });
+
+  it("waits as offline when the PC goes away in the middle of the update", async () => {
+    const { machine } = await updateOnce({ start: async () => {}, connected: false, failRun: true });
+    expect(machine).toMatchObject({ state: "reconnecting", action_required: null });
+  });
+
+  it("waits as offline when ssh only warns that a local key file is unreadable", async () => {
+    const { machine } = await updateOnce({ start: async () => { throw new Error("Warning: Identity file /home/u/.ssh/id_work not accessible: Permission denied.\r\nssh: connect to host macbook port 22: Connection timed out"); } });
+    expect(machine).toMatchObject({ state: "reconnecting", action_required: null });
+  });
+
+  it("keeps the update button when the PC refuses the saved key", async () => {
+    const { machine } = await updateOnce({ start: async () => { throw new Error("u@macbook: Permission denied (publickey)."); } });
+    expect(machine).toMatchObject({ state: "error", action_required: "update_bridge" });
+  });
+
+  it("keeps the update button when the update fails on a PC that still answers", async () => {
+    const { machine } = await updateOnce({ start: async () => {}, connected: true, failRun: true });
+    expect(machine).toMatchObject({ state: "error", action_required: "update_bridge" });
+  });
+
+  it("counts a killed SSH master as gone", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "herdr-killed-master-"));
+    for (const signal of ["SIGTERM", "SIGKILL"] as const) {
+      const ssh = new SshConnection({ destination: "macbook" }, dir);
+      const master = Bun.spawn(["sleep", "30"]);
+      (ssh as unknown as { master: typeof master }).master = master;
+      expect(ssh.connected()).toBe(true);
+      master.kill(signal);
+      await master.exited;
+      // Bun leaves exitCode null after a signal and sets signalCode
+      expect(ssh.connected()).toBe(false);
+      real.close.call(ssh);
+    }
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("lets the user's Update bridge take back a Cancel, and keeps a queued automatic update from undoing one", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "herdr-cancel-flag-"));
+    writeFileSync(join(dir, "machines.json"), JSON.stringify([{ id, name: "macbook", enabled: false, target: { destination: "macbook" }, snapshot: null }]));
+    SshConnection.prototype.start = async () => { throw new Error("ssh: connect to host macbook port 22: Connection timed out"); };
+    SshConnection.prototype.close = () => {};
+    const manager = new MachineManager(dir, {} as PushService, new CompletionTracker(null), async () => { throw new Error("local offline"); });
+    type Internals = { machines: Map<string, { updateCancelled?: boolean; machine: { enabled: boolean; state: string; action_required: string | null } }>; jobs: Map<string, { finished: Promise<void> }>; autoChain: Promise<void>; queueAutoUpdate(id: string): void };
+    const internals = manager as unknown as Internals;
+    const runtime = internals.machines.get(id)!;
+    Object.assign(runtime.machine, { enabled: true, state: "error", action_required: "update_bridge" });
+    try {
+      // an automatic update queued before the Cancel, which runs once the one ahead of it is done
+      runtime.updateCancelled = true;
+      internals.queueAutoUpdate(id);
+      await internals.autoChain;
+      expect(internals.jobs.size).toBe(0);
+      // a scheduled update keeps the Cancel, the user's button takes it back
+      await internals.jobs.get(manager.updateBridge(id, true).id)!.finished;
+      expect(runtime.updateCancelled).toBe(true);
+      Object.assign(runtime.machine, { state: "error", action_required: "update_bridge" });
+      await internals.jobs.get(manager.updateBridge(id).id)!.finished;
+      expect(runtime.updateCancelled).toBe(false);
+    } finally { manager.stop(); rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  // The record a live server showed for a switched-off MacBook: an earlier failed update left the
+  // button and its error, then an update that was cancelled (Cancel update, a closed dialog, the
+  // setup's time limit) disconnected the PC and kept both, with no reconnect ever scheduled.
+  it("reconnects after a cancelled update, and asks again only once the PC answers", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "herdr-cancelled-update-"));
+    writeFileSync(join(dir, "machines.json"), JSON.stringify([{ id, name: "macbook", enabled: false, target: { destination: "macbook" }, snapshot: null }]));
+    let reachable = false;
+    SshConnection.prototype.start = async () => { await Bun.sleep(100); if (!reachable) throw new Error("ssh: connect to host macbook port 22: Connection timed out"); };
+    SshConnection.prototype.connected = () => true;
+    SshConnection.prototype.run = (async (script: string) => {
+      if (script.includes("uname")) return `Linux\nx86_64\n/home/u\n/home/u/.config\n\n${JSON.stringify(descriptor)}\n`;
+      if (script.includes("socket=")) return socket;
+      if (script.includes("kill -0")) return "live";
+      throw new Error("Unexpected remote mutation");
+    }) as typeof real.run;
+    SshConnection.prototype.close = () => {};
+    const manager = new MachineManager(dir, {} as PushService, new CompletionTracker(null), async () => { throw new Error("local offline"); });
+    const internals = manager as unknown as { machines: Map<string, { machine: { enabled: boolean; state: string; action_required: string | null; error: string | null } }>; jobs: Map<string, unknown> };
+    const record = internals.machines.get(id)!.machine;
+    Object.assign(record, { enabled: true, state: "error", action_required: "update_bridge", error: "mux_client_request_session: read from master failed: Broken pipe" });
+    const view = () => structuredClone(manager.list().find((machine) => machine.id === id)!);
+    try {
+      const started = manager.updateBridge(id);
+      manager.action(started.id, { action: "cancel" });
+      await (internals.jobs.get(started.id) as { finished: Promise<void> }).finished;
+      expect(manager.job(started.id)!.phase).toBe("cancelled");
+      expect(view()).toMatchObject({ state: "reconnecting", action_required: null });
+      // the PC answers with an old bridge: the button comes back, and the cancelled update does
+      // not start again by itself
+      reachable = true;
+      for (let i = 0; i < 120 && view().state !== "error"; i += 1) await Bun.sleep(25);
+      expect(view()).toMatchObject({ state: "error", action_required: "update_bridge", updating: null });
+      await Bun.sleep(50);
+      expect(internals.jobs.size).toBe(1);
     } finally { manager.stop(); rmSync(dir, { recursive: true, force: true }); }
   });
 });
@@ -277,7 +446,10 @@ describe("host detection", () => {
       // the sh probe, then the socket realpath
       return script.includes("uname") ? "Linux\nx86_64\n/home/u\n/home/u/.config\n/usr/bin/herdr\nbundle-ready\n" : "/home/u/.config/herdr/herdr.sock";
     },
-    runPowerShell: async () => { if (ps instanceof Error) throw ps; return ps; },
+    runPowerShell: async (script: string) => {
+      if (ps instanceof Error) throw ps;
+      return script.includes("XDG_CONFIG_HOME") ? ps.replace("AppData\\Roaming\n", "AppData\\Roaming\n\n") : ps;
+    },
   } as unknown as SshConnection);
   const windowsAnswer = "Windows\nAMD64\nC:\\Users\\u\nC:\\Users\\u\\AppData\\Roaming\nC:\\Users\\u\\AppData\\Local\nC:\\Users\\u\\AppData\\Local\\Programs\\Herdr\\bin\\herdr.exe\n";
 
@@ -296,6 +468,38 @@ describe("host detection", () => {
         runtimeDir: `C:\\Users\\u\\AppData\\Local\\herdr-web-ui\\remote-v${REMOTE_BUNDLE_VERSION}`, bundleReady: false,
       });
     }
+  });
+  it("uses Windows XDG_CONFIG_HOME when resolving the herdr socket", async () => {
+    const scripts: string[] = [];
+    const ssh = {
+      run: async () => { throw new Error("Unexpected sh probe"); },
+      runPowerShell: async (script: string) => {
+        scripts.push(script);
+        return script.includes("XDG_CONFIG_HOME")
+          ? "Windows\nAMD64\nC:\\Users\\u\nC:\\Users\\u\\AppData\\Roaming\nC:\\Temp\\xdg\nC:\\Users\\u\\AppData\\Local\nC:\\Users\\u\\AppData\\Local\\Programs\\Herdr\\bin\\herdr.exe\n"
+          : windowsAnswer;
+      },
+    } as unknown as SshConnection;
+    const { inspection } = await detectHost(ssh, "qa");
+    // regression (fails on main): the inspection must read XDG_CONFIG_HOME and prefer it over APPDATA
+    expect(scripts.some((script) => script.includes("$env:XDG_CONFIG_HOME"))).toBe(true);
+    expect(inspection.expectedSocket).toBe("C:\\Temp\\xdg\\herdr\\sessions\\qa\\herdr.sock");
+  });
+  it("keeps the APPDATA field aligned when Windows XDG_CONFIG_HOME is blank", async () => {
+    const answer = "Windows\nAMD64\nC:\\Users\\u\nC:\\Users\\u\\AppData\\Roaming\n\nC:\\Users\\u\\AppData\\Local\nC:\\Users\\u\\AppData\\Local\\Programs\\Herdr\\bin\\herdr.exe\n";
+    const ssh = {
+      run: async () => { throw new Error("'sh' is not recognized as an internal or external command"); },
+      runPowerShell: async (script: string) => script.includes("XDG_CONFIG_HOME") ? answer : windowsAnswer,
+    } as unknown as SshConnection;
+    const { inspection } = await detectHost(ssh, "qa");
+    // control: the empty XDG line preserves APPDATA, LOCALAPPDATA and herdr field positions
+    expect(inspection.expectedSocket).toBe("C:\\Users\\u\\AppData\\Roaming\\herdr\\sessions\\qa\\herdr.sock");
+    expect(inspection.herdrPath).toBe("C:\\Users\\u\\AppData\\Local\\Programs\\Herdr\\bin\\herdr.exe");
+  });
+  it("uses Windows APPDATA when XDG_CONFIG_HOME is absent", async () => {
+    const { inspection } = await detectHost(pc("'sh' is not recognized as an internal or external command", windowsAnswer), "qa");
+    // control: the existing APPDATA fallback is unchanged
+    expect(inspection.expectedSocket).toBe("C:\\Users\\u\\AppData\\Roaming\\herdr\\sessions\\qa\\herdr.sock");
   });
   it("refuses a Windows PC that is not x64, by name", async () => {
     await expect(detectHost(pc("sh: not found", windowsAnswer.replace("AMD64", "ARM64")))).rejects.toThrow(UNSUPPORTED_HOST);
@@ -359,6 +563,58 @@ describe("bridge verification failures", () => {
     const descriptor: BridgeDescriptor = { port, token: TOKEN, pid: process.pid, socket_path: socket, bridge_protocol: 0, bundle_version: "" };
     const verify = (manager as unknown as { verify(ssh: SshConnection, descriptor: BridgeDescriptor, socket: string): Promise<unknown> }).verify.bind(manager);
     return verify(ssh, descriptor, socket).then(() => "verified", (error: Error) => error.message);
+  }
+
+  // Evaluate the entrypoint's actual socket setup without starting its daemon.
+  const entryLines = readFileSync(new URL("./remote-entry.ts", import.meta.url), "utf8").split("\n");
+  const socketSetup = ["const herdrConfig =", "const session =", 'process.env["HERDR_SOCKET"] ='].map((prefix) => {
+    const line = entryLines.find((line) => line.startsWith(prefix));
+    if (!line) throw new Error("remote-entry socket setup was not found");
+    return line;
+  }).join("\n");
+  const bridgeSocket = new Function("windows", "process", "join", "homedir", `${socketSetup}\nreturn process.env["HERDR_SOCKET"];`);
+
+  for (const root of ["C:\\Temp\\xdg\\", "C:\\", "C:/Temp/xdg", "C:\\Temp\\xdg\\..\\config"]) {
+    for (const session of ["qa", undefined]) {
+      it(`connects the inspected Windows socket to its bridge for ${JSON.stringify(root)}, session ${session}`, async () => {
+        const env = { XDG_CONFIG_HOME: root, APPDATA: "C:\\Users\\u\\AppData\\Roaming", HERDR_REMOTE_SESSION: session };
+        const socket = String(bridgeSocket(true, { env }, win32.join, () => "C:\\Users\\u"));
+        const identity = { pid: process.pid, managed_remote: true, bridge_protocol: BRIDGE_PROTOCOL, bundle_version: REMOTE_BUNDLE_VERSION, socket_path: socket, socket_id: "1:2", herdr: { protocol: 22 } };
+        const port = answering(200, JSON.stringify(identity));
+        const descriptor = { ...identity, port, token: TOKEN };
+        const ssh = {
+          run: async () => { throw new Error("'sh' is not recognized as an internal or external command"); },
+          runPowerShell: async (script: string) => {
+            if (script.includes("PROCESSOR_ARCHITECTURE")) return `Windows\nAMD64\nC:\\Users\\u\n${env.APPDATA}\n${root}\nC:\\Users\\u\\AppData\\Local\nC:\\Programs\\herdr.exe\n${JSON.stringify(descriptor)}\n`;
+            if (script.includes("--version")) return "herdr 0.9.3";
+            if (script.includes("Get-Process")) return "live";
+            throw new Error("Unexpected remote mutation");
+          },
+          forward: async (local: number, remote: number) => {
+            const relay = Bun.serve({ port: local, hostname: "127.0.0.1", fetch: (request) => fetch(`http://127.0.0.1:${remote}${new URL(request.url).pathname}`, { headers: request.headers }) });
+            stops.push(() => relay.stop(true));
+          },
+        } as unknown as SshConnection;
+        const { inspection } = await detectHost(ssh, session);
+        expect(inspection.expectedSocket).toBe(socket);
+        const manager = new MachineManager(temp(), {} as PushService, {} as CompletionTracker);
+        stops.push(() => manager.stop());
+        const runtime = { generation: 0, ssh, machine: { target: { destination: "pc", session } }, endpoint: undefined };
+        const prepare = (manager as unknown as { prepare(runtime: unknown): Promise<void> }).prepare.bind(manager);
+        await prepare(runtime);
+        expect(runtime.endpoint).toMatchObject({ token: TOKEN });
+      });
+    }
+  }
+
+  for (const root of ["relative\\xdg", "C:xdg", "/Temp/xdg"]) {
+    it(`rejects a Windows XDG root without a drive-absolute path: ${root}`, async () => {
+      const ssh = {
+        run: async () => { throw new Error("'sh' is not recognized as an internal or external command"); },
+        runPowerShell: async () => `Windows\nAMD64\nC:\\Users\\u\nC:\\Users\\u\\AppData\\Roaming\n${root}\nC:\\Users\\u\\AppData\\Local\nC:\\Programs\\herdr.exe\n`,
+      } as unknown as SshConnection;
+      await expect(windowsHost.inspect(ssh)).rejects.toThrow("XDG_CONFIG_HOME");
+    });
   }
 
   it("says herdr is not running when the bridge finds no socket", async () => {

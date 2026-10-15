@@ -3,18 +3,28 @@ import type { IBuffer, ILink, ILinkProvider } from "@xterm/xterm";
 /** what a name is made of: letters, digits and the marks that complete them (a decomposed `é` is two) */
 const NAME = "\\p{L}\\p{N}\\p{M}_";
 /**
- * A path, optionally followed by an agent's line/column reference. Only a path with a folder in
+ * A path, optionally followed by an agent's line/column or #L reference, kept for the viewer.
+ * Only a path with a folder in
  * it becomes a link (see below): a terminal is full of bare names (`ls`, `git status`, a
  * compiler's output), a tap or a click to focus the pane lands on one, and the file viewer
  * would open over the terminal for it. A chat's plain text is read the same way (BARE_PATH in
  * filePaths.ts).
  */
-const FILE_PATH = new RegExp(`(?<![${NAME}/.@~:-])((?:~\\/|\\.{1,2}\\/|\\/)?(?:[${NAME}@.+-]+\\/)*[${NAME}@+-][${NAME}@.+-]*\\.[A-Za-z0-9]{1,8})(?::\\d+(?::\\d+)?)?(?![${NAME}/])`, "gu");
+const FILE_PATH = new RegExp(`(?<![${NAME}/.@~:-])((?:~\\/|\\.{1,2}\\/|\\/)?(?:[${NAME}@.+-]+\\/)*[${NAME}@+-][${NAME}@.+-]*\\.[A-Za-z0-9]{1,8})(?::\\d+(?::\\d+)?|#L\\d+(?:-L?\\d+)?)?(?![${NAME}/])`, "gu");
 /** `name.ext(` is a call, not a file, unless the parenthesis holds a compiler's line and column: `App.tsx(120,8)` */
 const CALL = /\s*\((?!\d+(?:,\d+)?\))/y;
 const FILE_URI = /file:\/\/\/[^\s<>"`]+/gi;
 /** A logical line longer than this is not prose with paths in it (a minified bundle, a blob): it is left alone. */
 const MAX_LINE_CHARS = 8192;
+
+/**
+ * A URI this app opens in a new tab: an http(s) address and nothing else. Both link paths in
+ * PaneTerminal answer to it, so a line crafted to look like a link cannot hand the browser a
+ * scheme of its own choosing (`javascript:`, `data:`, an OS handler).
+ */
+export function isWebLink(uri: string): boolean {
+  return /^https?:\/\//i.test(uri);
+}
 
 /** Local file URIs are read by the existing server-side file viewer. */
 export function fileUriPath(uri: string): string | null {
@@ -31,6 +41,32 @@ export function fileUriPath(uri: string): string | null {
   } catch {
     return null; // malformed URI input is not a file link
   }
+}
+
+/**
+ * The OSC 8 handler that keeps a hyperlink this app cannot open from being drawn as one (#739).
+ * xterm underlines every linked cell with a dashed line, and herdr's attach stream keeps a row's
+ * link open over the padding after its text, so OmO's side panel (`omo-panel:` links, which only
+ * OmO's own mouse handling follows) showed a dotted rule under every file row to the panel's edge.
+ * Here such a link opens nothing (the link handler takes http(s) and file URIs only), so its
+ * opening is swallowed. Not while a link xterm holds is still open: xterm ends that one only on
+ * the next OSC 8 it is handed, and it would run on over the new link's text.
+ * `handler` answers true to swallow the sequence, false to hand it to xterm; `reset` goes with
+ * `term.reset()`, which ends xterm's open link too.
+ */
+export function hyperlinkFilter(): { handler: (payload: string) => boolean; reset: () => void } {
+  let open = false;
+  return {
+    handler: (payload) => {
+      const separator = payload.indexOf(";");
+      if (separator === -1) return false; // malformed: xterm ignores it, and so does `open`
+      const uri = payload.slice(separator + 1);
+      if (uri !== "" && !open && !isWebLink(uri) && fileUriPath(uri) === null) return true;
+      open = uri !== "";
+      return false;
+    },
+    reset: () => { open = false; },
+  };
 }
 
 interface LogicalLine {
@@ -122,7 +158,7 @@ export function terminalFileLinks(buffer: IBuffer, lineNumber: number, open: (pa
     if (CALL.test(text)) continue;
     while (span < spans.length && spans[span]![1] <= match.index) span++;
     if (span < spans.length && spans[span]![0] <= match.index) continue;
-    link(match.index, match[0], path);
+    link(match.index, match[0], match[0]);
   }
   return links;
 }

@@ -7,40 +7,48 @@ import type { UsageReport } from "../shared/protocol.ts";
 import { openSettingsPage } from "./settings-page.ts";
 
 const at = (hours: number): string => new Date(Date.now() + hours * 3600_000).toISOString();
-const REPORT: UsageReport = {
+/** Built when it is asked for: its times hold however late in the run that is. */
+const report = (): UsageReport => ({
   providers: [
-    { id: "claude", key: "claude:u1", account: "me@example.com", plan: "max", problem: null, checked_at: "2026-09-29T12:00:00Z", windows: [
-      { kind: "session", scope: null, used_percent: 42, resets_at: at(2.2) },
-      { kind: "week", scope: null, used_percent: 63.4, resets_at: at(82) },
-      { kind: "week", scope: "Sonnet", used_percent: 5, resets_at: null },
+    { id: "claude", key: "claude:u1", account: "me@example.com", plan: "max", problem: null, checked_at: at(0), windows: [
+      // 2.8 hours into the session at 15%/h: lasts to the reset
+      { kind: "session", scope: null, used_percent: 42, resets_at: at(2.2), starts_at: at(2.2 - 5) },
+      // 86 hours into the week: runs out in about 2 days, 1.4 days before the reset
+      { kind: "week", scope: null, used_percent: 63.4, resets_at: at(82), starts_at: at(82 - 168) },
+      { kind: "week", scope: "Sonnet", used_percent: 5, resets_at: null, starts_at: null },
     ] },
-    { id: "codex", key: "codex:work", account: "me@work.example", plan: "pro", problem: null, checked_at: "2026-09-29T12:00:00Z", windows: [
-      { kind: "session", scope: null, used_percent: 12, resets_at: at(0.8) },
-      { kind: "week", scope: null, used_percent: 91, resets_at: at(99) },
+    { id: "codex", key: "codex:work", account: "me@work.example", plan: "pro", problem: null, checked_at: at(0), windows: [
+      { kind: "session", scope: null, used_percent: 12, resets_at: at(0.8), starts_at: at(0.8 - 5) },
+      { kind: "week", scope: null, used_percent: 91, resets_at: at(99), starts_at: at(99 - 168) },
     ] },
     { id: "codex", key: "codex:home", account: "me@example.com", plan: "plus", problem: null, checked_at: "2026-09-29T12:00:00Z", windows: [
-      { kind: "week", scope: null, used_percent: 30, resets_at: at(120) },
+      { kind: "week", scope: null, used_percent: 30, resets_at: at(120), starts_at: null },
     ] },
-    { id: "cursor", key: "cursor:c1", account: null, plan: "pro", problem: null, checked_at: "2026-09-29T12:00:00Z", windows: [{ kind: "month", scope: null, used_percent: 20, resets_at: at(300) }] },
-    { id: "copilot", key: "copilot:me", account: "me", plan: "free", problem: null, checked_at: "2026-09-29T12:00:00Z", windows: [{ kind: "month", scope: "Chat", used_percent: 0, resets_at: at(34) }] },
-    { id: "grok", key: "grok:g1", account: null, plan: null, problem: "rate_limited", checked_at: "2026-09-29T11:40:00Z", windows: [{ kind: "week", scope: null, used_percent: 0, resets_at: null }] },
+    { id: "cursor", key: "cursor:c1", account: null, plan: "pro", problem: null, checked_at: "2026-09-29T12:00:00Z", windows: [{ kind: "month", scope: null, used_percent: 20, resets_at: at(300), starts_at: null }] },
+    { id: "copilot", key: "copilot:me", account: "me", plan: "free", problem: null, checked_at: "2026-09-29T12:00:00Z", windows: [{ kind: "month", scope: "Chat", used_percent: 0, resets_at: at(34), starts_at: null }] },
+    { id: "grok", key: "grok:g1", account: null, plan: null, problem: "rate_limited", checked_at: "2026-09-29T11:40:00Z", windows: [{ kind: "week", scope: null, used_percent: 0, resets_at: null, starts_at: null }] },
     { id: "antigravity", key: "antigravity@keychain", account: null, plan: null, problem: "expired", checked_at: null, windows: [] },
   ],
-};
+});
 
-async function staged(context: BrowserContext): Promise<string[]> {
+/** a header the check puts on every request of the page it reloads: what that page asked for, whenever it is counted */
+const RELOADED = "x-usage-qa-reloaded";
+
+async function staged(context: BrowserContext): Promise<{ asked: string[]; afterReload: string[] }> {
   const asked: string[] = [];
+  const afterReload: string[] = [];
   await context.route("**/api/usage*", (route) => {
     asked.push(new URL(route.request().url()).search);
-    return route.fulfill({ json: REPORT });
+    if (route.request().headers()[RELOADED]) afterReload.push(route.request().url());
+    return route.fulfill({ json: report() });
   });
-  return asked;
+  return { asked, afterReload };
 }
 
 export async function checkUsageMeters(browser: Browser, origin: string): Promise<void> {
   const context = await browser.newContext({ viewport: { width: 1280, height: 800 }, locale: "en-US" });
   try {
-    const asked = await staged(context);
+    const { asked, afterReload } = await staged(context);
     const page = await context.newPage();
     const errors: string[] = [];
     page.on("pageerror", (error) => errors.push(error.message));
@@ -63,8 +71,8 @@ export async function checkUsageMeters(browser: Browser, origin: string): Promis
     // three chips and "+4" past four accounts, in the server's order, each its plan's week; one near its limit is red; two Codex accounts apart
     assert.equal(await page.locator(".usage-chip").count(), 3);
     assert.equal(await page.locator(".usage-more").textContent(), "+4");
-    assert.equal(await strip.getAttribute("aria-label"),
-      "Subscription usage: Claude · me@example.com 63%, Codex · me@work.example 91%, Codex · me@example.com 30%, Cursor 20%, Copilot · me 0%, Grok 0%, Antigravity —");
+    assert.match(await strip.getAttribute("aria-label") ?? "",
+      /^Subscription usage: Claude · me@example\.com 63%, Codex · me@work\.example 91%, Codex · me@example\.com 30%, Cursor 20%, Copilot · me 0%, Grok 0%, Antigravity —$/);
     assert.equal(await page.locator(".usage-chip").nth(1).evaluate((chip) => chip.classList.contains("is-high")), true);
     assert.equal(await strip.evaluate((el) => el.scrollWidth <= el.clientWidth), true, "the chips fit beside Settings");
     const [settings, meters] = await Promise.all([page.locator(".sidebar-footer-row .sidebar-footer-action").boundingBox(), strip.boundingBox()]);
@@ -123,10 +131,13 @@ export async function checkUsageMeters(browser: Browser, origin: string): Promis
     await openSettingsPage(page, "Subscription usage");
     await toggle.click();
     await strip.waitFor({ state: "detached" });
-    const before = asked.length;
+    // a request Settings made before the switch can still be on its way here, so the count is of
+    // the reloaded page's own requests, not of what arrives after the reload
+    await context.setExtraHTTPHeaders({ [RELOADED]: "1" });
     await page.reload();
     await page.locator(".sidebar-footer").waitFor();
-    assert.equal(asked.length, before, "a hidden strip asks for nothing");
+    assert.deepEqual(afterReload, [], "a hidden strip asks for nothing");
+    await context.setExtraHTTPHeaders({});
     assert.deepEqual(errors, []);
   } finally {
     await context.close();

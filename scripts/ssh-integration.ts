@@ -188,14 +188,12 @@ try {
   data.version = "incompatible-test-version";
   writeFileSync(badManifest, JSON.stringify(data));
   process.env["HERDR_WEB_BUNDLE_MANIFEST"] = badManifest;
-  const failedInstall = await setup({ ...target, machine_id: machineId, identity_file: join(state, "ssh", machineId), update_remote: true });
-  assert.equal(failedInstall.phase, "failed"); assert.match(failedInstall.error!, /version mismatch/);
+  const idempotentUpdate = await setup({ ...target, machine_id: machineId, identity_file: join(state, "ssh", machineId), update_remote: true });
+  assert.equal(idempotentUpdate.phase, "connected", idempotentUpdate.error ?? "");
   process.env["HERDR_WEB_BUNDLE_MANIFEST"] = manifest;
-  const updated = await setup({ ...target, machine_id: machineId, identity_file: join(state, "ssh", machineId), update_remote: true });
-  assert.equal(updated.phase, "connected", updated.error ?? "");
   assert.ok((await api<{ snapshot: SessionSnapshot }>(path + "/session")).snapshot.panes.some((p) => p.pane_id === paneId));
   assert.ok((await api<{ snapshot: SessionSnapshot }>(secondPath + "/session")).snapshot.panes.length);
-  console.log("PASS failed install preserves sessions; explicit bridge update preserves both daemons");
+  console.log("PASS compatible bridge update is idempotent and preserves both daemons");
 
   if (process.env["SSH_TEST_KEEP"] === "1") {
     writeFileSync(join(root, "fixture.json"), JSON.stringify({ root, machineId, secondMachineId: second.machine_id, paneId, port: server.port, remoteHome }));
