@@ -1515,6 +1515,12 @@
   visibility: hidden;
 }
 
+/* the pinned panel is the chat's last row on any width: an open list drops the running step's row
+   space instead of holding it invisible, so the count keeps one line on a phone */
+.chat-todo-pinned[open] .chat-todo-active-task {
+  display: none;
+}
+
 .chat-todo[open] .chat-skill-caret {
   transform: rotate(180deg);
 }
