@@ -12,6 +12,7 @@ const MISSING_RESOLVE_INTERVAL_MS = 2000;
 interface WatchedConversation {
   transcript: NativeTranscript | null;
   observed?: string;
+  signature?: string;
   nextResolve: number;
   resolving: boolean;
 }
@@ -23,10 +24,27 @@ function fileIdentity(path: string): string {
   } catch { return "missing"; }
 }
 
+function transcriptObservation(transcript: NativeTranscript): { observed: string; present: boolean } {
+  const identity = fileIdentity(transcript.path);
+  const database = transcript.source === "devin-transcript" || transcript.source === "opencode-transcript" || transcript.source === "hermes-transcript";
+  const wal = database ? fileIdentity(`${transcript.path}-wal`) : "";
+  const session = transcript.source === "hermes-transcript" ? transcript.sessionId : database ? transcript.session : "";
+  const cwd = transcript.source === "devin-transcript" ? transcript.cwd : "";
+  const catalog = transcript.source === "agy-transcript" ? agyDatabasePath(transcript.path) : null;
+  const catalogIdentity = catalog === null ? "" : `${fileIdentity(catalog)}:${fileIdentity(`${catalog}-wal`)}`;
+  return { observed: `${transcript.source}\0${transcript.path}\0${session}\0${cwd}\0${identity}\0${wal}\0${catalogIdentity}`, present: identity !== "missing" };
+}
+
+function unavailableObservation(error: ConversationUnavailable): string {
+  const pending = error instanceof ConversationNotStarted ? `:${error.sessionId}` : "";
+  return `unavailable:${error.message}${pending}`;
+}
+
 /** One server-local stat loop, one resolution per interested pane, never a turn parser. SQLite includes its WAL. */
 export class ConversationMonitor {
   private readonly panes = new Map<string, WatchedConversation>();
   private readonly salt = randomUUID();
+  private sequence = 0;
   private timer?: ReturnType<typeof setInterval>;
   private snapshot: Promise<SessionSnapshot> | null = null;
   private stopped = false;
@@ -67,28 +85,42 @@ export class ConversationMonitor {
     this.timer = undefined;
   }
 
+  /** Re-resolve the pane, not just its cached path, on both sides of a newest-page read. */
+  async matches(paneId: string, signature: string): Promise<boolean> {
+    const state = this.panes.get(paneId);
+    if (!state || state.signature !== signature) return false;
+    const observed = state.observed;
+    let current: string;
+    try {
+      const transcript = await paneTranscript(paneId, this.codexHome, undefined, this.devinDbPath, this.opencodeDb, this.hermesHome, this.grokHome);
+      const observation = transcriptObservation(transcript);
+      if (!observation.present) return false;
+      current = observation.observed;
+    } catch (error) {
+      // An explicitly not-yet-written session can have a complete empty reader page.
+      // Other unavailable states and transient resolution failures cannot prove a page.
+      if (!(error instanceof ConversationNotStarted)) return false;
+      current = unavailableObservation(error);
+    }
+    return this.panes.get(paneId) === state && state.signature === signature && state.observed === observed && current === observed;
+  }
+
   private publish(paneId: string, state: WatchedConversation, observed: string): void {
     if (this.panes.get(paneId) !== state || observed === state.observed) return;
     state.observed = observed;
-    const signature = createHash("sha256").update(`${this.salt}\0${paneId}\0${observed}`).digest("base64url").slice(0, 22);
+    const signature = createHash("sha256").update(`${this.salt}\0${++this.sequence}\0${paneId}\0${observed}`).digest("base64url").slice(0, 22);
+    state.signature = signature;
     this.changed(paneId, signature);
   }
 
   private read(paneId: string, state: WatchedConversation): boolean {
     const transcript = state.transcript;
     if (!transcript) return false;
-    const identity = fileIdentity(transcript.path);
-    const database = transcript.source === "devin-transcript" || transcript.source === "opencode-transcript" || transcript.source === "hermes-transcript";
-    const wal = database ? fileIdentity(`${transcript.path}-wal`) : "";
-    const session = transcript.source === "hermes-transcript" ? transcript.sessionId : database ? transcript.session : "";
-    const cwd = transcript.source === "devin-transcript" ? transcript.cwd : "";
-    const catalog = transcript.source === "agy-transcript" ? agyDatabasePath(transcript.path) : null;
-    const catalogIdentity = catalog === null ? "" : `${fileIdentity(catalog)}:${fileIdentity(`${catalog}-wal`)}`;
-    const observed = `${transcript.source}\0${transcript.path}\0${session}\0${cwd}\0${identity}\0${wal}\0${catalogIdentity}`;
+    const { observed, present } = transcriptObservation(transcript);
     // Resolve once immediately on disappearance, not on every missing-file stat.
-    if (identity === "missing" && observed !== state.observed) state.nextResolve = 0;
+    if (!present && observed !== state.observed) state.nextResolve = 0;
     this.publish(paneId, state, observed);
-    return identity !== "missing";
+    return present;
   }
 
   private poll(): void {
@@ -116,8 +148,7 @@ export class ConversationMonitor {
       if (this.panes.get(paneId) !== state) return;
       if (error instanceof ConversationUnavailable) {
         state.transcript = null;
-        const pending = error instanceof ConversationNotStarted ? `:${error.sessionId}` : "";
-        this.publish(paneId, state, `unavailable:${error.message}${pending}`);
+        this.publish(paneId, state, unavailableObservation(error));
       } else {
         // A transient herdr failure must not replace a known native file with scrollback.
         present = state.transcript !== null;

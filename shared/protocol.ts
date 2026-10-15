@@ -1074,8 +1074,8 @@ export interface PushPayload {
  *    | pty-ack {pane_id, stream_id, offset} | secret {id, pane_id, prompt, secret}
  *    | watch {pane_id, cols, rows} | unwatch {pane_id} | conversation-watch {pane_id, enabled}
  *  Server -> client frames: snapshot | pty-data | pty-exit | pane-geometry | role-ack
- *    | pane-status | pane-exited | session-changed | conversation-changed | secret-result
- *    | watch-data | watch-end | error
+ *    | pane-status | pane-exited | session-changed | conversation-changed | conversation-delta
+ *    | prompt-push | secret-result | watch-data | watch-end | error
  *
  *  attach {flow_control:"ack"} opts into per-subscription output credit.
  *  pty-data.flow carries a stream_id and cumulative UTF-8 payload offset;
@@ -1176,7 +1176,30 @@ export type ClientMessage =
   | { type: "ping"; id: number };
 
 /** What a server supports beyond the base protocol, listed in its first snapshot; older bridges list nothing. */
-export type ServerFeature = "submit" | "pending-input" | "pending-hold" | "secret-input" | "input-ready" | "take-over" | "watch" | "conversation-watch" | "ping";
+export type ServerFeature =
+  | "submit"
+  | "pending-input"
+  | "pending-hold"
+  | "secret-input"
+  | "input-ready"
+  | "take-over"
+  | "watch"
+  | "conversation-watch"
+  | "ping"
+  | "conversation-delta"
+  | "prompt-push";
+
+/** Complete newest-page replacement from the existing conversation reader; never a turn patch. */
+export interface ConversationPageDelta {
+  /** Previous delta signature on this connection/pane; null means no comparable previous frame. */
+  base_signature: string | null;
+  history_id?: string;
+  source: ConversationResponse["source"];
+  /** Page-start cursor of this complete page; absent or null means none, and is not inherited. */
+  cursor?: string | null;
+  /** All turns in the newest page, in reader order; replace that page atomically. */
+  turns: ConversationTurn[];
+}
 
 export type ServerMessage =
   | { type: "snapshot"; snapshot: SessionSnapshot; features?: ServerFeature[] }
@@ -1207,6 +1230,10 @@ export type ServerMessage =
   | { type: "pane-status"; pane_id: string; agent_status: AgentStatus; /** a pane's running background tasks (OmO's, or a Claude Code pane's subagents and commands), when the frame is about them: it changes no status */ background_tasks?: number; /** every frame says it: absent, the pane does not wait on its turn's background work */ background_wait?: true; /** a pane's plan, when the frame is about it (null: it keeps none now); it changes no status */ plan?: PlanSummary | null }
   /** Native transcript invalidation for an interested attached pane; signature is opaque, not a REST ETag. Refetch the existing conversation endpoint. */
   | { type: "conversation-changed"; pane_id: string; signature: string }
+  /** Newest-page replacement for a snapshot that lists "conversation-delta". Not a turn patch, and not a substitute for conversation-changed. */
+  | { type: "conversation-delta"; pane_id: string; signature: string; delta: ConversationPageDelta }
+  /** Prompt menu for a snapshot that lists "prompt-push". Same body as GET /api/pane/prompt, plus pane_id. null prompt means the menu is gone. */
+  | { type: "prompt-push"; pane_id: string; prompt: InteractivePrompt | null; suggestion: string | null; restored: string | null }
   /** a pane's process exited (pushed even when nobody is attached to it) */
   | { type: "pane-exited"; pane_id: string }
   /** session structure changed (pane created/closed): refetch /api/session */
