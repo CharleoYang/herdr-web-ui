@@ -224,7 +224,7 @@ const RESTORED_CLEAR_GAP_MS = 200;
 const RESTORED_CLEAR_SETTLE_MS = 300;
 /** what a send must still have of its deadline before the copy is cleared: the clear, the box read again, then the send */
 const RESTORED_CLEAR_RESERVE_MS = 2_000;
-const SERVER_FEATURES: ServerFeature[] = ["submit", "pending-input", "pending-hold", "secret-input", "input-ready", "take-over", "watch", "conversation-watch", "ping"];
+const SERVER_FEATURES: ServerFeature[] = ["submit", "pending-input", "pending-hold", "secret-input", "input-ready", "take-over", "watch", "conversation-watch", "ping", "conversation-delta"];
 
 /** the sides herdr's pane.swap and pane.resize take; anything else is refused before the RPC, which would answer invalid_request */
 const isPaneDirection = (value: unknown): value is PaneDirection => value === "left" || value === "right" || value === "up" || value === "down";
@@ -343,7 +343,9 @@ interface SocketData {
   relay?: MachineRelay;
   /** A fresh claim per attach lifetime; deleting it invalidates queued terminal keys. */
   attached: Map<string, { keepSize: boolean }>;
-  conversationInterests: Set<string>;
+  conversationInterests: Map<string, { signature: string | null }>;
+  /** Features in the snapshot actually sent on this connection, never inferred from REST. */
+  features?: readonly ServerFeature[];
   watches: Map<string, PaneWatch>;
   output: Map<string, OutputWindow>;
   closing: boolean;
@@ -411,7 +413,7 @@ interface PaneAttachment {
 
 function send(client: Client, message: ServerMessage): number {
   if (client.data.closing) return 0;
-  if ((message.type === "conversation-delta" || message.type === "prompt-push") && !SERVER_FEATURES.includes(message.type)) return 0;
+  if ((message.type === "conversation-delta" || message.type === "prompt-push") && !client.data.features?.includes(message.type)) return 0;
   try {
     const encoded = JSON.stringify(message);
     // Include JSON escaping in the transport budget, before Bun could drop a
@@ -423,6 +425,7 @@ function send(client: Client, message: ServerMessage): number {
     // -1 means ALREADY queued. Never retry that frame, or terminal bytes repeat.
     const result = client.send(encoded);
     if (result === 0) client.close(OUTPUT_STALLED_CLOSE_CODE, "output delivery failed");
+    if (result !== 0 && message.type === "snapshot") client.data.features = message.features?.slice() ?? [];
     return result;
   } catch {
     /* client vanished mid-send */
@@ -539,12 +542,36 @@ export function createServer(
   // the last input_draft refusal per pane: its named draft (Clear it and send), or none (Send anyway)
   const draftConfirmations = new WeakMap<Client, Map<string, { draft: string | null; identity: PendingIdentity; box?: string | null }>>();
   let stopped = false;
+  const conversationReads = new Map<string, Promise<void>>();
+  const conversationEligible = (client: Client, paneId: string): boolean =>
+    !stopped && !client.data.closing && client.readyState === WebSocket.OPEN && client.data.attached.has(paneId) && client.data.conversationInterests.has(paneId);
   const conversations = new ConversationMonitor((paneId, signature) => {
+    const recipients: { client: Client; claim: { keepSize: boolean } | undefined; interest: { signature: string | null } }[] = [];
     for (const client of clients) {
-      if (!client.data.closing && client.readyState === WebSocket.OPEN && client.data.attached.has(paneId) && client.data.conversationInterests.has(paneId)) {
-        send(client, { type: "conversation-changed", pane_id: paneId, signature });
+      if (!conversationEligible(client, paneId)) continue;
+      if (send(client, { type: "conversation-changed", pane_id: paneId, signature }) === 0) continue;
+      if (client.data.features?.includes("conversation-delta")) {
+        recipients.push({ client, claim: client.data.attached.get(paneId), interest: client.data.conversationInterests.get(paneId)! });
       }
     }
+    if (recipients.length === 0) return;
+    const run = (conversationReads.get(paneId) ?? Promise.resolve()).then(async () => {
+      if (stopped || !await conversations.matches(paneId, signature)) return;
+      // The authoritative REST reader's default page, never a PTY projection or a from/before fragment.
+      const page = await paneConversation(paneId, options.codexHome, {}, options.devinDbPath, options.opencodeDb, options.hermesHome, options.grokHome);
+      if (stopped || !await conversations.matches(paneId, signature)) return;
+      for (const { client, claim, interest } of recipients) {
+        if (!conversationEligible(client, paneId) || client.data.attached.get(paneId) !== claim || client.data.conversationInterests.get(paneId) !== interest) continue;
+        const message: Extract<ServerMessage, { type: "conversation-delta" }> = {
+          type: "conversation-delta", pane_id: paneId, signature,
+          delta: { base_signature: interest.signature, source: page.source, history_id: page.history_id, cursor: page.cursor, turns: page.turns },
+        };
+        if (Buffer.byteLength(JSON.stringify(message), "utf8") > 262144) continue;
+        if (send(client, message) !== 0) interest.signature = signature;
+      }
+    }).catch(() => { /* A read or identity failure leaves only the original invalidation. */ });
+    conversationReads.set(paneId, run);
+    void run.finally(() => { if (conversationReads.get(paneId) === run) conversationReads.delete(paneId); });
   }, options.codexHome, options.devinDbPath, options.opencodeDb, options.hermesHome, options.grokHome);
 
   function releaseConversation(paneId: string): void {
@@ -1908,13 +1935,13 @@ export function createServer(
           try {
             relay = new MachineRelay(machines, machineId, readOnly);
             await relay.ready;
-            const upgraded = bunServer.upgrade(request, { data: { attached: new Map<string, { keepSize: boolean }>(), watches: new Map<string, PaneWatch>(), conversationInterests: new Set<string>(), mode: readOnly ? "observe" : "interact", output: new Map(), closing: false, roles: 0, relay, deviceId, readOnly } });
+            const upgraded = bunServer.upgrade(request, { data: { attached: new Map<string, { keepSize: boolean }>(), watches: new Map<string, PaneWatch>(), conversationInterests: new Map<string, { signature: string | null }>(), mode: readOnly ? "observe" : "interact", output: new Map(), closing: false, roles: 0, relay, deviceId, readOnly } });
             if (upgraded) return undefined as unknown as Response;
             relay.close();
           } catch { relay?.close(); return new Response("remote websocket unavailable", { status: 502 }); }
           return new Response("websocket upgrade required", { status: 426 });
         }
-        const upgraded = bunServer.upgrade(request, { data: { attached: new Map<string, { keepSize: boolean }>(), watches: new Map<string, PaneWatch>(), conversationInterests: new Set<string>(), mode: readOnly ? "observe" : "interact", output: new Map(), closing: false, roles: 0, deviceId, readOnly } });
+        const upgraded = bunServer.upgrade(request, { data: { attached: new Map<string, { keepSize: boolean }>(), watches: new Map<string, PaneWatch>(), conversationInterests: new Map<string, { signature: string | null }>(), mode: readOnly ? "observe" : "interact", output: new Map(), closing: false, roles: 0, deviceId, readOnly } });
         if (upgraded) return undefined as unknown as Response;
         return new Response("websocket upgrade required", { status: 426 });
       }
@@ -3022,7 +3049,7 @@ export function createServer(
                   send(client, { type: "error", code: "not_attached", message: "conversation interest requires an attached pane", pane_id: message.pane_id });
                   break;
                 }
-                client.data.conversationInterests.add(message.pane_id);
+                if (!client.data.conversationInterests.has(message.pane_id)) client.data.conversationInterests.set(message.pane_id, { signature: null });
                 conversations.watch(message.pane_id);
               } else {
                 client.data.conversationInterests.delete(message.pane_id);

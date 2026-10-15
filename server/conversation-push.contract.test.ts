@@ -4,12 +4,15 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ClientMessage, ConversationResponse, ServerMessage } from "../shared/protocol.ts";
 import { ConversationMonitor } from "./conversation-monitor.ts";
+import * as conversationReader from "./conversation.ts";
 import { forgetTranscriptState } from "./conversation.ts";
+import { CompletionTracker } from "./completion.ts";
 import { createServer } from "./index.ts";
 import { herdrRpc, sessionSnapshot, workspaceClose, workspaceCreate } from "./herdr/client.ts";
 
 type TestBridge = { port: number; stop: () => void };
 type ConversationChanged = Extract<ServerMessage, { type: "conversation-changed" }>;
+type ConversationDelta = Extract<ServerMessage, { type: "conversation-delta" }>;
 
 // These integration tests exercise real native-file stat ticks and asynchronous herdr/WS
 // lifecycles. Platform timers cannot be faked; all waits name a condition and a deadline.
@@ -47,6 +50,10 @@ class TranscriptSocket {
 
   async changed(paneId: string, after = 0): Promise<ConversationChanged> {
     return await this.waitFor((frame) => frame.type === "conversation-changed" && frame.pane_id === paneId, after) as ConversationChanged;
+  }
+
+  async delta(paneId: string, after = 0): Promise<ConversationDelta> {
+    return await this.waitFor((frame) => frame.type === "conversation-delta" && frame.pane_id === paneId, after) as ConversationDelta;
   }
 }
 
@@ -456,13 +463,222 @@ describe("native conversation invalidation", () => {
     b.ws.close();
   }, 45_000);
 
-  it("does not send conversation-delta or prompt-push when the snapshot does not declare them", async () => {
+  it("sends complete reader pages after invalidation with connection-local bases and lifecycle resets", async () => {
+    writeFileSync(path, transcript("delta initial"));
+    await report();
+    const first = await connect();
+    const second = await connect();
+    const terminal = await connect();
+    const unattached = await connect();
+    const snapshot = first.frames.find((frame) => frame.type === "snapshot");
+    expect(snapshot?.type === "snapshot" && snapshot.features).toContain("conversation-delta");
+    expect(snapshot?.type === "snapshot" && snapshot.features).not.toContain("prompt-push");
+    attach(first);
+    watch(first);
+    const initial = await first.delta(paneId);
+    expect(initial.delta.base_signature).toBeNull();
+    attach(second);
+    watch(second);
+    await barrier(second);
+    attach(terminal);
+    await terminal.waitFor((frame) => frame.type === "input-ready");
+    watch(unattached);
+    await unattached.waitFor((frame) => frame.type === "error" && frame.code === "not_attached");
+    let afterFirst = first.frames.length;
+    let afterSecond = second.frames.length;
+    appendFileSync(path, `${JSON.stringify({ type: "message", message: { role: "assistant", content: [{ type: "text", text: "delta newest complete answer" }] } })}\n`);
+    const newest = await first.delta(paneId, afterFirst);
+    const other = await second.delta(paneId, afterSecond);
+    const page = await read();
+    expect(newest.delta).toEqual({ base_signature: initial.signature, source: page.source, history_id: page.history_id, cursor: page.cursor, turns: page.turns });
+    expect(other.delta).toEqual({ ...newest.delta, base_signature: null });
+    const changedIndex = first.frames.findIndex((frame) => frame.type === "conversation-changed" && frame.signature === newest.signature);
+    expect(changedIndex).toBeGreaterThanOrEqual(afterFirst);
+    expect(changedIndex).toBeLessThan(first.frames.indexOf(newest));
+    expect(terminal.frames.some((frame) => frame.type === "conversation-delta")).toBe(false);
+    expect(unattached.frames.some((frame) => frame.type === "conversation-delta")).toBe(false);
+
+    watch(first, false);
+    await barrier(first);
+    watch(first);
+    await barrier(first);
+    afterFirst = first.frames.length;
+    afterSecond = second.frames.length;
+    appendFileSync(path, `${JSON.stringify({ type: "model_change", modelId: "reset-interest" })}\n`);
+    const reset = await first.delta(paneId, afterFirst);
+    const continued = await second.delta(paneId, afterSecond);
+    expect(reset.delta.base_signature).toBeNull();
+    expect(continued.delta.base_signature).toBe(other.signature);
+
+    first.send({ type: "detach", pane_id: paneId });
+    await barrier(first);
+    afterFirst = first.frames.length;
+    attach(first);
+    await first.waitFor((frame) => frame.type === "pane-geometry", afterFirst);
+    watch(first);
+    await barrier(first);
+    afterFirst = first.frames.length;
+    // A native reader-confirmed empty page is a replacement, not a failed read.
+    writeFileSync(path, `${JSON.stringify({ type: "session", version: 3, id: "empty-session", cwd: root })}\n`);
+    const empty = await first.delta(paneId, afterFirst);
+    const emptyPage = await read();
+    expect(emptyPage.turns).toEqual([]);
+    expect(empty.delta).toEqual({ base_signature: null, source: emptyPage.source, history_id: emptyPage.history_id, cursor: emptyPage.cursor, turns: [] });
+    const response = await fetch(`http://127.0.0.1:${bridge.port}/api/pane/conversation?pane_id=${encodeURIComponent(paneId)}`);
+    const etag = response.headers.get("etag")!;
+    expect(etag).toMatch(/^W\//);
+    const unchanged = await fetch(`http://127.0.0.1:${bridge.port}/api/pane/conversation?pane_id=${encodeURIComponent(paneId)}`, { headers: { "if-none-match": etag } });
+    expect(unchanged.status).toBe(304);
+
+    const monitor = monitors.get(paneId)!;
+    for (const socket of [first, second, terminal, unattached]) socket.ws.close();
+    await until(() => monitor.size === 0, "delta fanout subscriptions released");
+    const reconnected = await connect();
+    attach(reconnected);
+    watch(reconnected);
+    expect((await reconnected.delta(paneId)).delta.base_signature).toBeNull();
+    reconnected.ws.close();
+    await until(() => monitor.size === 0, "reconnected subscription released");
+  }, 45_000);
+
+  it("serializes pane reads and rejects superseded observations and pre/post-read identity changes", async () => {
+    writeFileSync(path, transcript("race initial"));
+    await report();
     const socket = await connect();
-    const snapshot = socket.frames.find((frame) => frame.type === "snapshot");
-    expect(snapshot?.type).toBe("snapshot");
-    if (snapshot?.type !== "snapshot") throw new Error("missing snapshot");
-    expect(snapshot.features ?? []).not.toContain("conversation-delta");
-    expect(snapshot.features ?? []).not.toContain("prompt-push");
+    attach(socket);
+    watch(socket);
+    const initial = await socket.delta(paneId);
+    const actualRead = conversationReader.paneConversation;
+    const entered = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    let reads = 0;
+    const delayed = spyOn(conversationReader, "paneConversation").mockImplementation(async (...args) => {
+      const page = await actualRead(...args);
+      if (++reads === 1) { entered.resolve(); await release.promise; }
+      return page;
+    });
+    try {
+      const after = socket.frames.length;
+      appendFileSync(path, `${JSON.stringify({ type: "model_change", modelId: "race first" })}\n`);
+      const stale = await socket.changed(paneId, after);
+      await entered.promise;
+      const beforeNew = socket.frames.length;
+      appendFileSync(path, `${JSON.stringify({ type: "message", message: { role: "assistant", content: [{ type: "text", text: "race authoritative newest" }] } })}\n`);
+      const latest = await socket.changed(paneId, beforeNew);
+      expect(reads).toBe(1);
+      release.resolve();
+      const accepted = await socket.delta(paneId, after);
+      expect(accepted.signature).toBe(latest.signature);
+      expect(accepted.delta.base_signature).toBe(initial.signature);
+      expect(socket.frames.some((frame) => frame.type === "conversation-delta" && frame.signature === stale.signature)).toBe(false);
+      delayed.mockRestore();
+      const authoritative = await read();
+      expect(accepted.delta.turns).toEqual(authoritative.turns);
+
+      // Change the inode after the actual read, before the monitor's next stat tick.
+      // The read-side identity check, rather than only newer-notification detection, must reject it.
+      let replaced = false;
+      const replacementRead = spyOn(conversationReader, "paneConversation").mockImplementation(async (...args) => {
+        const page = await actualRead(...args);
+        if (!replaced) {
+          replaced = true;
+          writeFileSync(`${path}.race`, transcript("post-read replacement"));
+          renameSync(`${path}.race`, path);
+        }
+        return page;
+      });
+      try {
+        const beforeReplace = socket.frames.length;
+        appendFileSync(path, `${JSON.stringify({ type: "model_change", modelId: "replace during read" })}\n`);
+        const obsolete = await socket.changed(paneId, beforeReplace);
+        const replacementDelta = await socket.delta(paneId, beforeReplace);
+        expect(replacementDelta.signature).not.toBe(obsolete.signature);
+        expect(replacementDelta.delta.base_signature).toBe(accepted.signature);
+        expect(socket.frames.some((frame) => frame.type === "conversation-delta" && frame.signature === obsolete.signature)).toBe(false);
+        expect(replacementDelta.delta.turns).toEqual((await read()).turns);
+      } finally { replacementRead.mockRestore(); }
+    } finally {
+      release.resolve();
+      delayed.mockRestore();
+      socket.ws.close();
+      await until(() => monitors.get(paneId)!.size === 0, "race subscription released");
+    }
+  }, 45_000);
+
+  it("counts the complete UTF-8 envelope inclusively and never advances bases on oversize or failed reads", async () => {
+    writeFileSync(path, transcript("size initial"));
+    await report();
+    const socket = await connect();
+    attach(socket);
+    watch(socket);
+    let previous = await socket.delta(paneId);
+    const actualRead = conversationReader.paneConversation;
+    let size = 262144;
+    let mode: "size" | "error" | "native" = "size";
+    let reads = 0;
+    const monitor = monitors.get(paneId)!;
+    const actualMatch = monitor.matches.bind(monitor);
+    const verified: string[] = [];
+    const matching = spyOn(monitor, "matches").mockImplementation(async (id, signature) => {
+      const stable = await actualMatch(id, signature);
+      if (stable) verified.push(signature);
+      return stable;
+    });
+    const sized = spyOn(conversationReader, "paneConversation").mockImplementation(async (...args) => {
+      reads++;
+      if (mode === "error") throw new Error("native read failed");
+      const page = await actualRead(...args);
+      if (mode === "native") return page;
+      // A reader fixture isolates the byte gate, including JSON escaping and multibyte text.
+      const text = { kind: "text" as const, text: "😀\"\\\n" };
+      const turns = [{ role: "assistant" as const, ts: null, parts: [text] }];
+      const envelope: ConversationDelta = { type: "conversation-delta", pane_id: paneId, signature: "x".repeat(22), delta: { base_signature: previous.signature, source: page.source, history_id: page.history_id, cursor: page.cursor, turns } };
+      text.text += "x".repeat(size - Buffer.byteLength(JSON.stringify(envelope)));
+      return { ...page, turns };
+    });
+    try {
+      let after = socket.frames.length;
+      appendFileSync(path, `${JSON.stringify({ type: "model_change", modelId: "exact-limit" })}\n`);
+      const exact = await socket.delta(paneId, after);
+      expect(Buffer.byteLength(JSON.stringify(exact))).toBe(262144);
+      expect(exact.delta.turns[0]!.parts[0]).toMatchObject({ kind: "text", text: expect.stringContaining("😀\"\\\n") });
+      previous = exact;
+      size = 262145;
+      after = socket.frames.length;
+      const beforeOversize = reads;
+      appendFileSync(path, `${JSON.stringify({ type: "model_change", modelId: "over-limit" })}\n`);
+      const oversized = await socket.changed(paneId, after);
+      await until(() => reads > beforeOversize, "oversized reader page attempted");
+      await until(() => verified.filter((signature) => signature === oversized.signature).length === 2, "oversized complete page passed both identity gates");
+      mode = "error";
+      const beforeError = reads;
+      appendFileSync(path, `${JSON.stringify({ type: "model_change", modelId: "read-error" })}\n`);
+      const failed = await socket.changed(paneId, socket.frames.indexOf(oversized) + 1);
+      await until(() => reads > beforeError, "reader failure attempted");
+      mode = "native";
+      appendFileSync(path, `${JSON.stringify({ type: "message", message: { role: "assistant", content: [{ type: "text", text: "after failure native answer" }] } })}\n`);
+      const recovered = await socket.delta(paneId, after);
+      expect(recovered.delta.base_signature).toBe(exact.signature);
+      expect(recovered.delta.turns).toEqual((await read()).turns);
+      for (const signature of [oversized.signature, failed.signature]) {
+        expect(socket.frames.some((frame) => frame.type === "conversation-delta" && frame.signature === signature)).toBe(false);
+      }
+    } finally {
+      sized.mockRestore();
+      matching.mockRestore();
+      socket.ws.close();
+      await until(() => monitors.get(paneId)!.size === 0, "size subscription released");
+    }
+  }, 45_000);
+
+  it("does not send optional pushes on a connection that has not advertised them", async () => {
+    const snapshotFailure = spyOn(CompletionTracker.prototype, "readSnapshot").mockRejectedValue(new Error("snapshot unavailable"));
+    const socket = new TranscriptSocket(bridge);
+    sockets.push(socket);
+    try {
+      await socket.waitFor((frame) => frame.type === "error" && frame.code === "snapshot_failed");
+    } finally { snapshotFailure.mockRestore(); }
+    expect(socket.frames.some((frame) => frame.type === "snapshot")).toBe(false);
     attach(socket);
     watch(socket);
     const after = socket.frames.length;
