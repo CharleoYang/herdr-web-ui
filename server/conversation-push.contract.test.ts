@@ -456,6 +456,25 @@ describe("native conversation invalidation", () => {
     b.ws.close();
   }, 45_000);
 
+  it("does not send conversation-delta or prompt-push when the snapshot does not declare them", async () => {
+    const socket = await connect();
+    const snapshot = socket.frames.find((frame) => frame.type === "snapshot");
+    expect(snapshot?.type).toBe("snapshot");
+    if (snapshot?.type !== "snapshot") throw new Error("missing snapshot");
+    expect(snapshot.features ?? []).not.toContain("conversation-delta");
+    expect(snapshot.features ?? []).not.toContain("prompt-push");
+    attach(socket);
+    watch(socket);
+    const after = socket.frames.length;
+    appendFileSync(path, `${JSON.stringify({ type: "model_change", modelId: "undeclared-push" })}\n`);
+    const changed = await socket.changed(paneId, after);
+    expect(changed.signature).toEqual(expect.any(String));
+    expect(Object.keys(changed).sort()).toEqual(["pane_id", "signature", "type"]);
+    expect(socket.frames.some((frame) => frame.type === "conversation-delta" || frame.type === "prompt-push")).toBe(false);
+    watch(socket, false);
+    socket.ws.close();
+  }, 30_000);
+
   it("releases native interest when the owned pane ends and refuses a stale enable", async () => {
     const socket = await connect();
     attach(socket);

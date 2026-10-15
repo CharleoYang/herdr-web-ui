@@ -411,6 +411,7 @@ interface PaneAttachment {
 
 function send(client: Client, message: ServerMessage): number {
   if (client.data.closing) return 0;
+  if ((message.type === "conversation-delta" || message.type === "prompt-push") && !SERVER_FEATURES.includes(message.type)) return 0;
   try {
     const encoded = JSON.stringify(message);
     // Include JSON escaping in the transport budget, before Bun could drop a
