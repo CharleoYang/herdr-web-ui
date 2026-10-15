@@ -620,6 +620,12 @@ One set for both themes: the card is island black wherever it shows.
   authoritative when the agent roster and pane status differ. The workspace and agent lists
   share the existing combined machine roster and its SSE updates; neither adds a status subscription.
   A disconnected PC's saved workspace and agent rows are dimmed, inert and draw no state until that PC reconnects.
+- After a valid full `machines` snapshot on the current SSE connection, the browser stops its
+  redundant five-second roster GETs and keeps a visible-page REST backstop of at most 30 seconds.
+  Opening or reconnecting the stream alone is not healthy: before a valid snapshot, after an
+  error, or without EventSource, the existing five-second REST fallback remains. Visibility
+  restore and explicit roster-changing actions force a fresh read; `SnapshotRequests` still
+  fences stale responses. Hidden-page reads pause and health/auth polling stays independent.
 - The Agents list is flat and every row names its own place. Pinned agents (pinned from a row's
   menu) stand first, in the order they were pinned, in a card (a `--hairline` `--border` edge,
   `--radius-lg`, `--space-1` padding, no fill, so hover and selection read inside it as elsewhere),
@@ -873,6 +879,21 @@ One set for both themes: the card is island black wherever it shows.
   its accessible text and in its tooltip. While live the chip takes no room and stays in the
   document as a `role="status"` a screen reader can read (`.conn-live`; never `display: none`).
 
+### Live chat transport
+- The existing per-machine WebSocket advertises optional `conversation-delta` and `prompt-push`
+  features. Clients and bridges without them retain `conversation-changed` plus REST and the
+  existing prompt fallback; no new socket or PTY-derived chat parser is introduced.
+- Conversation deltas update the latest page without the invalidation cooldown. Signatures are
+  opaque; a validated complete page can establish the initial baseline. Baseline mismatch,
+  incomplete payload or oversized envelope falls back to REST; periodic reconciliation and
+  historical-page loading remain REST-based.
+- Prompt pushes use the same authoritative reader as REST, including null, changes and plan
+  privacy. Watch-device or explicit screen-only restrictions propagate through a machine relay
+  before its owner-authenticated upstream read; terminal observe mode alone is not a restriction.
+- Socket generation, attachment/interest and current-pane fences reject stale frames. Hidden
+  chats do not apply pushes; reconnect and visibility restore reconcile through REST, and newer
+  push state fences delayed REST responses. Snapshot readiness is not transcript-enrichment readiness.
+
 ### Chat turn (`.chat-turn`)
 - Native conversation rows use LegendList 3.3.5, with the chat view as the single
   scroll owner. The centered lane, exchange spacing and prompt portal stay separate from
@@ -999,13 +1020,16 @@ One set for both themes: the card is island black wherever it shows.
   `--text`, the agent as a hairline mono pill, the prompt in the bounded mono input box.
 
 ### Turn todo list (`.chat-todo`)
-- A turn's newest todo tool call provides one collapsible list outside the work block, so
-  folding the commands does not hide progress. Claude `TodoWrite` and Codex `update_plan`
-  inputs provide complete lists; OMP/OmO tool answers provide phase-grouped states, with
-  flat OMP `init.items` input as the fallback. A later empty list clears the earlier state.
-- The summary shows completed/total counts, an active item or blocked state, and a caret.
-  Phase headings and tree rows retain completed, active, blocked and dropped status icons
-  and notes. These states use the same semantic color tokens as the rest of the interface.
+- The pane's latest todo state is a single collapsible `.chat-todo-pinned` dock outside the
+  message scroller, above the composer. Scrolling transcript rows or folding a work block does
+  not move or duplicate this progress panel. It is not a separate list on every historical turn.
+- Claude `TodoWrite` and Codex `update_plan` inputs provide complete lists; OMP/OmO tool answers
+  provide phase-grouped states, with flat OMP `init.items` input as the fallback. A later empty
+  list clears the earlier state.
+- The summary shows completed/total counts, an active item or blocked state, and a caret. It
+  stays on one line in a narrow panel; expanding reveals phase headings, status icons and notes.
+  Collapsing hides the details without requiring their DOM nodes to be removed. The same
+  semantic color tokens are used as elsewhere in the interface.
 
 ### Plan (`.bg-tasks-plan`, `.bg-step`, `.plan-count`)
 - A pane's plan has no control of its own: it shares the composer's background-task chip

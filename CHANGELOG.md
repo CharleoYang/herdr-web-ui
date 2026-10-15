@@ -10,10 +10,18 @@ between releases do not reach them. Remote-PC runtime bundles are versioned sepa
 ### Added
 - OMP chat panes offer a searchable, session-only model switcher backed by the selected PC's
   installed chat models. Switching waits for an idle agent and uses the existing terminal submit path.
-- Chat turns show phase-grouped todo progress outside folded tool activity, including flat OMP
-  initialization, Claude TodoWrite and Codex plans; clearing a list no longer revives older items.
+- Each chat pane keeps its latest phase-grouped todo progress in one collapsible panel above
+  the composer, outside the message scroller. Flat OMP initialization, Claude TodoWrite and
+  Codex plans are supported; clearing a list no longer revives older items.
 - Monokai (OMP) is the default color palette in this checkout, with theme-aware chat styling and
   Monokai ANSI colors on the terminal grid. Amber, charcoal and Catppuccin stay selectable.
+- The machine roster uses its existing SSE snapshots instead of redundant five-second browser
+  reads once the current stream is healthy. It retains a visible-page REST backstop within
+  30 seconds, five-second fallback before a valid snapshot or after stream failure, and fresh
+  reads on visibility restore or explicit changes. Health/auth polling is unchanged.
+- Capability-advertising bridges push conversation deltas and prompt changes over the existing
+  WebSocket. Visible chats avoid the old two-second refresh delay and idle prompt polling;
+  older bridges retain REST fallback, with REST reconciliation on reconnect and visibility restore.
 
 - **Settings → Phone & devices → Portal** gives this PC a public HTTPS address through
   [Portal](https://github.com/gosuda/portal-tunnel), with no account and no domain of your own.

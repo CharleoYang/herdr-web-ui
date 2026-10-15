@@ -38,8 +38,13 @@ A browser and phone client for [herdr](https://github.com/herdrdev/herdr). Read 
 OMP chat panes also offer session-only model switching: when the agent is idle, click the
 model in the composer, search the models installed on that pane's PC, and pick one. The app
 submits `/switch provider/id` to that OMP session; it does not change your global defaults.
-Todo progress stays visible beside the folded work block. **Settings → Appearance → Colors**
+Todo progress stays in one collapsible panel above the composer, outside the message scroller,
+so scrolling messages or folding tool activity does not hide it. **Settings → Appearance → Colors**
 offers Monokai (OMP), the new default, and the existing palettes including Amber.
+
+Bridges advertising `conversation-delta` and `prompt-push` update visible chats over the existing
+WebSocket. Older bridges keep their REST fallback; reconnect and visibility restoration reconcile
+through REST, and periodic authoritative conversation reconciliation remains enabled.
 
 <table>
   <tr>
