@@ -883,9 +883,10 @@ One set for both themes: the card is island black wherever it shows.
 - The existing per-machine WebSocket advertises optional `conversation-delta` and `prompt-push`
   features. Clients and bridges without them retain `conversation-changed` plus REST and the
   existing prompt fallback; no new socket or PTY-derived chat parser is introduced.
-- Conversation deltas update the latest page without the invalidation cooldown. A missing or
-  opaque baseline, oversized envelope or unusable delta falls back to authoritative REST;
-  periodic reconciliation and historical-page loading remain REST-based.
+- Conversation deltas update the latest page without the invalidation cooldown. Signatures are
+  opaque; a validated complete page can establish the initial baseline. Baseline mismatch,
+  incomplete payload or oversized envelope falls back to REST; periodic reconciliation and
+  historical-page loading remain REST-based.
 - Prompt pushes use the same authoritative reader as REST, including null, changes and plan
   privacy. Watch-device or explicit screen-only restrictions propagate through a machine relay
   before its owner-authenticated upstream read; terminal observe mode alone is not a restriction.
