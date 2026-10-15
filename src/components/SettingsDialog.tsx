@@ -45,7 +45,7 @@ function compactKeys(keys: readonly string[]): string {
   return formatKeys(keys).map((key) => ({ Shift: "⇧", ArrowUp: "↑", ArrowDown: "↓", ArrowLeft: "←", ArrowRight: "→" }[key] ?? (key.length === 1 ? key.toUpperCase() : key))).join("+");
 }
 
-const FONT_FAMILY_PLACEHOLDER = 'D2Coding, "Cascadia Mono"';
+const FONT_FAMILY_PLACEHOLDER = 'JetBrains Mono, "PingFang SC"';
 
 /**
  * A font family list, saved when the field is left, on Enter or when the dialog closes: saving
