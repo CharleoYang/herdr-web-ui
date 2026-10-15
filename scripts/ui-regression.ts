@@ -124,12 +124,20 @@ try {
   // a connection's first frame held back: what the page does between a reconnect and its snapshot
   let holdSnapshot = false;
   let releaseSnapshot: (() => void) | null = null;
+  // Only an old suggestion is muted while its real REST response is held. Capability,
+  // null observations, other panes and every other WebSocket frame remain live.
+  let suppressedSuggestion: { pane: string; text: string } | null = null;
+  const pushedSuggestions = new Map<string, string | null>();
   const routed: Array<{ close: () => Promise<void> }> = [];
   await page.routeWebSocket(/\/ws(?:\?|$)/, (socket) => {
     routed.push(socket);
     const upstream = socket.connectToServer();
     upstream.onMessage((raw) => {
       const message = JSON.parse(String(raw));
+      if (message.type === "prompt-push") {
+        if (suppressedSuggestion && message.pane_id === suppressedSuggestion.pane && message.suggestion === suppressedSuggestion.text) return;
+        pushedSuggestions.set(message.pane_id, message.suggestion);
+      }
       if (holdSnapshot && message.type === "snapshot") {
         holdSnapshot = false;
         const release = () => { socket.send(raw); releaseSnapshot = null; };
@@ -1898,6 +1906,53 @@ try {
       return result.read.text.includes(`❯ ${suggestion}`);
     }, "suggestion painted");
   };
+  // Hold an actual server answer, not a request that will read the screen after the send.
+  // Later reconciliations wait separately, then read the real, current screen on cleanup.
+  const holdPromptRead = async (pane: string, suggestion: string, trigger: () => Promise<void>) => {
+    const { promise: staleGate, resolve: releaseStale } = Promise.withResolvers<void>();
+    const { promise: followingGate, resolve: releaseFollowing } = Promise.withResolvers<void>();
+    releases.push(releaseStale, releaseFollowing);
+    let chosen = false;
+    let captured = false;
+    let delivered = false;
+    suppressedSuggestion = { pane, text: suggestion };
+    const unroute = await routeDrained(page, `**/api/pane/prompt?pane_id=${encodeURIComponent(pane)}`, async (route) => {
+      if (chosen) { await followingGate; await route.continue(); return; }
+      chosen = true;
+      const response = await route.fetch();
+      assert.equal((await response.json()).suggestion, suggestion, "the held REST answer contains the old suggestion");
+      captured = true;
+      await staleGate;
+      const received = page.waitForResponse((answer) => answer.request() === route.request());
+      await route.fulfill({ response });
+      const answer = await received;
+      assert.equal(await answer.finished(), null, "the browser received the complete held response");
+      assert.equal((await answer.json()).suggestion, suggestion, "the stale suggestion was delivered, not cancelled or replaced");
+      delivered = true;
+    });
+    await trigger();
+    await until(() => captured, `real prompt reconciliation captured for ${pane}`);
+    return {
+      deliver: async () => {
+        releaseStale();
+        await until(() => delivered, `stale prompt response delivered for ${pane}`);
+        await page.evaluate(() => {
+          const { promise, resolve } = Promise.withResolvers<void>();
+          requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+          return promise;
+        });
+      },
+      finish: async () => {
+        releaseFollowing();
+        await unroute();
+        suppressedSuggestion = null;
+      },
+    };
+  };
+  const reconcilePrompt = async (): Promise<void> => {
+    await setPageHidden(true);
+    await setPageHidden(false);
+  };
   await selectPane(paneA);
   await composer.fill("");
   await herdrRpc("pane.report_agent", { pane_id: paneA, source: "manual", agent: "claude", state: "idle" });
@@ -1906,38 +1961,37 @@ try {
   await composer.focus();
   await page.keyboard.press("Tab");
   assert.equal(await composer.inputValue(), "run the tests", "Tab takes the suggestion");
-  // a prompt read made before the send answers after it: its suggestion was for the turn before
-  let readBeforeSend = false;
-  await page.route(`**/api/pane/prompt?pane_id=${encodeURIComponent(paneA)}`, async (route) => {
-    const response = await route.fetch();
-    readBeforeSend = true;
-    await new Promise((resolve) => setTimeout(resolve, 1500));
-    await route.fulfill({ response });
-  });
-  await until(async () => readBeforeSend, "a prompt read in flight");
+  // Visibility restoration is an authoritative REST edge even with prompt-push enabled.
+  const beforeSend = await holdPromptRead(paneA, "run the tests", reconcilePrompt);
   await composer.press("Enter");
   await until(async () => await composer.getAttribute("placeholder") !== "run the tests", "a send drops the suggestion");
   await until(async () => await composer.inputValue() === "", "the sent box clears");
+  await beforeSend.deliver();
   for (let check = 0; check < 16; check++) {
     assert.notEqual(await composer.getAttribute("placeholder"), "run the tests", "a read from before the send does not bring the suggestion back");
     await page.waitForTimeout(150);
   }
-  await page.unroute(`**/api/pane/prompt?pane_id=${encodeURIComponent(paneA)}`);
+  await beforeSend.finish();
   // the same text suggested again after the turn shows again
+  pushedSuggestions.delete(paneA);
   await paintSuggestion(paneA, "run the tests");
-  await until(async () => await composer.getAttribute("placeholder") === "run the tests", "the same suggestion again");
-  // pane B answers its first prompt read late: meanwhile it must not show pane A's suggestion
+  await until(async () => pushedSuggestions.get(paneA) === "run the tests" && await composer.getAttribute("placeholder") === "run the tests", "the same suggestion again from a fresh real push");
+  assert.equal(pushedSuggestions.get(paneA), "run the tests", "a fresh real push can return the same suggestion");
+  // Hold B's real bootstrap answer across another pane generation, without hiding A's push.
   await herdrRpc("pane.report_agent", { pane_id: paneB, source: "manual", agent: "claude", state: "idle" });
-  await page.route(`**/api/pane/prompt?pane_id=${encodeURIComponent(paneB)}`, async (route) => {
-    await new Promise((resolve) => setTimeout(resolve, 1500));
-    await route.continue();
-  });
-  await selectPane(paneB);
+  await paintSuggestion(paneB, "review pane B");
+  const beforePaneSwitch = await holdPromptRead(paneB, "review pane B", () => selectPane(paneB));
   for (let check = 0; check < 8; check++) {
     assert.notEqual(await composer.getAttribute("placeholder"), "run the tests", "another pane's suggestion never shows");
     await page.waitForTimeout(150);
   }
-  await page.unroute(`**/api/pane/prompt?pane_id=${encodeURIComponent(paneB)}`);
+  await selectPane(paneA);
+  await until(async () => await composer.getAttribute("placeholder") === "run the tests", "current pane A keeps its suggestion");
+  await beforePaneSwitch.deliver();
+  assert.equal(await composer.getAttribute("placeholder"), "run the tests", "B's delivered old-generation response cannot repaint A");
+  await beforePaneSwitch.finish();
+  await selectPane(paneB);
+  await until(async () => await composer.getAttribute("placeholder") === "review pane B", "a fresh current-pane reconciliation remains usable");
   await herdrRpc("pane.send_keys", { pane_id: paneA, keys: ["Enter"] });
   console.log("PASS Claude's suggestion fills the composer with Tab, returns after a send, and stays with its pane");
 
@@ -1963,16 +2017,17 @@ try {
   const rule = "─".repeat(40);
   writeFileSync(pendingScreen, `${rule}\r\n❯ \u001b[2mcheck the diff\u001b[0m\r\n${rule}\r\n`);
   await until(async () => await composer.getAttribute("placeholder") === "check the diff", "suggestion beside a pending message");
-  await page.route(`**/api/pane/prompt?pane_id=${encodeURIComponent(pendingPane)}`, async (route) => {
-    await new Promise((resolve) => setTimeout(resolve, 5000));
-    await route.continue().catch(() => {});
-  });
+  const beforeSendNow = await holdPromptRead(pendingPane, "check the diff", reconcilePrompt);
   const sentAt = Date.now();
   await pendingRows.getByRole("button", { name: /^Send now:/ }).click();
   await until(async () => await composer.getAttribute("placeholder") !== "check the diff", "Send now drops the suggestion");
   assert.ok(Date.now() - sentAt < 2500, "the suggestion goes with the Send now, not with a later read");
   await pendingRows.waitFor({ state: "hidden" });
-  await page.unroute(`**/api/pane/prompt?pane_id=${encodeURIComponent(pendingPane)}`);
+  await beforeSendNow.deliver();
+  assert.notEqual(await composer.getAttribute("placeholder"), "check the diff", "the delivered pre-Send-now answer cannot restore the suggestion");
+  // The stand-in screen does not clear itself on input; let subsequent real reads observe it gone.
+  writeFileSync(pendingScreen, "");
+  await beforeSendNow.finish();
   await herdrRpc("pane.send_text", { pane_id: pendingPane, text: "\u0003" });
   await page.keyboard.press("ControlOrMeta+Shift+Comma");
   await openSettingsPage(page, "Chat");
@@ -2121,16 +2176,14 @@ try {
   console.log("PASS Escape closes a phone's drawer and goes no further");
 
   // Claude's suggestion on a phone is the placeholder and a chip that fills the box, until Settings turns the chip off
-  const promptRoute = `**/api/pane/prompt?pane_id=${encodeURIComponent(paneB)}`;
-  const suggest = { json: { prompt: null, suggestion: "run the tests" } };
+  await herdrRpc("pane.send_keys", { pane_id: paneB, keys: ["Enter"] });
+  await paintSuggestion(paneB, "run the tests");
   const mobileComposer = mobilePage.getByRole("textbox", { name: "Message", exact: true });
-  await mobilePage.route(promptRoute, (route) => route.fulfill(suggest));
   await mobileComposer.fill("");
   await until(async () => await mobileComposer.getAttribute("placeholder") === "run the tests", "a phone shows the suggestion as the placeholder");
   assert.equal(await mobilePage.locator(".voice-mic").count(), 0, "a phone's chat has no mic until Settings asks for it");
   await mobilePage.getByTitle("Use the suggestion", { exact: true }).click();
   assert.equal(await mobileComposer.inputValue(), "run the tests", "the chip puts the suggestion in the box");
-  await mobilePage.unroute(promptRoute);
   try { await mobileEvidence?.finish(); } finally { await mobile.close(); }
   assert.equal(errors.length, 0, errors.join("\n"));
   assertCspClean(csp, "the suggestion chip loads with no CSP violation");
