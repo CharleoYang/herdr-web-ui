@@ -39,10 +39,13 @@ export class MachineRelay {
   private stall = new RelayStallClock();
   readonly ready: Promise<void>;
 
-  constructor(manager: MachineManager, id: string, private readonly readOnly = false) {
+  constructor(manager: MachineManager, id: string, private readonly readOnly = false, promptScreenOnly = readOnly) {
     const endpoint = manager.endpoint(id);
     if (!endpoint) throw new Error("This PC is disconnected");
-    this.upstream = authenticatedWebSocket(endpoint.url.replace("http:", "ws:") + "/ws", endpoint.token);
+    const url = new URL(endpoint.url.replace("http:", "ws:") + "/ws");
+    // Restrict before the upstream snapshot or any prompt read, not after file enrichment.
+    if (readOnly || promptScreenOnly) url.searchParams.set("plan", "0");
+    this.upstream = authenticatedWebSocket(url.toString(), endpoint.token);
     this.untrack = manager.trackTerminal(id, () => this.close(1012, "PC disconnected"));
     this.ready = new Promise((resolve, reject) => {
       const timeout = setTimeout(() => { this.close(); reject(new Error("Remote websocket timed out")); }, 15_000);

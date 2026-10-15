@@ -224,7 +224,7 @@ const RESTORED_CLEAR_GAP_MS = 200;
 const RESTORED_CLEAR_SETTLE_MS = 300;
 /** what a send must still have of its deadline before the copy is cleared: the clear, the box read again, then the send */
 const RESTORED_CLEAR_RESERVE_MS = 2_000;
-const SERVER_FEATURES: ServerFeature[] = ["submit", "pending-input", "pending-hold", "secret-input", "input-ready", "take-over", "watch", "conversation-watch", "ping", "conversation-delta"];
+const SERVER_FEATURES: ServerFeature[] = ["submit", "pending-input", "pending-hold", "secret-input", "input-ready", "take-over", "watch", "conversation-watch", "ping", "conversation-delta", "prompt-push"];
 
 /** the sides herdr's pane.swap and pane.resize take; anything else is refused before the RPC, which would answer invalid_request */
 const isPaneDirection = (value: unknown): value is PaneDirection => value === "left" || value === "right" || value === "up" || value === "down";
@@ -338,6 +338,8 @@ async function agentLaunch(paneId: string, agent: AgentPayload): Promise<{ agent
 interface SocketData {
   deviceId?: string;
   readOnly?: boolean;
+  /** Prompt file access is independent of terminal observe/interact mode. */
+  promptScreenOnly?: boolean;
   revoked?: boolean;
   unwatchDevice?: () => void;
   relay?: MachineRelay;
@@ -574,7 +576,83 @@ export function createServer(
     void run.finally(() => { if (conversationReads.get(paneId) === run) conversationReads.delete(paneId); });
   }, options.codexHome, options.devinDbPath, options.opencodeDb, options.hermesHome, options.grokHome);
 
+  type PromptPush = Extract<ServerMessage, { type: "prompt-push" }>;
+  type PromptRecipient = { client: Client; claim: { keepSize: boolean } | undefined; interest: { signature: string | null } };
+  type PromptObservation = { active: boolean; reading: boolean; timer?: Timer };
+  const promptObservations = new Map<string, PromptObservation>();
+  // Baselines belong to an interest lifetime, never a pane or a disconnected client.
+  const promptSent = new WeakMap<object, string>();
+
+  function promptRecipients(paneId: string, readOnly: boolean): PromptRecipient[] {
+    const recipients: PromptRecipient[] = [];
+    for (const client of clients) {
+      if (!conversationEligible(client, paneId) || !client.data.features?.includes("prompt-push") || (client.data.promptScreenOnly === true) !== readOnly) continue;
+      recipients.push({ client, claim: client.data.attached.get(paneId), interest: client.data.conversationInterests.get(paneId)! });
+    }
+    return recipients;
+  }
+
+  // Menus can change while idle without any transcript/stat/status edge. Browsers stop empty
+  // polling; the bridge still observes the authoritative prompt reader, once per pane/policy.
+  function reconcilePrompts(paneId: string): void {
+    for (const readOnly of [false, true]) {
+      const key = JSON.stringify([paneId, readOnly]);
+      let observation = promptObservations.get(key);
+      const active = !stopped && promptRecipients(paneId, readOnly).length > 0;
+      if (!active) {
+        if (observation) {
+          observation.active = false;
+          clearTimeout(observation.timer);
+          observation.timer = undefined;
+          // Keep an in-flight guard until the reader settles, even across unwatch/rewatch.
+          if (!observation.reading) promptObservations.delete(key);
+        }
+        continue;
+      }
+      if (!observation) {
+        observation = { active: true, reading: false };
+        promptObservations.set(key, observation);
+      }
+      observation.active = true;
+      if (observation.reading || observation.timer !== undefined) continue;
+      const current = observation;
+      const read = async (): Promise<void> => {
+        current.timer = undefined;
+        if (stopped || !current.active) return;
+        const recipients = promptRecipients(paneId, readOnly);
+        if (recipients.length === 0) { reconcilePrompts(paneId); return; }
+        current.reading = true;
+        try {
+          const url = new URL("http://bridge.internal/api/pane/prompt");
+          url.searchParams.set("pane_id", paneId);
+          const response = await handlePromptRequest(new Request(url), url, {
+            codexHome: options.codexHome, claudeTranscript: (id) => claudeAgents.sessionOf(id)?.path ?? null, readOnly,
+          });
+          if (!response?.ok) return; // A failed read is not a disappearing menu.
+          const body = await response.json() as Omit<PromptPush, "type" | "pane_id">;
+          const message: PromptPush = { type: "prompt-push", pane_id: paneId, prompt: body.prompt, suggestion: body.suggestion, restored: body.restored };
+          const signature = JSON.stringify(message);
+          for (const { client, claim, interest } of recipients) {
+            if (!current.active || !conversationEligible(client, paneId) || client.data.attached.get(paneId) !== claim
+              || client.data.conversationInterests.get(paneId) !== interest || (client.data.promptScreenOnly === true) !== readOnly) continue;
+            if (promptSent.get(interest) === signature) continue;
+            if (send(client, message) !== 0) promptSent.set(interest, signature);
+          }
+        } catch { /* Preserve the last state on backend failure; the next observation retries. */ }
+        finally {
+          current.reading = false;
+          if (!stopped && current.active && promptRecipients(paneId, readOnly).length > 0) {
+            current.timer = setTimeout(() => void read(), 500);
+            current.timer.unref();
+          } else if (promptObservations.get(key) === current) promptObservations.delete(key);
+        }
+      };
+      void read();
+    }
+  }
+
   function releaseConversation(paneId: string): void {
+    reconcilePrompts(paneId);
     for (const client of clients) {
       if (!client.data.closing && client.readyState === WebSocket.OPEN && client.data.attached.has(paneId) && client.data.conversationInterests.has(paneId)) return;
     }
@@ -1926,6 +2004,8 @@ export function createServer(
       if (pathname === "/api/pane/read" || pathname === "/api/pane/conversation") bunServer.timeout(request, 60);
       if (pathname === "/ws") {
         if (!sameOrigin(request)) return new Response("invalid origin", { status: 403 });
+        // plan=0 only reduces prompt access; a watch credential can never opt back in.
+        const promptScreenOnly = readOnly || url.searchParams.get("plan") === "0";
         const deviceId = access.level === "full" ? access.device?.id : undefined;
         const machineId = url.searchParams.get("machine_id");
         if (machineId && machineId !== "local") {
@@ -1933,15 +2013,15 @@ export function createServer(
           if (!machines?.endpoint(machineId)) return jsonResponse({ error: { code: "machine_offline", message: "This PC is disconnected" } }, 503);
           let relay: MachineRelay | undefined;
           try {
-            relay = new MachineRelay(machines, machineId, readOnly);
+            relay = new MachineRelay(machines, machineId, readOnly, promptScreenOnly);
             await relay.ready;
-            const upgraded = bunServer.upgrade(request, { data: { attached: new Map<string, { keepSize: boolean }>(), watches: new Map<string, PaneWatch>(), conversationInterests: new Map<string, { signature: string | null }>(), mode: readOnly ? "observe" : "interact", output: new Map(), closing: false, roles: 0, relay, deviceId, readOnly } });
+            const upgraded = bunServer.upgrade(request, { data: { attached: new Map<string, { keepSize: boolean }>(), watches: new Map<string, PaneWatch>(), conversationInterests: new Map<string, { signature: string | null }>(), mode: readOnly ? "observe" : "interact", output: new Map(), closing: false, roles: 0, relay, deviceId, readOnly, promptScreenOnly } });
             if (upgraded) return undefined as unknown as Response;
             relay.close();
           } catch { relay?.close(); return new Response("remote websocket unavailable", { status: 502 }); }
           return new Response("websocket upgrade required", { status: 426 });
         }
-        const upgraded = bunServer.upgrade(request, { data: { attached: new Map<string, { keepSize: boolean }>(), watches: new Map<string, PaneWatch>(), conversationInterests: new Map<string, { signature: string | null }>(), mode: readOnly ? "observe" : "interact", output: new Map(), closing: false, roles: 0, deviceId, readOnly } });
+        const upgraded = bunServer.upgrade(request, { data: { attached: new Map<string, { keepSize: boolean }>(), watches: new Map<string, PaneWatch>(), conversationInterests: new Map<string, { signature: string | null }>(), mode: readOnly ? "observe" : "interact", output: new Map(), closing: false, roles: 0, deviceId, readOnly, promptScreenOnly } });
         if (upgraded) return undefined as unknown as Response;
         return new Response("websocket upgrade required", { status: 426 });
       }
@@ -2884,6 +2964,7 @@ export function createServer(
         clients.add(client);
         try {
           send(client, { type: "snapshot", snapshot: await clientSnapshot(), features: SERVER_FEATURES });
+          for (const paneId of client.data.conversationInterests.keys()) reconcilePrompts(paneId);
         } catch (error) {
           const code = error instanceof HerdrError ? error.code : "snapshot_failed";
           send(client, { type: "error", code, message: error instanceof Error ? error.message : String(error) });
@@ -3051,6 +3132,7 @@ export function createServer(
                 }
                 if (!client.data.conversationInterests.has(message.pane_id)) client.data.conversationInterests.set(message.pane_id, { signature: null });
                 conversations.watch(message.pane_id);
+                reconcilePrompts(message.pane_id);
               } else {
                 client.data.conversationInterests.delete(message.pane_id);
                 releaseConversation(message.pane_id);
@@ -3606,6 +3688,11 @@ export function createServer(
       stopped = true;
       settlePortalStartup({ ok: false, error: new Error("Server stopped before Portal startup cleanup completed") });
       conversations.stop();
+      for (const observation of promptObservations.values()) {
+        observation.active = false;
+        clearTimeout(observation.timer);
+      }
+      promptObservations.clear();
       clearInterval(outputTimer);
       collector.stop();
       omo.stop();
