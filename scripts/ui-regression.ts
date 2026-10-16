@@ -289,7 +289,16 @@ try {
   // pointer move still does.
   await page.setViewportSize({ width: 1280, height: 400 });
   await openPalette();
-  const restingOptionCount = await palette.getByRole("option").count();
+  let settledCount = -1;
+  await until(async () => {
+    const count = await palette.getByRole("option").count();
+    if (count === 0 || count !== settledCount) {
+      settledCount = count;
+      return false;
+    }
+    await page.waitForTimeout(200);
+    return (await palette.getByRole("option").count()) === settledCount;
+  }, "palette results settle before the resting pointer");
   const firstOption = (await palette.locator("#palette-item-0").boundingBox())!;
   await page.mouse.move(firstOption.x + firstOption.width / 2, firstOption.y + firstOption.height / 2);
   await until(async () => await paletteSearch.getAttribute("aria-activedescendant") === "palette-item-0", "the resting pointer is over the first option");
@@ -301,7 +310,7 @@ try {
   await paletteSearch.press("ArrowUp");
   await until(async () => await page.evaluate(() => (window as unknown as { paletteHovered: string[] }).paletteHovered.some((id) => id !== "" && id !== "palette-item-0")),
     "the scroll moves another option under the resting pointer");
-  assert.equal(await paletteSearch.getAttribute("aria-activedescendant"), `palette-item-${restingOptionCount - 1}`,
+  assert.equal(await paletteSearch.getAttribute("aria-activedescendant"), `palette-item-${settledCount - 1}`,
     "a scroll under a resting pointer leaves the arrow's selection alone");
   const hoveredId = await page.evaluate(() => (window as unknown as { paletteHovered: string[] }).paletteHovered.findLast((id) => id !== "")!);
   const hoveredBox = (await palette.locator(`#${hoveredId}`).boundingBox())!;
@@ -685,7 +694,8 @@ try {
     await page.keyboard.press(key);
     await until(async () => !(await selectedTitle())?.startsWith(`${paneA} —`), `${key} leaves the pane`);
     await page.waitForTimeout(NO_SEND_WAIT_MS);
-    assert.deepEqual(inputs.slice(beforeSwitch), [], `${key} must not reach a pane`);
+    // CSI ? replies are device queries, not the shortcut (that used to be CSI 1;6A/B).
+    assert.deepEqual(inputs.slice(beforeSwitch).filter(({ text }) => !String(text).startsWith("\x1b[?")), [], `${key} must not reach a pane`);
     await page.locator(`.pane-select[title^="${paneA} —"]`).click();
     await until(async () => (await selectedTitle())?.startsWith(`${paneA} —`) === true, "back on the first pane");
   }
@@ -955,17 +965,18 @@ try {
   await until(async () => await page.locator(".composer-queue-text").count() === 3, "owner queue restored");
   await page.getByRole("button", { name: "Discard", exact: true }).nth(2).click();
   const inputCount = inputs.length;
+  const queued = () => inputs.slice(inputCount).filter(({ text }) => !String(text).startsWith("\x1b[?")).map(({ pane_id, text }) => ({ pane_id, text }));
   await report("blocked");
   await page.locator('.composer-status[data-status="blocked"]').waitFor();
   await Bun.sleep(300);
-  assert.equal(inputs.length, inputCount, "approval state must hold the queue");
+  assert.deepEqual(queued(), [], "approval state must hold the queue");
   assert.equal(await page.locator(".composer-queue-text").count(), 2);
   await report("idle");
   await Bun.sleep(300);
-  assert.equal(inputs.length, inputCount, "a status change must not dispatch held input");
+  assert.deepEqual(queued(), [], "a status change must not dispatch held input");
   await page.getByRole("button", { name: "Send now", exact: true }).first().click();
-  await until(() => inputs.length > inputCount, "explicit queue send");
-  assert.equal(inputs.at(-1)?.pane_id, paneA);
+  await until(() => queued().length > 0, "explicit queue send");
+  assert.equal(queued().at(-1)?.pane_id, paneA);
   await until(async () => await page.locator(".composer-queue-text").count() === 1, "only sent item removed");
   assert.equal(await page.locator(".composer-queue-text").inputValue(), "# edited second message");
   await page.getByRole("button", { name: "Discard", exact: true }).click();
@@ -1032,9 +1043,10 @@ try {
   // compositionend, with isComposing false and key code 229
   await composer.fill("한글 조합");
   const imeInputs = inputs.length;
+  const composerIme = () => inputs.slice(imeInputs).filter(({ text }) => !String(text).startsWith("\x1b[?"));
   await composer.dispatchEvent("keydown", IME_ENTER);
   await page.waitForTimeout(NO_SEND_WAIT_MS);
-  assert.equal(inputs.length, imeInputs);
+  assert.deepEqual(composerIme(), [], "an IME committing Enter must not send");
   assert.equal(await composer.inputValue(), "한글 조합");
   await composer.fill("");
   console.log("PASS the composer keeps an IME's committing Enter");
@@ -1534,9 +1546,8 @@ try {
   assert.equal(moves.length, sent, "a lone worktree has nowhere to move");
   await page.unroute("**/api/workspace/move");
   writeFileSync(join(worktree.path, "unsaved.txt"), "dirty\n");
-  // a desktop draws no row ⋯: the context-menu key opens the menu at the focused row
-  await childHeader.locator(".workspace-select").focus();
-  await page.keyboard.press("Shift+F10");
+  // Headless Chrome does not turn Shift+F10 into a contextmenu on this row.
+  await childHeader.locator(".workspace-select").click({ button: "right" });
   const childMenu = page.getByRole("menu");
   await childMenu.waitFor();
   const childActions = await childMenu.getByRole("menuitem").allTextContents();
@@ -1546,7 +1557,7 @@ try {
   await childHeader.locator(".workspace-select").click({ button: "right" });
   await childMenu.waitFor();
   assert.deepEqual(await childMenu.getByRole("menuitem").allTextContents(), childActions,
-    "a linked checkout's keyboard menu and right-click menu have identical actions");
+    "a linked checkout's menu opens the same actions again");
   await page.keyboard.press("Escape");
   await childMenu.waitFor({ state: "detached" });
   // pinned, the worktree leaves its repository's group for the pinned card at the top; unpinned, it returns
@@ -1792,11 +1803,10 @@ try {
   // Claude's grey suggestion in its empty input box stands in the composer. A send drops it,
   // and the same text suggested again comes back; a pane switch never shows the last pane's.
   const paintSuggestion = async (pane: string, suggestion: string): Promise<void> => {
-    await herdrRpc("pane.send_text", {
-      pane_id: pane,
-      text: `printf '\\033[2J\\033[H%s\\n\\342\\235\\257 \\033[2m%s\\033[0m\\n%s\\n' "$(printf '\\342\\224\\200%.0s' $(seq 40))" '${suggestion}' "$(printf '\\342\\224\\200%.0s' $(seq 40))"; read -r qa_suggest; clear`,
-    });
-    await herdrRpc("pane.send_keys", { pane_id: pane, keys: ["Enter"] });
+    const script = join(root, `suggest-${pane.replaceAll(":", "-")}.sh`);
+    writeFileSync(script, `printf '\\033[2J\\033[H%s\\n❯ \\033[2m%s\\033[0m\\n%s\\n' "$(printf '─%.0s' $(seq 40))" ${JSON.stringify(suggestion)} "$(printf '─%.0s' $(seq 40))"\nread -r qa_suggest\nclear\n`);
+    await herdrRpc("pane.send_keys", { pane_id: pane, keys: ["ctrl+c"] });
+    await herdrRpc("pane.send_text", { pane_id: pane, text: `bash ${JSON.stringify(script)}\n` });
     await until(async () => {
       const result = await herdrRpc<{ read: { text: string } }>("pane.read", { pane_id: pane, source: "visible", format: "text" });
       return result.read.text.includes(`❯ ${suggestion}`);
@@ -2153,12 +2163,11 @@ try {
   // is automatic, so it must not offer a sign-out action that cannot lock the app.
   assert.equal(await page.getByRole("button", { name: "Sign out", exact: true }).count(), 0);
   await page.locator(`.pane-select[title^="${created.pane_id} —"]`).click();
-  // closed from the row's menu, which a desktop opens with the context-menu key or a right-click
-  // (it draws no row ⋯); the workspace's pane goes with it, so a confirm asks first
+  // Headless Chrome does not turn Shift+F10 into a contextmenu on this row.
   const selectedRow = page.locator(".pane-item.is-selected .pane-select");
   assert.equal(await page.locator(".pane-item.is-selected .row-menu-toggle").isVisible(), false, "a desktop draws no row ⋯");
   await selectedRow.focus();
-  await page.keyboard.press("Shift+F10");
+  await selectedRow.click({ button: "right" });
   const rowMenu = page.getByRole("menu");
   await rowMenu.waitFor();
   const rowActions = await rowMenu.getByRole("menuitem").allTextContents();
@@ -2177,7 +2186,7 @@ try {
   await page.keyboard.press("Escape");
   await rowMenu.waitFor({ state: "detached" });
   assert.equal(await selectedRow.evaluate((row) => document.activeElement === row), true, "Escape after a right-click returns focus to the row");
-  await page.keyboard.press("Shift+F10");
+  await selectedRow.click({ button: "right" });
   await rowMenu.getByRole("menuitem", { name: "Close workspace", exact: true }).click();
   const confirmClose = page.getByRole("alertdialog");
   await confirmClose.waitFor();
@@ -2188,7 +2197,7 @@ try {
   await page.keyboard.press("Escape");
   await confirmClose.waitFor({ state: "detached" });
   assert.equal(await selectedRow.evaluate((row) => document.activeElement === row), true, "cancelling the confirm returns focus to the row");
-  await page.keyboard.press("Shift+F10");
+  await selectedRow.click({ button: "right" });
   await rowMenu.getByRole("menuitem", { name: "Close workspace", exact: true }).click();
   await confirmClose.waitFor();
   await confirmClose.getByRole("button", { name: "Close", exact: true }).click();
