@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import type { Browser, BrowserContext } from "playwright-core";
+import type { Browser, BrowserContext, WebSocket } from "playwright-core";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -8,6 +8,61 @@ import { terminalOracle } from "./terminal-input-oracle.ts";
 import { browserEvidencePage, browserEvidenceTracing, startBrowserEvidence } from "./browser-evidence.ts";
 import type { BrowserEvidenceSession } from "./browser-evidence.ts";
 
+/** Account for DA1/DECRQM replies only after this socket received the corresponding pane query. */
+function terminalNegotiation(panes: string[]) {
+  const replies = new Map(panes.map((pane) => [pane, [] as string[]]));
+  const sockets = new WeakMap<WebSocket, Map<string, { tail: string; pending: string[] }>>();
+  const state = (socket: WebSocket, pane: string) => {
+    let byPane = sockets.get(socket);
+    if (!byPane) { byPane = new Map(); sockets.set(socket, byPane); }
+    let value = byPane.get(pane);
+    if (!value) { value = { tail: "", pending: [] }; byPane.set(pane, value); }
+    return value;
+  };
+  return {
+    output(socket: WebSocket, message: Record<string, unknown>) {
+      if (message.type !== "pty-data" || typeof message.pane_id !== "string"
+        || !replies.has(message.pane_id) || typeof message.data !== "string") return;
+      const value = state(socket, message.pane_id);
+      const text = value.tail + message.data;
+      for (const query of text.matchAll(/\x1b\[(?:0?c|\?(\d+)\$p)/g)) {
+        if (query.index! + query[0].length > value.tail.length) value.pending.push(query[1] ?? "attributes");
+      }
+      value.tail = text.slice(-64);
+    },
+    input(socket: WebSocket, message: Record<string, unknown>) {
+      if ((message.type === "attach" || message.type === "detach") && typeof message.pane_id === "string" && replies.has(message.pane_id)) {
+        const value = state(socket, message.pane_id);
+        value.tail = ""; value.pending = [];
+        return;
+      }
+      if (message.type !== "input" || typeof message.pane_id !== "string"
+        || !replies.has(message.pane_id) || typeof message.text !== "string") return;
+      const parts = message.text.match(/\x1b\[\?(?:\d+(?:;\d+)*c|\d+;[0-4]\$y)/g);
+      if (!parts || parts.join("") !== message.text) return;
+      const value = state(socket, message.pane_id);
+      const pending = value.pending.slice();
+      for (const part of parts) {
+        const kind = part.endsWith("c") ? "attributes" : /^\x1b\[\?(\d+);/.exec(part)![1]!;
+        const index = pending.indexOf(kind);
+        if (index < 0) return;
+        pending.splice(index, 1);
+      }
+      value.pending = pending;
+      replies.get(message.pane_id)!.push(...parts);
+    },
+    userBytes(pane: string, raw: Buffer): Buffer {
+      const remaining = replies.get(pane)!.map((text) => Buffer.from(text));
+      const user: number[] = [];
+      for (let at = 0; at < raw.length;) {
+        const index = remaining.findIndex((reply) => raw.subarray(at, at + reply.length).equals(reply));
+        if (index < 0) user.push(raw[at++]!);
+        else { at += remaining[index]!.length; remaining.splice(index, 1); }
+      }
+      return Buffer.from(user);
+    },
+  };
+}
 /** Switching attachments emits terminal replies, not just keys. Check the actual foreground bytes. */
 export async function checkPaneShortcuts(browser: Browser, origin: string, paneA: string, paneB: string): Promise<void> {
   const root = mkdtempSync(join(tmpdir(), "herdr-pane-shortcut-"));
@@ -26,6 +81,12 @@ export async function checkPaneShortcuts(browser: Browser, origin: string, paneA
   };
   const bytes = (id: string, offset: number) => readFileSync(files.get(id)!).subarray(offset);
   const length = (id: string) => readFileSync(files.get(id)!).length;
+  const negotiation = terminalNegotiation(panes);
+  const expected = new Map(panes.map((id) => [id, [] as number[]]));
+  const assertForeground = (id: string, added: number[], label: string) => {
+    expected.get(id)!.push(...added);
+    assert.deepEqual(negotiation.userBytes(id, bytes(id, 0)), Buffer.from(expected.get(id)!), label);
+  };
   try {
     for (const [index, id] of panes.entries()) {
       const script = join(root, `${index}.cjs`);
@@ -61,10 +122,14 @@ process.stdin.on("data", data => {
     const oracles = new Map(panes.map((id) => [id, terminalOracle(page, id)]));
     // Keep foreign-pane traffic visible; native files account for every byte in the two owned targets.
     const foreign: unknown[] = [];
-    page.on("websocket", (socket) => socket.on("framesent", ({ payload }) => {
-      const message = JSON.parse(String(payload));
-      if (["input", "keys", "submit"].includes(message.type) && !panes.includes(message.pane_id)) foreign.push(message);
-    }));
+    page.on("websocket", (socket) => {
+      socket.on("framereceived", ({ payload }) => negotiation.output(socket, JSON.parse(String(payload))));
+      socket.on("framesent", ({ payload }) => {
+        const message = JSON.parse(String(payload));
+        negotiation.input(socket, message);
+        if (["input", "keys", "submit"].includes(message.type) && !panes.includes(message.pane_id)) foreign.push(message);
+      });
+    });
     const selected = async () => (await page.locator(".pane-item.is-selected .pane-select").getAttribute("title"))?.split(" — ")[0];
     const input = page.locator(".pane-frame.is-current .xterm-helper-textarea");
     const focus = async (id: string) => {
@@ -91,7 +156,7 @@ process.stdin.on("data", data => {
       const offset = length(id);
       await page.keyboard.press("j");
       await marker(id, offset);
-      assert.deepEqual(bytes(id, offset), Buffer.from([0x6a, 7]), `ordinary input must reach ${id} exactly once`);
+      assertForeground(id, [0x6a, 7], `ordinary input must reach ${id} exactly once`);
     };
     await page.goto(`${origin}/?pane=${encodeURIComponent(paneA)}`);
     await positive(paneA);
@@ -106,8 +171,7 @@ process.stdin.on("data", data => {
       await marker(target, offsets.get(target)!);
       await choose(source);
       await marker(source, offsets.get(source)!);
-      for (const id of panes) assert.deepEqual(bytes(id, offsets.get(id)!), Buffer.from([7]),
-        `${key} must not reach either foreground; pane=${id}`);
+      for (const id of panes) assertForeground(id, [7], `${key} must not reach either foreground; pane=${id}`);
       assert.deepEqual(foreign, [], "pane shortcuts must never send input to a foreign pane");
       await positive(target);
     }

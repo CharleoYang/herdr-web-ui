@@ -29,6 +29,7 @@ import { ApiError } from "../lib/api.ts";
 import { copyText } from "../lib/clipboard.ts";
 import { attachmentFileName, mentionFileName, type GalleryImage } from "../lib/imageViewer.ts";
 import { useMachineApi } from "../lib/machineContext.tsx";
+import { useMachineSessions } from "../lib/machineSessionContext.tsx";
 import { toTranscriptMessages, type TranscriptMessage } from "../lib/transcript.ts";
 import { isLiveWorkTurn, isWaitingWorkTurn, formatWorkDuration, splitTurn, workFailed, workStartsOpen, workSummary, type ToolPart as ToolPartType } from "../lib/workBlocks.ts";
 import { itemsRows, phaseRows, planRows, taskRows, todoRows, type ChecklistRow } from "../lib/checklist.ts";
@@ -809,6 +810,8 @@ export const ChatView = memo(function ChatView({ paneId, active = true, visible:
   const { fetchPaneConversation, peekPaneConversation, fetchPanePromptState, fetchPaneTranscript } = useMachineApi();
   const { settings } = useSettings();
   const machineId = useMachineId();
+  const machineSessions = useMachineSessions();
+  const promptSession = machineSessions?.get(machineId) ?? null;
   const skillMatcher = useSkillMatcher(paneId);
   // polls pause while the page or the pane is hidden and pick up at once when it is back
   const pageVisible = usePageVisible();
@@ -1218,51 +1221,87 @@ export const ChatView = memo(function ChatView({ paneId, active = true, visible:
     if (index >= 0) void timeline.current?.scrollToIndex({ index, viewPosition: 0, viewOffset: anchor.offset, animated: false });
   }, [older]);
 
-  // Prompts belong to the visible screen, not the native transcript. A bridge that pushes them
-  // replaces the 2s poll; the first read, a reconnect, and coming back from hidden stay on REST.
+  // Idle trust/approval menus need observation even without transcript mutations. An advertised
+  // bridge observes them; older bridges retain this chat's independent 2s REST fallback.
   const pollPrompt = connected && !ended && agent !== null;
-  const promptPushesRef = useRef(promptPushes);
-  promptPushesRef.current = promptPushes;
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!pollPrompt) { setPrompt(null); setRestored(null); onSuggestionRef.current?.(paneId, null); onRestoredRef.current?.(paneId, null); return; }
     if (!visible) return;
     let cancelled = false;
     let timer = 0;
+    let revision = 0;
+    let reading = false;
+    let requested = false;
+    const socket = promptSession?.socket;
+    const pushes = (): boolean => socket ? socket.promptPushes(paneId) : promptPushes;
+    const sent = sentKeyRef.current;
+    const current = (): boolean => !cancelled && document.visibilityState !== "hidden" && shownPane.current === paneId;
+    const showPrompt = (next: { prompt: InteractivePrompt | null; suggestion: string | null; restored: string | null }): void => {
+      // Keep one object per on-screen occurrence; a null state ends that occurrence.
+      setPrompt((before) => before?.id === next.prompt?.id ? before : next.prompt);
+      if (sentKeyRef.current !== sent) return;
+      onSuggestionRef.current?.(paneId, next.suggestion);
+      setRestored(next.restored);
+      onRestoredRef.current?.(paneId, next.restored);
+    };
     const readPrompt = async (): Promise<void> => {
-      const sent = sentKeyRef.current;
+      window.clearTimeout(timer);
+      if (!current()) return;
+      if (reading) { requested = true; return; }
+      requested = false;
+      reading = true;
+      const started = revision;
+      const epoch = promptSession?.epoch;
       try {
         const next = await fetchPanePromptState(paneId);
-        if (!cancelled) {
-          setPrompt((current) => current?.id === next.prompt?.id ? current : next.prompt);
-          if (sentKeyRef.current === sent) {
-            onSuggestionRef.current?.(paneId, next.suggestion);
-            setRestored(next.restored);
-            onRestoredRef.current?.(paneId, next.restored);
-          }
+        if (current() && revision === started && promptSession?.epoch === epoch) showPrompt(next);
+      } catch {
+        if (current() && revision === started && promptSession?.epoch === epoch && !pushes()) showPrompt({ prompt: null, suggestion: null, restored: null });
+      } finally {
+        reading = false;
+        if (current()) {
+          if (requested) void readPrompt();
+          else if (!pushes()) timer = window.setTimeout(() => void readPrompt(), PROMPT_POLL_MS);
         }
       }
-      catch { if (!cancelled) { setPrompt(null); setRestored(null); onSuggestionRef.current?.(paneId, null); onRestoredRef.current?.(paneId, null); } }
-      finally { if (!cancelled && !promptPushesRef.current) timer = window.setTimeout(() => void readPrompt(), PROMPT_POLL_MS); }
     };
-    void readPrompt();
-    return () => { cancelled = true; window.clearTimeout(timer); };
-  }, [pollPrompt, paneId, promptPollKey, promptRefreshKey, fetchPanePromptState, visible, promptPushes]);
-  useEffect(() => {
-    if (!promptPushes || !visible) return;
     const applyPush = (message: Extract<ServerMessage, { type: "prompt-push" }>): void => {
-      if (message.pane_id !== paneId) return;
-      const sent = sentKeyRef.current;
-      setPrompt((current) => current?.id === message.prompt?.id ? current : message.prompt);
-      if (sentKeyRef.current === sent) {
-        onSuggestionRef.current?.(paneId, message.suggestion);
-        setRestored(message.restored);
-        onRestoredRef.current?.(paneId, message.restored);
-      }
+      if (!current() || message.pane_id !== paneId || !pushes()) return;
+      revision++;
+      window.clearTimeout(timer);
+      showPrompt(message);
     };
     onPromptUpdate?.(applyPush);
-    return () => onPromptUpdate?.(null);
-  }, [promptPushes, visible, paneId, onPromptUpdate]);
-
+    const offMessage = socket?.on((message) => {
+      if (!current()) return;
+      if (message.type === "snapshot") {
+        // Reconcile on every connection, including an old/no-feature bridge after reconnect.
+        revision++;
+        void readPrompt();
+      }
+    });
+    const offDisconnect = socket?.onDisconnect(() => {
+      revision++;
+      requested = false;
+      window.clearTimeout(timer);
+    });
+    // Synchronous fence: hide/show may be batched without a React visibility commit.
+    const visibilityChanged = (): void => {
+      revision++;
+      window.clearTimeout(timer);
+      if (current()) void readPrompt();
+    };
+    document.addEventListener("visibilitychange", visibilityChanged);
+    void readPrompt(); // REST bootstrap and explicit answer/send reconciliation remain authoritative.
+    return () => {
+      cancelled = true;
+      revision++;
+      window.clearTimeout(timer);
+      offMessage?.(); offDisconnect?.();
+      onPromptUpdate?.(null);
+      document.removeEventListener("visibilitychange", visibilityChanged);
+    };
+  }, [pollPrompt, paneId, machineId, promptSession, promptPollKey, promptRefreshKey, sentKey, fetchPanePromptState, visible, promptPushes, onPromptUpdate]);
 
   useEffect(() => {
     onPrompt?.(paneId, prompt);

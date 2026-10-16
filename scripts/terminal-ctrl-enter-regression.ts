@@ -1,23 +1,22 @@
 import assert from "node:assert/strict";
 import type { Browser } from "playwright-core";
-import { appendFileSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { paneSendKeys, paneSendText } from "../server/herdr/client.ts";
+import { paneRead, paneSendKeys, paneSendText } from "../server/herdr/client.ts";
+import { terminalOracle } from "./terminal-input-oracle.ts";
+import type { TerminalInput } from "./terminal-input-oracle.ts";
 
 const MODIFIED_CTRL_ENTER = "\x1b[27;5;13~";
-/** how long a send that should not happen gets to show up */
-const NO_SEND_WAIT_MS = 300;
 
-async function until(check: () => boolean, label: string): Promise<void> {
+async function until(check: () => boolean | Promise<boolean>, label: string): Promise<void> {
   const deadline = Date.now() + 5_000;
-  while (!check()) {
+  while (!(await check())) {
     if (Date.now() > deadline) throw new Error(`Timed out: ${label}`);
     await new Promise((resolve) => setTimeout(resolve, 50));
   }
 }
 
-type Sent = { type: "input"; pane_id: string; text: string } | { type: "keys"; pane_id: string; keys: string[] };
 
 /**
  * Ctrl+Enter against a pane owned by the UI suite: plain Enter until the program asks for
@@ -28,97 +27,93 @@ type Sent = { type: "input"; pane_id: string; text: string } | { type: "keys"; p
  * program's own mode: the program reads the same bytes either way.
  */
 export async function checkCtrlEnter(browser: Browser, origin: string, paneId: string): Promise<void> {
-  const context = await browser.newContext({ viewport: { width: 1100, height: 650 } });
-  await context.addInitScript((id) => {
-    Object.defineProperty(navigator, "platform", { get: () => "Linux x86_64" });
-    localStorage.setItem("herdr-web-ui:settings", JSON.stringify({ language: "en" }));
-    localStorage.setItem(`herdr-web-ui:view:${id}`, "terminal");
-  }, paneId);
+  // The same owned recorder produces OFF -> ON -> OFF before each measured action.
   const fixture = mkdtempSync(join(tmpdir(), "herdr-ctrl-enter-"));
   const received = join(fixture, "received.txt");
   const script = join(fixture, "keys.cjs");
-  // asks for modifyOtherKeys like Claude Code, gives it up on "o", and writes down every read
+  // Record raw bytes, not data-event boundaries; mode controls are individual ASCII bytes.
   writeFileSync(script, `const fs = require("node:fs");
 process.stdin.setRawMode(true);
-process.stdout.write("\\x1b[2J\\x1b[H\\x1b[>4;2mOwned Ctrl+Enter test: modifyOtherKeys on\\r\\n");
+process.stdout.write("\\x1b[2J\\x1b[H\\x1b[>4;0mOwned Ctrl+Enter test: initial off\\r\\n");
 process.stdin.on("data", (data) => {
-  fs.appendFileSync(${JSON.stringify(received)}, data.toString("hex") + "\\n");
-  if (data.includes(3)) {
-    process.stdout.write("\\x1b[>4;0m");
-    process.exit(0);
+  fs.appendFileSync(${JSON.stringify(received)}, data);
+  for (const byte of data) {
+    if (byte === 3) {
+      process.stdout.write("\\x1b[>4;0m");
+      process.exit(0);
+    }
+    if (byte === 110) process.stdout.write("\\x1b[>4;2mOwned Ctrl+Enter test: modifyOtherKeys on\\r\\n");
+    if (byte === 111) process.stdout.write("\\x1b[>4;0mOwned Ctrl+Enter test: final off\\r\\n");
   }
-  if (data.toString() === "o") process.stdout.write("\\x1b[>4;0mOwned Ctrl+Enter test: modifyOtherKeys off\\r\\n");
 });
 `);
-  appendFileSync(received, "");
+  writeFileSync(received, "");
+  let context: Awaited<ReturnType<Browser["newContext"]>> | undefined;
   try {
-    const page = await context.newPage();
-    const inputs: Sent[] = [];
-    let mirrored = false;
-    let inputReady = false;
-    page.on("websocket", (socket) => {
-      socket.on("framesent", ({ payload }) => {
-        const message = JSON.parse(String(payload));
-        if (message.type === "input" || message.type === "keys") inputs.push(message);
-      });
-      // a mirror's fixed grid is told before input-ready, on the same socket
-      socket.on("framereceived", ({ payload }) => {
-        const message = JSON.parse(String(payload));
-        if (message.pane_id !== paneId) return;
-        if (message.type === "pane-geometry" && message.fixed) mirrored = true;
-        if (message.type === "input-ready") inputReady = message.ready !== false;
-      });
-    });
-    await page.goto(`${origin}/?pane=${encodeURIComponent(paneId)}`);
-    await page.locator(".conn-live").waitFor();
-    const input = page.locator(".xterm-helper-textarea");
-    await input.waitFor();
-    await until(() => inputReady, "input-ready");
-    const typed = (text: string): Sent => ({ type: "input", pane_id: paneId, text });
-    /** Ctrl+Enter's frame: herdr's key on a mirror, else what the program asked for */
-    const ctrlEnter = (modified: boolean): Sent => mirrored ? { type: "keys", pane_id: paneId, keys: ["ctrl+enter"] }
-      : typed(modified ? MODIFIED_CTRL_ENTER : "\r");
-    const isModifiedCtrlEnter = (sent: Sent): boolean => sent.type === "keys" ? sent.keys.includes("ctrl+enter")
-      : sent.text === MODIFIED_CTRL_ENTER;
-    const screen = (text: string) => page.locator(".pane-terminal .xterm-rows", { hasText: text }).waitFor();
-    const press = async (shortcut: string, expected: Sent): Promise<void> => {
-      const before = inputs.length;
-      await input.press(shortcut);
-      await until(() => inputs.length > before, shortcut);
-      await page.waitForTimeout(NO_SEND_WAIT_MS);
-      assert.deepEqual(inputs.slice(before), [expected], `${shortcut} must send ${JSON.stringify(expected)} exactly once`);
-    };
-    const reads = (): string[] => readFileSync(received, "utf8").split("\n").filter(Boolean);
-    /** the program read `expected` after its first `since` reads */
-    const read = async (expected: string, since: number): Promise<void> => {
-      const hex = Buffer.from(expected, "latin1").toString("hex");
-      await until(() => reads().slice(since).includes(hex), `the pane reads ${JSON.stringify(expected)}`);
-    };
-
-    // a shell asked for nothing: Ctrl+Enter is the Enter it always was
-    await press("Control+Enter", ctrlEnter(false));
+    await paneSendKeys(paneId, ["ctrl+c"]);
     await paneSendText(paneId, `node ${script}`);
     await paneSendKeys(paneId, ["Enter"]);
-    await screen("modifyOtherKeys on");
-    let since = reads().length;
-    await press("Control+Enter", ctrlEnter(true));
-    await read(MODIFIED_CTRL_ENTER, since);
+    await until(async () => (await paneRead({ paneId, source: "visible" })).text.includes("Owned Ctrl+Enter test: initial off"), "owned raw recorder must start");
+    context = await browser.newContext({ viewport: { width: 1100, height: 650 } });
+    await context.addInitScript(({ expectedOrigin, paneId }) => {
+      if (location.origin !== expectedOrigin) return;
+      Object.defineProperty(navigator, "platform", { get: () => "Linux x86_64" });
+      localStorage.setItem("herdr-web-ui:settings", JSON.stringify({ language: "en" }));
+      localStorage.setItem(`herdr-web-ui:view:${paneId}`, "terminal");
+    }, { expectedOrigin: new URL(origin).origin, paneId });
+    const page = await context.newPage();
+    const oracle = terminalOracle(page, paneId);
+    await page.goto(`${origin}/?pane=${encodeURIComponent(paneId)}`);
+    const input = page.locator(".xterm-helper-textarea");
+    await input.waitFor();
+    const { mirrored } = await oracle.ready();
+    const typed = (text: string): TerminalInput => ({ type: "input", pane_id: paneId, text });
+    /** Ctrl+Enter's frame: herdr's key on a mirror, else what the program asked for */
+    const ctrlEnter = (modified: boolean): TerminalInput => mirrored ? { type: "keys", pane_id: paneId, keys: ["ctrl+enter"] }
+      : typed(modified ? MODIFIED_CTRL_ENTER : "\r");
+    const screen = (text: string) => page.locator(".pane-terminal .xterm-rows", { hasText: text }).waitFor();
+    // Bound the complete raw stream by the physical marker, not by an expected byte count.
+    const capture = async (action: () => Promise<unknown>, label: string) => {
+      const before = readFileSync(received).length;
+      const frames = await oracle.measure(action);
+      let bytes = Buffer.alloc(0);
+      await until(() => {
+        bytes = readFileSync(received).subarray(before);
+        return bytes.length > 0 && bytes.at(-1) === 7;
+      }, `${label}: native bytes through final physical marker`);
+      return { frames, bytes };
+    };
+    const measure = async (action: () => Promise<unknown>, expected: TerminalInput[], bytes: string, label: string): Promise<void> => {
+      const actual = await capture(action, label);
+      assert.deepEqual(actual.frames, expected, `${label}: exact native frames`);
+      assert.deepEqual(actual.bytes, Buffer.from(`${bytes}\x07`, "utf8"), `${label}: ordered bytes including marker, independent of data-event chunks`);
+    };
+    const press = (shortcut: string, expected: TerminalInput, bytes: string) => measure(() => input.press(shortcut), [expected], bytes, shortcut);
+    const mode = async (control: string, rendered: string) => {
+      await measure(() => input.press(control), [typed(control)], control, `mode control ${control}`);
+      await screen(rendered);
+      await oracle.ready();
+    };
+    await screen("initial off");
+    await press("Control+Enter", ctrlEnter(false), "\r");
+    await mode("n", "modifyOtherKeys on");
+    await press("Control+Enter", ctrlEnter(true), MODIFIED_CTRL_ENTER);
     for (const [shortcut, expected] of [["Enter", "\r"], ["Shift+Enter", "\x1b\r"], ["Alt+Enter", "\x1b\r"]]) {
-      await press(shortcut!, typed(expected!));
+      await press(shortcut!, typed(expected!), expected!);
     }
     // a composition's Enter belongs to the IME
     for (const composition of [{ isComposing: true, keyCode: 13 }, { isComposing: false, keyCode: 229 }]) {
-      const before = inputs.length;
-      await input.dispatchEvent("keydown", {
+      const actual = await capture(() => input.dispatchEvent("keydown", {
         key: "Enter", code: "Enter", ctrlKey: true, ...composition, bubbles: true, cancelable: true,
-      });
-      await page.waitForTimeout(NO_SEND_WAIT_MS);
-      assert.equal(inputs.slice(before).some(isModifiedCtrlEnter), false,
-        "an IME commit must not receive the modified Ctrl+Enter");
+      }), "active IME native handling");
+      assert.equal(actual.frames.some((frame) => frame.type === "input" ? frame.text.includes(MODIFIED_CTRL_ENTER)
+        : frame.keys.some((key) => key.includes(MODIFIED_CTRL_ENTER) || /^(?:ctrl|control)\+enter$/i.test(key))), false,
+        `an IME commit must not receive modified Ctrl+Enter; native traffic=${JSON.stringify(actual.frames)}`);
+      assert.equal(actual.bytes.includes(Buffer.from(MODIFIED_CTRL_ENTER, "utf8")), false,
+        `an IME commit must not produce modified Ctrl+Enter bytes; native bytes=${actual.bytes.toString("hex")}`);
     }
     // pending IME text goes before the key
-    const beforeCommit = inputs.length;
-    await input.evaluate(async (element) => {
+    await measure(() => input.evaluate(async (element) => {
       const textarea = element as HTMLTextAreaElement;
       textarea.value = "";
       textarea.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }));
@@ -129,22 +124,16 @@ process.stdin.on("data", (data) => {
       const enter = { key: "Enter", code: "Enter", keyCode: 13, which: 13, ctrlKey: true, bubbles: true, cancelable: true };
       textarea.dispatchEvent(new KeyboardEvent("keydown", enter));
       textarea.dispatchEvent(new KeyboardEvent("keyup", enter));
-    });
-    await until(() => inputs.length >= beforeCommit + 2, "IME commit followed by Ctrl+Enter");
-    await page.waitForTimeout(NO_SEND_WAIT_MS);
-    assert.deepEqual(inputs.slice(beforeCommit), [typed("한"), ctrlEnter(true)],
-      "pending IME text must precede Ctrl+Enter without duplicates");
-    // the program gives modifyOtherKeys up: Enter again
-    await paneSendText(paneId, "o");
-    await screen("modifyOtherKeys off");
-    since = reads().length;
-    await press("Control+Enter", ctrlEnter(false));
-    await read("\r", since);
+    }), [typed("한"), ctrlEnter(true)], `한${MODIFIED_CTRL_ENTER}`, "pending IME text must precede Ctrl+Enter without duplicates");
+    await mode("o", "final off");
+    await press("Control+Enter", ctrlEnter(false), "\r");
     console.log(`PASS Ctrl+Enter stays Enter until the pane asks for modifyOtherKeys, then reaches it as CSI 27;5;13~${mirrored ? " (mirrored pane, herdr's key)" : ""}`);
     console.log("PASS Enter, Shift+Enter and Alt+Enter keep their sequences; IME text precedes Ctrl+Enter");
   } finally {
-    await paneSendKeys(paneId, ["ctrl+c"]).catch(() => {});
-    await context.close();
-    if (existsSync(fixture)) rmSync(fixture, { recursive: true, force: true });
+    try { await paneSendKeys(paneId, ["ctrl+c"]); }
+    finally {
+      try { await context?.close(); }
+      finally { rmSync(fixture, { recursive: true, force: true }); }
+    }
   }
 }
