@@ -311,6 +311,8 @@ export class HerdrSocket {
       // Do not let a frame left over from a detached chat establish a new page baseline.
       if (message.type === "conversation-delta" && (!this.conversationPushes()
         || !this.attached.has(message.pane_id) || !this.conversationWanted.has(message.pane_id))) return;
+      if (message.type === "prompt-push" && (!this.promptPushes()
+        || !this.attached.has(message.pane_id) || !this.conversationWanted.has(message.pane_id))) return;
       // ended before the handlers run, so the input checks they make already read true; the pong
       // goes on to them, so a view that read input as refused during the probe reads it again
       if (message.type === "pong" && this.probeIds.has(message.id)) {
@@ -675,6 +677,11 @@ export class HerdrSocket {
   conversationPushes(): boolean {
     return this.connected && this.features.has("conversation-watch") && this.features.has("conversation-delta");
   }
+  /** Prompt pushes replace the visible chat's 2s poll. Older bridges keep that poll. */
+  promptPushes(): boolean {
+    return this.connected && this.features.has("conversation-watch") && this.features.has("prompt-push");
+  }
+
 
   /** Capture connection AND subscription before xterm's asynchronous write. Never queue ACKs. */
   outputAcknowledgement(message: Extract<ServerMessage, { type: "pty-data" }>): (() => void) | undefined {

@@ -89,7 +89,7 @@ import {
   worktreeRemove,
 } from "./herdr/client.ts";
 import { type AlertTiming, createPushService, defaultStateDir, handlePushRequest } from "./push.ts";
-import { CLAUDE_CLEAR_INPUT_KEYS, claudeClearableDraft, claudeHeldIsGrey, claudeInputBoxContent, claudeInputDraft, shownInputBox, claudeInputEmpty, viewportShowsLive, codexQuestionsCollapsed, handlePromptRequest, isClaudeHeld, heldCandidate, modelListWaits, noteSubmitted, parseInteractivePrompt, promptWaitEnded, claudeRestoredDraft, lastChatSubmitted } from "./prompt.ts";
+import { CLAUDE_CLEAR_INPUT_KEYS, claudeClearableDraft, claudeHeldIsGrey, claudeInputBoxContent, claudeInputDraft, shownInputBox, claudeInputEmpty, viewportShowsLive, codexQuestionsCollapsed, handlePromptRequest, isClaudeHeld, heldCandidate, modelListWaits, noteSubmitted, parseInteractivePrompt, promptWaitEnded, claudeRestoredDraft, lastChatSubmitted, readPromptState, type PromptState } from "./prompt.ts";
 import { secretPrompt, validSecret } from "../shared/secret-prompt.ts";
 import { PasteImageError, readImageBody, savePaneImage } from "./paste.ts";
 import { PtySession } from "./pty/session.ts";
@@ -224,7 +224,7 @@ const RESTORED_CLEAR_GAP_MS = 200;
 const RESTORED_CLEAR_SETTLE_MS = 300;
 /** what a send must still have of its deadline before the copy is cleared: the clear, the box read again, then the send */
 const RESTORED_CLEAR_RESERVE_MS = 2_000;
-const SERVER_FEATURES: ServerFeature[] = ["submit", "pending-input", "pending-hold", "secret-input", "input-ready", "take-over", "watch", "conversation-watch", "ping", "conversation-delta"];
+const SERVER_FEATURES: ServerFeature[] = ["submit", "pending-input", "pending-hold", "secret-input", "input-ready", "take-over", "watch", "conversation-watch", "ping", "conversation-delta", "prompt-push"];
 
 /** the sides herdr's pane.swap and pane.resize take; anything else is refused before the RPC, which would answer invalid_request */
 const isPaneDirection = (value: unknown): value is PaneDirection => value === "left" || value === "right" || value === "up" || value === "down";
@@ -573,6 +573,37 @@ export function createServer(
     conversationReads.set(paneId, run);
     void run.finally(() => { if (conversationReads.get(paneId) === run) conversationReads.delete(paneId); });
   }, options.codexHome, options.devinDbPath, options.opencodeDb, options.hermesHome, options.grokHome);
+  const PROMPT_PUSH_MS = 2_000;
+  const promptBodies = new Map<string, string>();
+  const promptWatched = (): Set<string> => {
+    const panes = new Set<string>();
+    if (stopped) return panes;
+    for (const client of clients) {
+      if (client.data.closing || client.readyState !== WebSocket.OPEN || !client.data.features?.includes("prompt-push")) continue;
+      for (const paneId of client.data.conversationInterests.keys()) if (client.data.attached.has(paneId)) panes.add(paneId);
+    }
+    return panes;
+  };
+  const publishPrompts = async (): Promise<void> => {
+    const panes = promptWatched();
+    for (const paneId of promptBodies.keys()) if (!panes.has(paneId)) promptBodies.delete(paneId);
+    await Promise.all([...panes].map(async (paneId) => {
+      let state: PromptState;
+      try { state = await readPromptState(paneId, { codexHome: options.codexHome, claudeTranscript: (id) => claudeAgents.sessionOf(id)?.path ?? null }); }
+      catch { return; }
+      const body = JSON.stringify(state);
+      if (promptBodies.get(paneId) === body) return;
+      let delivered = false;
+      for (const client of clients) {
+        if (!conversationEligible(client, paneId) || !client.data.features?.includes("prompt-push")) continue;
+        if (send(client, { type: "prompt-push", pane_id: paneId, ...state }) !== 0) delivered = true;
+      }
+      if (delivered) promptBodies.set(paneId, body);
+    }));
+  };
+  const promptTimer = setInterval(() => { void publishPrompts(); }, PROMPT_PUSH_MS);
+  promptTimer.unref();
+
 
   function releaseConversation(paneId: string): void {
     for (const client of clients) {
@@ -3607,6 +3638,7 @@ export function createServer(
       settlePortalStartup({ ok: false, error: new Error("Server stopped before Portal startup cleanup completed") });
       conversations.stop();
       clearInterval(outputTimer);
+      clearInterval(promptTimer);
       collector.stop();
       omo.stop();
       gjc.stop();

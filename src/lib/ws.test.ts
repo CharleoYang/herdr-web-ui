@@ -1746,3 +1746,26 @@ it("never forwards a stale connection's page or inherits its delta feature acros
     expect(received).toEqual([current]);
   } finally { client.close(); }
 });
+
+it("delivers prompt frames only for an advertised, attached, interested pane", () => {
+  const client = new HerdrSocket("ws://test/ws");
+  const received: unknown[] = [];
+  client.on((message) => { if (message.type === "prompt-push") received.push(message); });
+  client.connect();
+  const socket = FakeSocket.last; socket.open();
+  const frame = { type: "prompt-push", pane_id: "w1:p1", prompt: null, suggestion: null, restored: null };
+  try {
+    socket.receive(frame);
+    socket.receive(snapshot(["conversation-watch"]));
+    expect(client.promptPushes()).toBe(false);
+    client.attach("w1:p1", 80, 24, true); client.watchConversation("w1:p1", true);
+    socket.receive(frame);
+    socket.receive(snapshot(["conversation-watch", "prompt-push"]));
+    expect(client.promptPushes()).toBe(true);
+    socket.receive(frame);
+    socket.receive({ ...frame, pane_id: "w1:p2" });
+    client.watchConversation("w1:p1", false);
+    socket.receive({ ...frame, restored: "late" });
+    expect(received).toEqual([frame]);
+  } finally { client.close(); }
+});
