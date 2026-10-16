@@ -35,10 +35,6 @@ https://github.com/user-attachments/assets/d854dbb6-64bd-4eba-81c7-fbd3f525726b
 
 A browser and phone client for [herdr](https://github.com/herdrdev/herdr). Read and reply to the same agent sessions running on your computer — on desktop or phone, as chat, with the terminal when you need it.
 
-This fork defaults to Monokai (OMP), with coordinated light/dark chat and terminal colors.
-**Settings → Appearance → Colors** also keeps Amber, Charcoal and Catppuccin available.
-System UI fonts and Chinese fallbacks are preferred for prose and terminal text.
-
 <table>
   <tr>
     <td width="50%" valign="top">
@@ -188,6 +184,12 @@ bun run test:ui    # browser regression checks
 ```
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) to send a change, [development](docs/development.md) for tests, media and releases, and [DESIGN.md](DESIGN.md) for UI conventions. Report security problems privately: [SECURITY.md](SECURITY.md).
+
+## fork appearance
+
+This fork defaults to Monokai (OMP), with coordinated light/dark chat and terminal colors.
+**Settings → Appearance → Colors** also keeps Amber, Charcoal and Catppuccin available.
+System UI fonts and Chinese fallbacks are preferred for prose and terminal text.
 
 ## license
 

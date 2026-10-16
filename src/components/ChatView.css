@@ -7,6 +7,123 @@
  * and fades in on hover.
  */
 
+/* Monokai / OMP markdown and chat styling; palette tokens also resolve in light mode. */
+[data-palette="monokai"] .chat-turn-agent {
+  color: var(--text);
+}
+
+[data-palette="monokai"] .markdown h1,
+[data-palette="monokai"] .markdown h2,
+[data-palette="monokai"] .markdown h3 {
+  color: var(--chat-heading);
+  font-weight: var(--fw-semibold);
+}
+
+[data-palette="monokai"] .markdown h4,
+[data-palette="monokai"] .markdown h5,
+[data-palette="monokai"] .markdown h6 {
+  color: var(--accent);
+  font-weight: var(--fw-semibold);
+}
+
+[data-palette="monokai"] .markdown strong,
+[data-palette="monokai"] .markdown b {
+  color: var(--accent);
+  font-weight: var(--fw-semibold);
+}
+
+[data-palette="monokai"] .markdown :not(pre) > code {
+  color: var(--chat-code-accent);
+  background: var(--bg-input);
+  border: var(--hairline) solid var(--border);
+}
+
+[data-palette="monokai"] .chat-bubble .markdown :not(pre) > code {
+  background: var(--bg-panel);
+}
+
+[data-palette="monokai"] .markdown-code {
+  background: var(--bg-panel);
+  border: var(--hairline) solid var(--border-strong);
+}
+
+[data-palette="monokai"] .markdown-code pre code {
+  color: var(--text);
+}
+
+[data-palette="monokai"] .markdown-code-header {
+  border-bottom: var(--hairline) solid var(--border-strong);
+  color: var(--text-dim);
+}
+
+[data-palette="monokai"] .markdown a {
+  color: var(--status-working);
+  text-decoration-color: color-mix(in srgb, var(--status-working) 40%, transparent);
+}
+
+[data-palette="monokai"] .markdown blockquote {
+  border-left-color: var(--chat-heading);
+  color: var(--text-dim);
+}
+
+[data-palette="monokai"] .markdown-list li::marker {
+  color: var(--accent);
+  font-weight: var(--fw-semibold);
+}
+
+[data-palette="monokai"] .chat-bubble {
+  background: var(--bg-input);
+  border: var(--hairline) solid var(--border);
+  color: var(--text);
+}
+
+[data-palette="monokai"] .work-block {
+  background: var(--chat-work-bg);
+  border: var(--hairline) solid var(--border);
+  border-radius: var(--radius-md);
+  padding: var(--space-2) var(--space-3);
+  margin: var(--space-2) 0;
+}
+
+[data-palette="monokai"] .work-block-title {
+  color: var(--accent);
+  font-weight: var(--fw-medium);
+}
+
+[data-palette="monokai"] .work-row-name {
+  color: var(--status-done);
+}
+
+[data-palette="monokai"] .work-row-name.is-verb {
+  color: var(--status-working);
+}
+
+[data-palette="monokai"] .work-row-summary {
+  color: var(--text);
+}
+
+[data-palette="monokai"] .chat-task-result-body {
+  background: var(--bg-input);
+}
+
+/* Monokai styling for the optional todo progress panel. */
+[data-palette="monokai"] .chat-todo {
+  background: var(--chat-work-bg);
+  border-color: var(--border);
+}
+[data-palette="monokai"] .chat-todo-mark svg {
+  color: var(--accent);
+}
+[data-palette="monokai"] .chat-todo.is-done .chat-todo-mark svg {
+  color: var(--status-done);
+}
+[data-palette="monokai"] .chat-todo-item.is-in_progress .chat-todo-status-icon svg {
+  color: var(--status-working);
+}
+[data-palette="monokai"] .chat-todo-item.is-completed .chat-todo-status-icon svg {
+  color: var(--status-done);
+}
+
 /* The chat's text has its own size (Settings → Chat font size): the view scales the type
    tokens by --chat-scale (lib/settings.ts) and the transcript uses the scaled ones under
    the same names, so every message and code block grows together. The prompt card is outside
@@ -1528,120 +1645,3 @@
 .chat-abandoned { margin: var(--space-2) 0; }
 .chat-abandoned > summary { font-style: italic; }
 .chat-abandoned-note { margin: var(--space-2) 0 0; color: var(--text-dim); }
-
-/* Monokai / OMP markdown and chat styling; palette tokens also resolve in light mode. */
-[data-palette="monokai"] .chat-turn-agent {
-  color: var(--text);
-}
-
-[data-palette="monokai"] .markdown h1,
-[data-palette="monokai"] .markdown h2,
-[data-palette="monokai"] .markdown h3 {
-  color: var(--chat-heading);
-  font-weight: var(--fw-semibold);
-}
-
-[data-palette="monokai"] .markdown h4,
-[data-palette="monokai"] .markdown h5,
-[data-palette="monokai"] .markdown h6 {
-  color: var(--accent);
-  font-weight: var(--fw-semibold);
-}
-
-[data-palette="monokai"] .markdown strong,
-[data-palette="monokai"] .markdown b {
-  color: var(--accent);
-  font-weight: var(--fw-semibold);
-}
-
-[data-palette="monokai"] .markdown :not(pre) > code {
-  color: var(--chat-code-accent);
-  background: var(--bg-input);
-  border: var(--hairline) solid var(--border);
-}
-
-[data-palette="monokai"] .chat-bubble .markdown :not(pre) > code {
-  background: var(--bg-panel);
-}
-
-[data-palette="monokai"] .markdown-code {
-  background: var(--bg-panel);
-  border: var(--hairline) solid var(--border-strong);
-}
-
-[data-palette="monokai"] .markdown-code pre code {
-  color: var(--text);
-}
-
-[data-palette="monokai"] .markdown-code-header {
-  border-bottom: var(--hairline) solid var(--border-strong);
-  color: var(--text-dim);
-}
-
-[data-palette="monokai"] .markdown a {
-  color: var(--status-working);
-  text-decoration-color: color-mix(in srgb, var(--status-working) 40%, transparent);
-}
-
-[data-palette="monokai"] .markdown blockquote {
-  border-left-color: var(--chat-heading);
-  color: var(--text-dim);
-}
-
-[data-palette="monokai"] .markdown-list li::marker {
-  color: var(--accent);
-  font-weight: var(--fw-semibold);
-}
-
-[data-palette="monokai"] .chat-bubble {
-  background: var(--bg-input);
-  border: var(--hairline) solid var(--border);
-  color: var(--text);
-}
-
-[data-palette="monokai"] .work-block {
-  background: var(--chat-work-bg);
-  border: var(--hairline) solid var(--border);
-  border-radius: var(--radius-md);
-  padding: var(--space-2) var(--space-3);
-  margin: var(--space-2) 0;
-}
-
-[data-palette="monokai"] .work-block-title {
-  color: var(--accent);
-  font-weight: var(--fw-medium);
-}
-
-[data-palette="monokai"] .work-row-name {
-  color: var(--status-done);
-}
-
-[data-palette="monokai"] .work-row-name.is-verb {
-  color: var(--status-working);
-}
-
-[data-palette="monokai"] .work-row-summary {
-  color: var(--text);
-}
-
-[data-palette="monokai"] .chat-task-result-body {
-  background: var(--bg-input);
-}
-
-/* Monokai styling for the optional todo progress panel. */
-[data-palette="monokai"] .chat-todo {
-  background: var(--chat-work-bg);
-  border-color: var(--border);
-}
-[data-palette="monokai"] .chat-todo-mark svg {
-  color: var(--accent);
-}
-[data-palette="monokai"] .chat-todo.is-done .chat-todo-mark svg {
-  color: var(--status-done);
-}
-[data-palette="monokai"] .chat-todo-item.is-in_progress .chat-todo-status-icon svg {
-  color: var(--status-working);
-}
-[data-palette="monokai"] .chat-todo-item.is-completed .chat-todo-status-icon svg {
-  color: var(--status-done);
-}
