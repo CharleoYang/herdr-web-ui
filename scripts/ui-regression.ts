@@ -21,6 +21,7 @@ import { checkHeldDraftPaneSwitch } from "./terminal-draft-regression.ts";
 import { checkCommandBackspace } from "./terminal-command-backspace-regression.ts";
 import { checkCtrlEnter } from "./terminal-ctrl-enter-regression.ts";
 import { checkCommandArrows } from "./terminal-command-arrows-regression.ts";
+import { checkPaneShortcuts } from "./terminal-pane-shortcut-regression.ts";
 import { checkFolderFilter } from "./folder-filter-regression.ts";
 import { checkPaletteKeys } from "./palette-keys-regression.ts";
 import { UsageService } from "../server/usage.ts";
@@ -750,25 +751,10 @@ try {
   await checkCommandBackspace(browser, origin, paneA);
   await checkCtrlEnter(browser, origin, paneA);
   await checkCommandArrows(browser, origin, paneA);
-  // a pane shortcut switches panes and types nothing: xterm used to send ESC[1;6B / ESC[1;6A too
+  await checkPaneShortcuts(browser, origin, paneA, paneB);
   const selectedTitle = () => page.locator(".pane-item.is-selected .pane-select").getAttribute("title");
-  // A pane just picked shows the lens of the pane before it for a moment, and the message box
-  // of that lens can take the focus back: the key waits until the terminal still has it two frames on.
-  const focusTerminal = () => until(async () => {
-    await terminalInput.focus();
-    return page.evaluate(() => new Promise<boolean>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() =>
-      resolve(document.activeElement?.classList.contains("xterm-helper-textarea") ?? false)))));
-  }, "the terminal holds the focus");
-  for (const key of ["ControlOrMeta+Shift+ArrowDown", "ControlOrMeta+Shift+ArrowUp"]) {
-    await focusTerminal();
-    const beforeSwitch = inputs.length;
-    await page.keyboard.press(key);
-    await until(async () => !(await selectedTitle())?.startsWith(`${paneA} —`), `${key} leaves the pane`);
-    await page.waitForTimeout(NO_SEND_WAIT_MS);
-    assert.deepEqual(inputs.slice(beforeSwitch), [], `${key} must not reach a pane`);
-    await page.locator(`.pane-select[title^="${paneA} —"]`).click();
-    await until(async () => (await selectedTitle())?.startsWith(`${paneA} —`) === true, "back on the first pane");
-  }
+  await page.locator(`.pane-select[title^="${paneA} —"]`).click();
+  await until(async () => (await selectedTitle())?.startsWith(`${paneA} —`) === true, "back on the first pane");
   await page.getByTitle("Chat transcript (⌘⇧J)", { exact: true }).click();
   await composer.waitFor();
   // the empty message box has no text to select: the pane shortcut switches panes from it too
