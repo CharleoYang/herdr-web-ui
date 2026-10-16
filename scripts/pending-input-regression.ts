@@ -170,7 +170,7 @@ export function createPendingInputCheck(page: Page, evidenceDirectory?: string) 
   assert.equal(pendingBytes(), `\u001b[200~${queuedTexts[0]}\u001b[201~\r\u001b`, "reload and readiness never replay saved pending input");
   for (let left = 2; left > 0; left--) { await page.getByRole("button", { name: "Discard saved copy", exact: true }).first().click(); await until(async () => await pendingRows.count() === left - 1, "discard saved copy"); }
   console.log("PASS Send queues server-owned input, explicit Send now delivers once, and reload/readiness never replay uncertain copies");
-      return {pendingPane,pendingRows,pendingBytes,reportPending,pendingScreen};
+      return {pendingPane,pendingRows,pendingBytes,reportPending,pendingScreen,pendingWorkspaceId:pendingWorkspace.workspace.workspace_id};
     },
     release() { releaseSnapshot?.(); },
   };
