@@ -918,6 +918,10 @@ Claude has written up a plan and is ready to execute. Would you like to proceed?
     try {
       watch(socket);
       await until(() => started === 1, "first prompt read in flight");
+      // Real-clock integration: global fake time also replaces collector/WS readiness.
+      // fixed wait: a pending read must remain alone across the real bridge observation interval.
+      await new Promise<void>((resolve) => setTimeout(resolve, 2_100));
+      expect(started).toBe(1);
       watch(socket, false);
       socket.send({ type: "detach", pane_id: paneId });
       await barrier(socket);
@@ -976,6 +980,7 @@ Claude has written up a plan and is ready to execute. Would you like to proceed?
     watch(socket, false);
     socket.ws.close();
   }, 30_000);
+
 
   it("releases native interest when the owned pane ends and refuses a stale enable", async () => {
     const socket = await connect();

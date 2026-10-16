@@ -89,7 +89,7 @@ import {
   worktreeRemove,
 } from "./herdr/client.ts";
 import { type AlertTiming, createPushService, defaultStateDir, handlePushRequest } from "./push.ts";
-import { CLAUDE_CLEAR_INPUT_KEYS, claudeClearableDraft, claudeHeldIsGrey, claudeInputBoxContent, claudeInputDraft, shownInputBox, claudeInputEmpty, viewportShowsLive, codexQuestionsCollapsed, handlePromptRequest, isClaudeHeld, heldCandidate, modelListWaits, noteSubmitted, parseInteractivePrompt, promptWaitEnded, claudeRestoredDraft, lastChatSubmitted } from "./prompt.ts";
+import { CLAUDE_CLEAR_INPUT_KEYS, claudeClearableDraft, claudeHeldIsGrey, claudeInputBoxContent, claudeInputDraft, shownInputBox, claudeInputEmpty, viewportShowsLive, codexQuestionsCollapsed, handlePromptRequest, isClaudeHeld, heldCandidate, modelListWaits, noteSubmitted, parseInteractivePrompt, promptWaitEnded, claudeRestoredDraft, lastChatSubmitted, readPromptState } from "./prompt.ts";
 import { secretPrompt, validSecret } from "../shared/secret-prompt.ts";
 import { PasteImageError, readImageBody, savePaneImage } from "./paste.ts";
 import { PtySession } from "./pty/session.ts";
@@ -575,6 +575,8 @@ export function createServer(
     conversationReads.set(paneId, run);
     void run.finally(() => { if (conversationReads.get(paneId) === run) conversationReads.delete(paneId); });
   }, options.codexHome, options.devinDbPath, options.opencodeDb, options.hermesHome, options.grokHome);
+  const PROMPT_PUSH_MS = 2_000;
+
 
   type PromptPush = Extract<ServerMessage, { type: "prompt-push" }>;
   type PromptRecipient = { client: Client; claim: { keepSize: boolean } | undefined; interest: { signature: string | null } };
@@ -623,14 +625,10 @@ export function createServer(
         if (recipients.length === 0) { reconcilePrompts(paneId); return; }
         current.reading = true;
         try {
-          const url = new URL("http://bridge.internal/api/pane/prompt");
-          url.searchParams.set("pane_id", paneId);
-          const response = await handlePromptRequest(new Request(url), url, {
+          const state = await readPromptState(paneId, {
             codexHome: options.codexHome, claudeTranscript: (id) => claudeAgents.sessionOf(id)?.path ?? null, readOnly,
           });
-          if (!response?.ok) return; // A failed read is not a disappearing menu.
-          const body = await response.json() as Omit<PromptPush, "type" | "pane_id">;
-          const message: PromptPush = { type: "prompt-push", pane_id: paneId, prompt: body.prompt, suggestion: body.suggestion, restored: body.restored };
+          const message: PromptPush = { type: "prompt-push", pane_id: paneId, ...state };
           const signature = JSON.stringify(message);
           for (const { client, claim, interest } of recipients) {
             if (!current.active || !conversationEligible(client, paneId) || client.data.attached.get(paneId) !== claim
@@ -642,7 +640,7 @@ export function createServer(
         finally {
           current.reading = false;
           if (!stopped && current.active && promptRecipients(paneId, readOnly).length > 0) {
-            current.timer = setTimeout(() => void read(), 500);
+            current.timer = setTimeout(() => void read(), PROMPT_PUSH_MS);
             current.timer.unref();
           } else if (promptObservations.get(key) === current) promptObservations.delete(key);
         }

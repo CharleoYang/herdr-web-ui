@@ -70,7 +70,7 @@ const ChatHistoryContext = createContext("");
  */
 const ImageViewerContext = createContext<(images: GalleryImage[], index: number) => void>(() => {});
 import type { TypedAnswer } from "../lib/promptAnswer.ts";
-import type { AgentStatus, ConversationMetadata, ConversationPart, ConversationResponse, ConversationTurn, InteractivePrompt, OmoTaskResult } from "../../shared/protocol.ts";
+import type { AgentStatus, ConversationMetadata, ConversationPart, ConversationResponse, ConversationTurn, InteractivePrompt, OmoTaskResult, ServerMessage } from "../../shared/protocol.ts";
 import { chatIsBlank, type ChatRead } from "../lib/greeting.ts";
 import { TurnTime } from "./TurnTime.tsx";
 import { useT } from "../lib/i18n.ts";
@@ -108,6 +108,9 @@ export interface ChatViewProps {
   conversationPushes?: boolean;
   /** Direct current-connection frames and lifecycle edges; never stored for replay. */
   onConversationUpdate?: (listener: ((update: ConversationUpdate) => void) | null) => void;
+  /** the bridge pushes this pane's prompt; without, the visible chat keeps its 2s poll */
+  promptPushes?: boolean;
+  onPromptUpdate?: (listener: ((message: Extract<ServerMessage, { type: "prompt-push" }>) => void) | null) => void;
   /** while the chat shows herdr's scrollback, the pane's terminal output invalidates it */
   onTerminalOutput?: (listener: (() => void) | null) => void;
   /** bumped when a composer message goes out, before the transcript holds it */
@@ -802,7 +805,7 @@ function TerminalFallback({ paneId, visible }: { paneId: string; visible: boolea
 }
 
 // the app re-renders on every pane-status and poll; an unchanged transcript sits those out
-export const ChatView = memo(function ChatView({ paneId, active = true, visible: paneVisible = true, pageScroll, refreshKey, invalidationKey = 0, onConversationWatch, conversationPushes = false, onConversationUpdate, onTerminalOutput, sentKey = 0, connected, ended, agent, agentStatus, onMetadata, onRead, greeted = false, onPrompt, onSuggestion, onRestored, promptRefreshKey = 0, pendingAnswer = null, onPendingAnswerDone, promptDock = null, onPromptAnswered }: ChatViewProps) {
+export const ChatView = memo(function ChatView({ paneId, active = true, visible: paneVisible = true, pageScroll, refreshKey, invalidationKey = 0, onConversationWatch, conversationPushes = false, onConversationUpdate, promptPushes = false, onPromptUpdate, onTerminalOutput, sentKey = 0, connected, ended, agent, agentStatus, onMetadata, onRead, greeted = false, onPrompt, onSuggestion, onRestored, promptRefreshKey = 0, pendingAnswer = null, onPendingAnswerDone, promptDock = null, onPromptAnswered }: ChatViewProps) {
   const t = useT();
   const { fetchPaneConversation, peekPaneConversation, fetchPanePromptState, fetchPaneTranscript } = useMachineApi();
   const { settings } = useSettings();
@@ -1230,6 +1233,7 @@ export const ChatView = memo(function ChatView({ paneId, active = true, visible:
     let reading = false;
     let requested = false;
     const socket = promptSession?.socket;
+    const pushes = (): boolean => socket ? socket.promptPushes(paneId) : promptPushes;
     const sent = sentKeyRef.current;
     const current = (): boolean => !cancelled && document.visibilityState !== "hidden" && shownPane.current === paneId;
     const showPrompt = (next: { prompt: InteractivePrompt | null; suggestion: string | null; restored: string | null }): void => {
@@ -1252,25 +1256,28 @@ export const ChatView = memo(function ChatView({ paneId, active = true, visible:
         const next = await fetchPanePromptState(paneId);
         if (current() && revision === started && promptSession?.epoch === epoch) showPrompt(next);
       } catch {
-        if (current() && revision === started && promptSession?.epoch === epoch && !socket?.promptPushes(paneId)) showPrompt({ prompt: null, suggestion: null, restored: null });
+        if (current() && revision === started && promptSession?.epoch === epoch && !pushes()) showPrompt({ prompt: null, suggestion: null, restored: null });
       } finally {
         reading = false;
         if (current()) {
           if (requested) void readPrompt();
-          else if (!socket?.promptPushes(paneId)) timer = window.setTimeout(() => void readPrompt(), PROMPT_POLL_MS);
+          else if (!pushes()) timer = window.setTimeout(() => void readPrompt(), PROMPT_POLL_MS);
         }
       }
     };
+    const applyPush = (message: Extract<ServerMessage, { type: "prompt-push" }>): void => {
+      if (!current() || message.pane_id !== paneId || !pushes()) return;
+      revision++;
+      window.clearTimeout(timer);
+      showPrompt(message);
+    };
+    onPromptUpdate?.(applyPush);
     const offMessage = socket?.on((message) => {
       if (!current()) return;
       if (message.type === "snapshot") {
         // Reconcile on every connection, including an old/no-feature bridge after reconnect.
         revision++;
         void readPrompt();
-      } else if (message.type === "prompt-push" && message.pane_id === paneId && socket.promptPushes(paneId)) {
-        revision++;
-        window.clearTimeout(timer);
-        showPrompt(message);
       }
     });
     const offDisconnect = socket?.onDisconnect(() => {
@@ -1291,9 +1298,10 @@ export const ChatView = memo(function ChatView({ paneId, active = true, visible:
       revision++;
       window.clearTimeout(timer);
       offMessage?.(); offDisconnect?.();
+      onPromptUpdate?.(null);
       document.removeEventListener("visibilitychange", visibilityChanged);
     };
-  }, [pollPrompt, paneId, machineId, promptSession, promptPollKey, promptRefreshKey, sentKey, fetchPanePromptState, visible]);
+  }, [pollPrompt, paneId, machineId, promptSession, promptPollKey, promptRefreshKey, sentKey, fetchPanePromptState, visible, promptPushes, onPromptUpdate]);
 
   useEffect(() => {
     onPrompt?.(paneId, prompt);

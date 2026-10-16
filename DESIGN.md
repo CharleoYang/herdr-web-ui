@@ -887,9 +887,12 @@ One set for both themes: the card is island black wherever it shows.
   opaque; a validated complete page can establish the initial baseline. Baseline mismatch,
   incomplete payload or oversized envelope falls back to REST; periodic reconciliation and
   historical-page loading remain REST-based.
-- Prompt pushes use the same authoritative reader as REST, including null, changes and plan
+- Prompt pushes share `readPromptState` with REST and reach Chat through `PaneTerminal`'s
+  per-pane callback, including null, changes and plan
   privacy. Watch-device or explicit screen-only restrictions propagate through a machine relay
   before its owner-authenticated upstream read; terminal observe mode alone is not a restriction.
+- Prompt observation is single-flight per pane/access policy. Delivery retains the original
+  attachment and interest lifetime; each new interest receives its own initial state.
 - Socket generation, attachment/interest and current-pane fences reject stale frames. Hidden
   chats do not apply pushes; reconnect and visibility restore reconcile through REST, and newer
   push state fences delayed REST responses. Snapshot readiness is not transcript-enrichment readiness.

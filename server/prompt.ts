@@ -3344,6 +3344,26 @@ async function withPlanFile(prompt: InteractivePrompt | null, transcript: string
   return { ...prompt, id: `${prompt.id}.${revision}`, body: plan.text.slice(0, 12_000), plan_file: plan.path };
 }
 
+export interface PromptState {
+  prompt: InteractivePrompt | null;
+  suggestion: string | null;
+  restored: string | null;
+}
+
+export async function readPromptState(paneId: string, options: PromptRequestOptions = {}): Promise<PromptState> {
+  const read = await readPrompt(paneId, options.codexHome);
+  const { agent, status } = read;
+  const prompt = options.readOnly ? read.prompt : await withPlanFile(read.prompt, options.claudeTranscript?.(paneId));
+  const box = prompt === null && agent === "claude" && (status === "idle" || status === "done")
+    ? await paneRead({ paneId, source: "visible", format: "ansi", timeoutMs: SUGGESTION_READ_MS }).then((read) => read.text, () => null)
+    : null;
+  return {
+    prompt,
+    suggestion: box === null ? null : parseClaudeSuggestion(box),
+    restored: box === null ? null : await restoredOnLiveScreen(paneId, box).catch(() => null),
+  };
+}
+
 export async function handlePromptRequest(request: Request, url: URL, options: PromptRequestOptions = {}): Promise<Response | null> {
   if (url.pathname !== "/api/pane/prompt" && url.pathname !== "/api/pane/prompt/answer") return null;
   // the answer being handled, once its body was read: what the log line says even when the handling throws
@@ -3353,26 +3373,8 @@ export async function handlePromptRequest(request: Request, url: URL, options: P
       if (request.method !== "GET") return badRequest("method_not_allowed", "GET is required.");
       const paneId = url.searchParams.get("pane_id")?.trim();
       if (!paneId) return badRequest("missing_pane_id", "pane_id is required.");
-      const read = await readPrompt(paneId, options.codexHome);
-      const { agent, status } = read;
-      // `plan=0` is how a connection server asks for a watching device through its PC proxy, which
-      // reaches this PC with its own credential: it only ever narrows the answer
-      const watching = options.readOnly || url.searchParams.get("plan") === "0";
-      const prompt = watching ? read.prompt : await withPlanFile(read.prompt, options.claudeTranscript?.(paneId));
-      // no menu up: what Claude suggests typing next, for the composer's placeholder, and the chat's
-      // own last message where Claude put it back into the box on a cancel. Only a nicety: it is read
-      // only while Claude waits for the next prompt (a working agent shows none), and a failed or
-      // slow read of it (a herdr without ansi reads, a busy one) leaves the prompt answer as it is,
-      // on time.
-      const box = prompt === null && agent === "claude" && (status === "idle" || status === "done")
-        ? await paneRead({ paneId, source: "visible", format: "ansi", timeoutMs: SUGGESTION_READ_MS })
-          .then((read) => read.text, () => null)
-        : null;
-      return jsonResponse({
-        prompt,
-        suggestion: box === null ? null : parseClaudeSuggestion(box),
-        restored: box === null ? null : await restoredOnLiveScreen(paneId, box).catch(() => null),
-      });
+      return jsonResponse(await readPromptState(paneId, { ...options, readOnly: options.readOnly || url.searchParams.get("plan") === "0" }));
+
     }
 
     if (request.method !== "POST") return badRequest("method_not_allowed", "POST is required.");

@@ -249,8 +249,12 @@ terminal output.
 
 Conversation responses are gzipped like every other text answer (`server/compress.ts`), with
 weak ETags so conditional reads hold across encodings.
-Prompt polling remains separate at 2 s: approval cards and suggestions can change on the
-terminal screen without a transcript write or agent-status transition.
+Approval cards and suggestions can change on the terminal screen without a transcript write
+or agent-status transition. Bridges advertise `prompt-push` and observe the shared REST reader
+once per pane/access policy, 2 s after each completed read. The pane dispatches pushes to its
+Chat callback; original attachment/interest lifetimes and REST revisions fence stale results.
+REST still reconciles bootstrap, reconnect, visibility restore and explicit sends/answers.
+Clients without advertised push support retain the independent 2 s prompt poll.
 
 ### Initial push + gzip measurement
 

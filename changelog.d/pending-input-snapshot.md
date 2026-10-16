@@ -11,3 +11,5 @@
 - Return pending-scene workspace ownership to the full browser runner for its existing cleanup.
 - Account for native DA1/DECRQM replies only with matching queries on the same socket, pane and
   attachment lifetime; retain exact foreground key bytes, physical markers and foreign-pane checks.
+- Preserve concurrent shared prompt-reader and per-pane callback improvements without duplicating
+  observers; retain pre-read plan restrictions, single-flight lifetimes and REST/push revision fences.
