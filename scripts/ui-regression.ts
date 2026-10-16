@@ -2073,16 +2073,14 @@ try {
   console.log("PASS Escape closes a phone's drawer and goes no further");
 
   // Claude's suggestion on a phone is the placeholder and a chip that fills the box, until Settings turns the chip off
-  const promptRoute = `**/api/pane/prompt?pane_id=${encodeURIComponent(paneB)}`;
-  const suggest = { json: { prompt: null, suggestion: "run the tests" } };
   const mobileComposer = mobilePage.getByRole("textbox", { name: "Message", exact: true });
-  await mobilePage.route(promptRoute, (route) => route.fulfill(suggest));
   await mobileComposer.fill("");
+  // the pane really paints the grey suggestion: the phone gets it from the pushed prompt, not a 2s poll
+  await paintSuggestion(paneB, "run the tests");
   await until(async () => await mobileComposer.getAttribute("placeholder") === "run the tests", "a phone shows the suggestion as the placeholder");
   assert.equal(await mobilePage.locator(".voice-mic").count(), 0, "a phone's chat has no mic until Settings asks for it");
   await mobilePage.getByTitle("Use the suggestion", { exact: true }).click();
   assert.equal(await mobileComposer.inputValue(), "run the tests", "the chip puts the suggestion in the box");
-  await mobilePage.unroute(promptRoute);
   try { await mobileEvidence?.finish(); } finally { await mobile.close(); }
   assert.equal(errors.length, 0, errors.join("\n"));
   assertCspClean(csp, "the suggestion chip loads with no CSP violation");
