@@ -25,7 +25,6 @@ import { checkPaneShortcuts } from "./terminal-pane-shortcut-regression.ts";
 import { createPendingInputCheck } from "./pending-input-regression.ts";
 import { checkFolderFilter } from "./folder-filter-regression.ts";
 import { checkPaletteKeys } from "./palette-keys-regression.ts";
-import { createPendingInputCheck } from "./pending-input-regression.ts";
 import { UsageService } from "../server/usage.ts";
 import { openSettingsPage } from "./settings-page.ts";
 import { assertCspClean, watchCsp } from "./csp-violations.ts";
