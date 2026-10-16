@@ -126,11 +126,12 @@ process.stdin.on("data", (data) => {
       await new Promise((resolve) => setTimeout(resolve, 50));
     }
   const context = await browser.newContext({ viewport: { width: 1100, height: 650 } });
-  await context.addInitScript((id) => {
+  await context.addInitScript(({ expectedOrigin, paneId }) => {
+    if (location.origin !== expectedOrigin) return;
     Object.defineProperty(navigator, "platform", { get: () => "MacIntel" });
     localStorage.setItem("herdr-web-ui:settings", JSON.stringify({ language: "en" }));
-    localStorage.setItem(`herdr-web-ui:view:${id}`, "terminal");
-  }, paneId);
+    localStorage.setItem(`herdr-web-ui:view:${paneId}`, "terminal");
+  }, { expectedOrigin: new URL(origin).origin, paneId });
   try {
     const page = await context.newPage();
     const oracle = terminalOracle(page, paneId);
@@ -197,10 +198,11 @@ process.stdin.on("data", (data) => {
     await context.close();
   }
   const nonMac = await browser.newContext();
-  await nonMac.addInitScript((id) => {
+  await nonMac.addInitScript(({ expectedOrigin, paneId }) => {
+    if (location.origin !== expectedOrigin) return;
     Object.defineProperty(navigator, "platform", { get: () => "Linux x86_64" });
-    localStorage.setItem(`herdr-web-ui:view:${id}`, "terminal");
-  }, paneId);
+    localStorage.setItem(`herdr-web-ui:view:${paneId}`, "terminal");
+  }, { expectedOrigin: new URL(origin).origin, paneId });
   try {
     const page = await nonMac.newPage();
     const oracle = terminalOracle(page, paneId);
