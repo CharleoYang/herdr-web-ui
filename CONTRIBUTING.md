@@ -122,6 +122,8 @@ early, duplicate, missing, wrong-route/text and rejected-ack controls must fail.
 Set `CHECK_BROWSER_EVIDENCE_DIR` to retain raw phase/socket/pane frames, PTY bytes,
 DOM and a screenshot. With an already-current build, use
 `bun run check run bun scripts/pending-input-smoke.ts`. A focused PASS is not full CI.
+A diagnostic failure still closes the owned workspace and temporary root, then reports
+the original error.
 
 ## What a change needs
 

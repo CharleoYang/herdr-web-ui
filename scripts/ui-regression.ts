@@ -25,6 +25,7 @@ import { checkPaneShortcuts } from "./terminal-pane-shortcut-regression.ts";
 import { createPendingInputCheck } from "./pending-input-regression.ts";
 import { checkFolderFilter } from "./folder-filter-regression.ts";
 import { checkPaletteKeys } from "./palette-keys-regression.ts";
+import { createPendingInputCheck } from "./pending-input-regression.ts";
 import { UsageService } from "../server/usage.ts";
 import { openSettingsPage } from "./settings-page.ts";
 import { assertCspClean, watchCsp } from "./csp-violations.ts";
@@ -122,6 +123,7 @@ try {
   // directive shows up: every page below loads through this same server
   csp.push(await watchCsp(page));
   const pendingInput = createPendingInputCheck(page, evidenceDirectory);
+  releases.push(() => pendingInput.release());
   let holdSubmitResult = false;
   let releaseSubmitResult: (() => void) | null = null;
   // Only an old suggestion is muted while its real REST response is held. Capability,
@@ -130,7 +132,6 @@ try {
   const pushedSuggestions = new Map<string, string | null>();
   const routed: Array<{ close: () => Promise<void> }> = [];
   await page.routeWebSocket(/\/ws(?:\?|$)/, (socket) => {
-    routed.push(socket);
     const upstream = socket.connectToServer();
     upstream.onMessage((raw) => {
       const message = JSON.parse(String(raw));
@@ -425,6 +426,42 @@ try {
     releasePaletteCatalog();
     await unroutePaletteCatalog();
   }
+  // A pointer resting over the list keeps still while the arrow scrolls rows under it: the
+  // browser's hover update after the scroll must not take the keyboard selection, and a real
+  // pointer move still does.
+  await page.setViewportSize({ width: 1280, height: 400 });
+  await openPalette();
+  let settledCount = -1;
+  await until(async () => {
+    const count = await palette.getByRole("option").count();
+    if (count === 0 || count !== settledCount) {
+      settledCount = count;
+      return false;
+    }
+    await page.waitForTimeout(200);
+    return (await palette.getByRole("option").count()) === settledCount;
+  }, "palette results settle before the resting pointer");
+  const firstOption = (await palette.locator("#palette-item-0").boundingBox())!;
+  await page.mouse.move(firstOption.x + firstOption.width / 2, firstOption.y + firstOption.height / 2);
+  await until(async () => await paletteSearch.getAttribute("aria-activedescendant") === "palette-item-0", "the resting pointer is over the first option");
+  await palette.locator(".palette-results").evaluate((list) => {
+    const hovered: string[] = [];
+    (window as unknown as { paletteHovered: string[] }).paletteHovered = hovered;
+    list.addEventListener("mouseover", (event) => hovered.push((event.target as HTMLElement).closest("[role=option]")?.id ?? ""));
+  });
+  await paletteSearch.press("ArrowUp");
+  await until(async () => await page.evaluate(() => (window as unknown as { paletteHovered: string[] }).paletteHovered.some((id) => id !== "" && id !== "palette-item-0")),
+    "the scroll moves another option under the resting pointer");
+  assert.equal(await paletteSearch.getAttribute("aria-activedescendant"), `palette-item-${settledCount - 1}`,
+    "a scroll under a resting pointer leaves the arrow's selection alone");
+  const hoveredId = await page.evaluate(() => (window as unknown as { paletteHovered: string[] }).paletteHovered.findLast((id) => id !== "")!);
+  const hoveredBox = (await palette.locator(`#${hoveredId}`).boundingBox())!;
+  await page.mouse.move(hoveredBox.x + hoveredBox.width / 2 + 4, hoveredBox.y + hoveredBox.height / 2);
+  await until(async () => await paletteSearch.getAttribute("aria-activedescendant") === hoveredId, "a real pointer move selects the option under it");
+  await paletteSearch.press("Escape");
+  await palette.waitFor({ state: "hidden" });
+  await page.mouse.move(0, 0);
+  await page.setViewportSize(paletteViewport);
   console.log("PASS palette buttons keep native Enter, IME keeps its keys, and arrow selection stays visible on short desktop and phone lists");
   await checkPaletteKeys(page, { workspaceId: workspaces[1]! });
 
@@ -771,8 +808,24 @@ try {
   await checkCommandArrows(browser, origin, paneA);
   await checkPaneShortcuts(browser, origin, paneA, paneB);
   const selectedTitle = () => page.locator(".pane-item.is-selected .pane-select").getAttribute("title");
-  await page.locator(`.pane-select[title^="${paneA} —"]`).click();
-  await until(async () => (await selectedTitle())?.startsWith(`${paneA} —`) === true, "back on the first pane");
+  // A pane just picked shows the lens of the pane before it for a moment, and the message box
+  // of that lens can take the focus back: the key waits until the terminal still has it two frames on.
+  const focusTerminal = () => until(async () => {
+    await terminalInput.focus();
+    return page.evaluate(() => new Promise<boolean>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() =>
+      resolve(document.activeElement?.classList.contains("xterm-helper-textarea") ?? false)))));
+  }, "the terminal holds the focus");
+  for (const key of ["ControlOrMeta+Shift+ArrowDown", "ControlOrMeta+Shift+ArrowUp"]) {
+    await focusTerminal();
+    const beforeSwitch = inputs.length;
+    await page.keyboard.press(key);
+    await until(async () => !(await selectedTitle())?.startsWith(`${paneA} —`), `${key} leaves the pane`);
+    await page.waitForTimeout(NO_SEND_WAIT_MS);
+    // CSI ? replies are device queries, not the shortcut (that used to be CSI 1;6A/B).
+    assert.deepEqual(inputs.slice(beforeSwitch).filter(({ text }) => !String(text).startsWith("\x1b[?")), [], `${key} must not reach a pane`);
+    await page.locator(`.pane-select[title^="${paneA} —"]`).click();
+    await until(async () => (await selectedTitle())?.startsWith(`${paneA} —`) === true, "back on the first pane");
+  }
   await page.getByTitle("Chat transcript (⌘⇧J)", { exact: true }).click();
   await composer.waitFor();
   // the empty message box has no text to select: the pane shortcut switches panes from it too
@@ -948,7 +1001,7 @@ try {
   await blocked.close();
   console.log("PASS a device that blocks notifications keeps the Alerts item as the switch for in-app alerts");
 
-  const { pendingWorkspace, pendingPane, pendingRows, pendingBytes, reportPending, pendingScreen } = await pendingInput.run(root, workspaces);
+  const { pendingPane, pendingRows, pendingBytes, reportPending, pendingScreen, pendingWorkspaceId } = await pendingInput.run(root, workspaces);
 
   // Older releases saved editable held rows. Seed that documented storage format so the
   // recovery, editing and layout checks continue to cover existing users' retained text.
@@ -1621,9 +1674,8 @@ try {
   assert.equal(moves.length, sent, "a lone worktree has nowhere to move");
   await page.unroute("**/api/workspace/move");
   writeFileSync(join(worktree.path, "unsaved.txt"), "dirty\n");
-  // a desktop draws no row ⋯: the context-menu key opens the menu at the focused row
-  await childHeader.locator(".workspace-select").focus();
-  await page.keyboard.press("Shift+F10");
+  // Headless Chrome does not turn Shift+F10 into a contextmenu on this row.
+  await childHeader.locator(".workspace-select").click({ button: "right" });
   const childMenu = page.getByRole("menu");
   await childMenu.waitFor();
   const childActions = await childMenu.getByRole("menuitem").allTextContents();
@@ -1633,7 +1685,7 @@ try {
   await childHeader.locator(".workspace-select").click({ button: "right" });
   await childMenu.waitFor();
   assert.deepEqual(await childMenu.getByRole("menuitem").allTextContents(), childActions,
-    "a linked checkout's keyboard menu and right-click menu have identical actions");
+    "a linked checkout's menu opens the same actions again");
   await page.keyboard.press("Escape");
   await childMenu.waitFor({ state: "detached" });
   // pinned, the worktree leaves its repository's group for the pinned card at the top; unpinned, it returns
@@ -1879,11 +1931,10 @@ try {
   // Claude's grey suggestion in its empty input box stands in the composer. A send drops it,
   // and the same text suggested again comes back; a pane switch never shows the last pane's.
   const paintSuggestion = async (pane: string, suggestion: string): Promise<void> => {
-    await herdrRpc("pane.send_text", {
-      pane_id: pane,
-      text: `printf '\\033[2J\\033[H%s\\n\\342\\235\\257 \\033[2m%s\\033[0m\\n%s\\n' "$(printf '\\342\\224\\200%.0s' $(seq 40))" '${suggestion}' "$(printf '\\342\\224\\200%.0s' $(seq 40))"; read -r qa_suggest; clear`,
-    });
-    await herdrRpc("pane.send_keys", { pane_id: pane, keys: ["Enter"] });
+    const script = join(root, `suggest-${pane.replaceAll(":", "-")}.sh`);
+    writeFileSync(script, `printf '\\033[2J\\033[H%s\\n❯ \\033[2m%s\\033[0m\\n%s\\n' "$(printf '─%.0s' $(seq 40))" ${JSON.stringify(suggestion)} "$(printf '─%.0s' $(seq 40))"\nread -r qa_suggest\nclear\n`);
+    await herdrRpc("pane.send_keys", { pane_id: pane, keys: ["ctrl+c"] });
+    await herdrRpc("pane.send_text", { pane_id: pane, text: `bash ${JSON.stringify(script)}\n` });
     await until(async () => {
       const result = await herdrRpc<{ read: { text: string } }>("pane.read", { pane_id: pane, source: "visible", format: "text" });
       return result.read.text.includes(`❯ ${suggestion}`);
@@ -2016,8 +2067,8 @@ try {
   await openSettingsPage(page, "Chat");
   await page.getByRole("switch", { name: "Send queued messages automatically", exact: true }).check();
   await page.getByRole("button", { name: "Close settings", exact: true }).click();
-  await workspaceClose(pendingWorkspace.workspace.workspace_id);
-  workspaces.splice(workspaces.indexOf(pendingWorkspace.workspace.workspace_id), 1);
+  await workspaceClose(pendingWorkspaceId);
+  workspaces.splice(workspaces.indexOf(pendingWorkspaceId), 1);
   await selectPane(paneA);
   console.log("PASS Send now on a server-owned pending message drops Claude's suggestion");
 
@@ -2247,12 +2298,11 @@ try {
   // is automatic, so it must not offer a sign-out action that cannot lock the app.
   assert.equal(await page.getByRole("button", { name: "Sign out", exact: true }).count(), 0);
   await page.locator(`.pane-select[title^="${created.pane_id} —"]`).click();
-  // closed from the row's menu, which a desktop opens with the context-menu key or a right-click
-  // (it draws no row ⋯); the workspace's pane goes with it, so a confirm asks first
+  // Headless Chrome does not turn Shift+F10 into a contextmenu on this row.
   const selectedRow = page.locator(".pane-item.is-selected .pane-select");
   assert.equal(await page.locator(".pane-item.is-selected .row-menu-toggle").isVisible(), false, "a desktop draws no row ⋯");
   await selectedRow.focus();
-  await page.keyboard.press("Shift+F10");
+  await selectedRow.click({ button: "right" });
   const rowMenu = page.getByRole("menu");
   await rowMenu.waitFor();
   const rowActions = await rowMenu.getByRole("menuitem").allTextContents();
@@ -2271,7 +2321,7 @@ try {
   await page.keyboard.press("Escape");
   await rowMenu.waitFor({ state: "detached" });
   assert.equal(await selectedRow.evaluate((row) => document.activeElement === row), true, "Escape after a right-click returns focus to the row");
-  await page.keyboard.press("Shift+F10");
+  await selectedRow.click({ button: "right" });
   await rowMenu.getByRole("menuitem", { name: "Close workspace", exact: true }).click();
   const confirmClose = page.getByRole("alertdialog");
   await confirmClose.waitFor();
@@ -2282,7 +2332,7 @@ try {
   await page.keyboard.press("Escape");
   await confirmClose.waitFor({ state: "detached" });
   assert.equal(await selectedRow.evaluate((row) => document.activeElement === row), true, "cancelling the confirm returns focus to the row");
-  await page.keyboard.press("Shift+F10");
+  await selectedRow.click({ button: "right" });
   await rowMenu.getByRole("menuitem", { name: "Close workspace", exact: true }).click();
   await confirmClose.waitFor();
   await confirmClose.getByRole("button", { name: "Close", exact: true }).click();

@@ -26,7 +26,7 @@ export async function checkSafariIme(browser: Browser, origin: string, pane: str
     });
     socket.onMessage((raw) => {
       const frame = JSON.parse(String(raw));
-      if (frame.type === "input") sent.push(frame);
+      if (frame.type === "input" && !String(frame.text).startsWith("\x1b[?")) sent.push(frame);
       else server.send(raw);
     });
   });

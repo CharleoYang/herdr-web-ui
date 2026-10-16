@@ -4,9 +4,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "no
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { paneRead, paneSendKeys, paneSendText } from "../server/herdr/client.ts";
-
 import { terminalOracle } from "./terminal-input-oracle.ts";
-
 /** Mac keyboard events in an isolated context, against a pane owned by the UI suite. */
 export async function checkCommandBackspace(browser: Browser, origin: string, paneId: string): Promise<void> {
   // Own the output source before either browser attaches: readline emits no terminal capability queries.

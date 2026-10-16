@@ -63,7 +63,6 @@ function terminalNegotiation(panes: string[]) {
     },
   };
 }
-
 /** Switching attachments emits terminal replies, not just keys. Check the actual foreground bytes. */
 export async function checkPaneShortcuts(browser: Browser, origin: string, paneA: string, paneB: string): Promise<void> {
   const root = mkdtempSync(join(tmpdir(), "herdr-pane-shortcut-"));

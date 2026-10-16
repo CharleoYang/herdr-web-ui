@@ -37,12 +37,12 @@ process.stdin.on("data", (data) => {
     await until(async () => (await paneRead({ paneId, source: "visible" })).text.includes("Owned macOS Cmd+Left"), "readline fixture must start");
   for (const platform of ["MacIntel", "Linux x86_64", "Win32"]) {
     const context = await browser.newContext({ viewport: { width: 1100, height: 650 } });
-    await context.addInitScript(({ expectedOrigin, platform, paneId }) => {
+    await context.addInitScript(({ platform, paneId, expectedOrigin }) => {
       if (location.origin !== expectedOrigin) return;
       Object.defineProperty(navigator, "platform", { get: () => platform });
       localStorage.setItem("herdr-web-ui:settings", JSON.stringify({ language: "en" }));
       localStorage.setItem(`herdr-web-ui:view:${paneId}`, "terminal");
-    }, { expectedOrigin: new URL(origin).origin, platform, paneId });
+    }, { platform, paneId, expectedOrigin: new URL(origin).origin });
     try {
       const page = await context.newPage();
       const oracle = terminalOracle(page, paneId);
