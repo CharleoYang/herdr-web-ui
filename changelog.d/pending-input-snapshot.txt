@@ -1,0 +1,1 @@
+Reuse the real pending-input browser scene in a focused smoke command and correlate reconnect submissions with user intent, socket, pane, bridge acceptance and raw PTY bytes instead of counting lifetime terminal traffic.

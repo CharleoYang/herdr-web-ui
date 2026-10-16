@@ -21,6 +21,7 @@
     "test:integration": "bun scripts/ci-tests.ts integration",
     "test:ui": "bun run build && bun scripts/ui-regression.ts && bun scripts/ui-contexts-regression.ts && bun scripts/sticky-modifiers-regression.ts",
     "smoke:terminal": "bun scripts/check.ts run --build bun scripts/terminal-smoke.ts",
+    "smoke:pending-input": "bun scripts/check.ts run --build bun scripts/pending-input-smoke.ts",
     "generate:types": "bun run scripts/generate-protocol-types.ts",
     "build:remote": "bun run scripts/build-remote-bundle.ts",
     "build:site": "bun scripts/build-site.ts",
