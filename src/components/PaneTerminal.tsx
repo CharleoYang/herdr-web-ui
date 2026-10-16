@@ -137,6 +137,34 @@ export interface PaneTerminalProps {
 /** The last refused Send now note per pane, kept across that pane's mounts (see queueError). */
 const heldRowNotes = new Map<string, { owner: string; id: string; text: string }>();
 
+/** xterm's ANSI palette for Monokai in dark. settings.ts `terminalTheme()` names the surface, the
+ *  ink, the cursor and the selection (the --term-* tokens of styles.css); the sixteen ANSI colors
+ *  are what a TUI draws its own output with, so the grid reads as a Monokai terminal instead of
+ *  xterm's defaults. Monokai in light keeps xterm's derived colors: paper reads them. */
+const MONOKAI_DARK_ANSI = {
+  black: "#272822",
+  red: "#f92672",
+  green: "#a6e22e",
+  yellow: "#e6db74",
+  blue: "#66d9ef",
+  magenta: "#ae81ff",
+  cyan: "#66d9ef",
+  white: "#f8f8f2",
+  brightBlack: "#75715e",
+  brightRed: "#f92672",
+  brightGreen: "#a6e22e",
+  brightYellow: "#e6db74",
+  brightBlue: "#66d9ef",
+  brightMagenta: "#ae81ff",
+  brightCyan: "#66d9ef",
+  brightWhite: "#ffffff",
+};
+
+/** The xterm theme: the palette's four tokens, with Monokai dark's own ANSI colors over them. */
+function getTermTheme(theme: ResolvedTheme, palette: Palette) {
+  const base = terminalTheme(theme, palette);
+  return palette === "monokai" && theme === "dark" ? { ...base, ...MONOKAI_DARK_ANSI } : base;
+}
 export function PaneTerminal({
   paneId,
   terminalId = null,
@@ -1995,7 +2023,7 @@ export function PaneTerminal({
   // the theme follows the settings without a remount
   useEffect(() => {
     const term = termRef.current;
-    if (term) term.options.theme = terminalTheme(theme, palette);
+    if (term) term.options.theme = getTermTheme(theme, palette);
   }, [theme, palette]);
 
   // the font follows too, and a font change moves the grid. xterm measures the cell (and the DOM

@@ -71,7 +71,7 @@ function compactKeys(keys: readonly string[]): string {
 }
 
 const FONT_LIST_LIMIT = 150;
-const FONT_FAMILY_PLACEHOLDER = 'D2Coding, "Cascadia Mono"';
+const FONT_FAMILY_PLACEHOLDER = 'JetBrains Mono, "PingFang SC"';
 
 /**
  * A font family list, saved when the field is left, on Enter or when the dialog closes: saving
@@ -237,6 +237,7 @@ function PaletteSelect({ id, value, onChange }: { id: string; value: PaletteName
   const t = useT();
   return (
     <select id={id} className="select settings-select" value={value} onChange={(event) => onChange(event.target.value as PaletteName)}>
+      <option value="monokai">{t("Monokai (OMP)")}</option>
       <option value="amber">{t("Amber")}</option>
       <option value="charcoal">{t("Charcoal")}</option>
       <option value="catppuccin">{t("Catppuccin")}</option>

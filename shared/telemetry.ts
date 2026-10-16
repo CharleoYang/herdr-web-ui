@@ -38,10 +38,10 @@ export interface TelemetrySettings {
   agentOrder: "workspace" | "activity";
   agentMarks: "color" | "mono";
   statusIndicators: "classic" | "dots" | "symbols";
-  palette: "amber" | "charcoal" | "catppuccin";
+  palette: "amber" | "charcoal" | "catppuccin" | "monokai";
   /** the pair System mode switches between */
-  paletteLight: "amber" | "charcoal" | "catppuccin";
-  paletteDark: "amber" | "charcoal" | "catppuccin";
+  paletteLight: "amber" | "charcoal" | "catppuccin" | "monokai";
+  paletteDark: "amber" | "charcoal" | "catppuccin" | "monokai";
   terminalFontSize: number;
   terminalWheelSpeed: number;
   paneClipboard: boolean;
@@ -101,7 +101,7 @@ const nullableIntegerBetween = (min: number, max: number) => (value: unknown): b
   value === null || integerBetween(min, max)(value);
 
 // This explicit shared schema must track the producer without importing frontend code at runtime.
-const PALETTES = ["amber", "charcoal", "catppuccin"] as const;
+const PALETTES = ["amber", "charcoal", "catppuccin", "monokai"] as const;
 const TELEMETRY_SETTINGS_VALIDATORS = {
   terminalInputMode: oneOf(["auto", "line", "direct"]),
   theme: oneOf(["dark", "light", "system"]),

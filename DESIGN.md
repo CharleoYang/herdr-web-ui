@@ -6,14 +6,14 @@ value. When a component needs a value that is not here, add it to both first.
 
 ## 1. Atmosphere & Identity
 
-A warm terminal: an amber-phosphor console on lamp-lit graphite (dark) or ledger paper (light),
-with chat-app clarity. Tonal surfaces and hairlines keep the chrome out of the way. There is ONE
-chrome color, amber: focus, the chosen lens, the terminal cursor and the user's own action (Send, primary
-buttons). Agent states carry the remaining saturated colors and none of them is amber. The user's
-chat turns are neutral raised cards, so a long thread never turns into a wall of color. Dark is the
-default, light follows the same hierarchy, and comfortable or compact density changes scale without
-changing information architecture. A neutral charcoal look and Catppuccin are
-opt-in palettes (Settings → Appearance → Colors); amber stays the default and the look before settings load.
+A warm terminal: an olive-black Monokai console (dark) or quiet ledger paper (light), with
+chat-app clarity. Tonal surfaces and hairlines keep the chrome out of the way. Orange connects
+focus, the chosen lens, the terminal cursor and the user's own action (Send, primary buttons).
+Agent states carry cyan, pink and green. The user's chat turns are neutral raised cards, so a
+long thread never turns into a wall of color. Dark is the default, light follows the same
+hierarchy, and comfortable or compact density changes scale without changing information
+architecture. Monokai is this checkout's default palette; amber (the previous herdr look), a
+neutral charcoal one and Catppuccin are opt-in palettes (Settings → Appearance → Colors).
 
 The sidebar is one grid: a leading cell that says who or what a row is (the coding agent's brand
 mark, else the place's own glyph), a title, and a trailing cell that says how it is. Workspaces
@@ -21,8 +21,8 @@ and Agents are independent lists, as in herdr's Spaces and Agents panels; tab an
 stays over the terminal and in the palette. Sections are parted by space and a dim head, never by
 a rule; the Agents list's workspace cards are an edge around rows, not a line between sections.
 Hover and selection are one neutral fill at two strengths. Brand marks are the only color
-there that is not a state, and a ready row draws no state at all. Amber connects focus, the chosen
-lens glyph and the terminal cursor.
+there that is not a state, and a ready row draws no state at all. Orange connects focus, the chosen
+lens glyph and the terminal cursor in the default Monokai palette.
 
 ## 2. Color
 
@@ -32,45 +32,45 @@ Only tokens overridden by `[data-theme="light"]` have a light value. Both column
 
 | Role | Token | Dark | Light |
 |------|-------|------|-------|
-| Surface/base | `--bg` | `#12100e` | `#eeeae2` |
-| Surface/panel | `--bg-panel` | `#181613` | `#faf8f3` |
-| Surface/elevated | `--bg-elevated` | `#211e1a` | `#f2eee6` |
-| Surface/hover | `--bg-hover` | `#2a2621` | `#e8e2d6` |
-| Surface/input | `--bg-input` | `#1c1916` | `#fffdf9` |
-| Border | `--border` | `#2d2924` | `#dcd4c6` |
-| Border/strong | `--border-strong` | `#3e3830` | `#c5baa8` |
-| Chat bubble edge | `--bubble-border` | `transparent` | `var(--border)` |
-| Text/primary | `--text` | `#d8d0c3` | `#2a251f` |
-| Text/dim | `--text-dim` | `#9b9183` | `#685e52` |
-| Text/strong | `--text-strong` | `#f2ebdf` | `#16120d` |
-| Accent | `--accent` | `#f0a830` | `#8c5000` |
-| Accent/tint | `--accent-tint` | `rgba(240, 168, 48, 0.13)` | `rgba(140, 80, 0, 0.1)` |
-| Primary | `--primary` | `#f0a830` | `#c57d12` |
-| Primary/hover | `--primary-hover` | `#f6bb55` | `#d48c1f` |
-| Primary/text | `--primary-text` | `#1b1407` | `#1b1407` |
-| Primary/tint | `--primary-tint` | `rgba(240, 168, 48, 0.16)` | `rgba(197, 125, 18, 0.14)` |
-| Status/idle | `--status-idle` | `#9b9183` | `#685e52` |
-| Status/working | `--status-working` | `#6cb8d6` | `#155a72` |
-| Status/blocked | `--status-blocked` | `#ff7b70` | `#a82323` |
-| Status/done | `--status-done` | `#93c36b` | `#2f6317` |
-| Working/tint | `--status-working-tint` | `rgba(108, 184, 214, 0.14)` | `rgba(21, 90, 114, 0.12)` |
-| Blocked/tint | `--status-blocked-tint` | `rgba(255, 123, 112, 0.14)` | `rgba(168, 35, 35, 0.12)` |
-| Done/tint | `--status-done-tint` | `rgba(147, 195, 107, 0.14)` | `rgba(47, 99, 23, 0.12)` |
-| Indicator/working | `--indicator-working` | `#f9e2af` | `#df8e1d` |
-| Indicator/blocked | `--indicator-blocked` | `#f38ba8` | `#d20f39` |
-| Indicator/done | `--indicator-done` | `#94e2d5` | `#179299` |
-| Indicator/idle | `--indicator-idle` | `#a6e3a1` | `#40a02b` |
-| Indicator/unknown | `--indicator-unknown` | `#6c7086` | `#9ca0b0` |
-| Danger/tint | `--danger-tint` | `rgba(255, 123, 112, 0.12)` | `rgba(168, 35, 35, 0.1)` |
-| Danger/text | `--danger-text` | `#ffd9d4` | `#8f1d1d` |
-| Notice | `--notice` | `#e8c55c` | `#7a5a00` |
-| Overlay/scrim | `--scrim` | `rgba(8, 6, 4, 0.55)` | `rgba(40, 32, 22, 0.35)` |
+| Surface/base | `--bg` | `#1e1f1c` | `#f5f4ef` |
+| Surface/panel | `--bg-panel` | `#272822` | `#faf9f5` |
+| Surface/elevated | `--bg-elevated` | `#2e2f29` | `#eeede6` |
+| Surface/hover | `--bg-hover` | `#33342d` | `#e5e3dc` |
+| Surface/input | `--bg-input` | `#1e1f1c` | `#ffffff` |
+| Border | `--border` | `#3e3d32` | `#dcd9cd` |
+| Border/strong | `--border-strong` | `#49483e` | `#cac6b6` |
+| Chat bubble edge | `--bubble-border` | `transparent` | `transparent` |
+| Text/primary | `--text` | `#f8f8f2` | `#272822` |
+| Text/dim | `--text-dim` | `#b0ab95` | `#605d52` |
+| Text/strong | `--text-strong` | `#ffffff` | `#141411` |
+| Accent | `--accent` | `#fd971f` | `#d46b00` |
+| Accent/tint | `--accent-tint` | `rgba(253, 151, 31, 0.16)` | `rgba(212, 107, 0, 0.12)` |
+| Primary | `--primary` | `#fd971f` | `#d46b00` |
+| Primary/hover | `--primary-hover` | `#ffad42` | `#eb7802` |
+| Primary/text | `--primary-text` | `#1b1407` | `#ffffff` |
+| Primary/tint | `--primary-tint` | `rgba(253, 151, 31, 0.18)` | `rgba(212, 107, 0, 0.14)` |
+| Status/idle | `--status-idle` | `#a6a28c` | `#605d52` |
+| Status/working | `--status-working` | `#66d9ef` | `#0b5c9e` |
+| Status/blocked | `--status-blocked` | `#ff9eaa` | `#ad0c3d` |
+| Status/done | `--status-done` | `#a6e22e` | `#1e6122` |
+| Working/tint | `--status-working-tint` | `rgba(102, 217, 239, 0.14)` | `rgba(11, 92, 158, 0.12)` |
+| Blocked/tint | `--status-blocked-tint` | `rgba(255, 158, 170, 0.14)` | `rgba(173, 12, 61, 0.12)` |
+| Done/tint | `--status-done-tint` | `rgba(166, 226, 46, 0.14)` | `rgba(30, 97, 34, 0.12)` |
+| Indicator/working | `--indicator-working` | `#e6db74` | `#9a7d0a` |
+| Indicator/blocked | `--indicator-blocked` | `#f92672` | `#a3183c` |
+| Indicator/done | `--indicator-done` | `#66d9ef` | `#0f7b8a` |
+| Indicator/idle | `--indicator-idle` | `#a6e22e` | `#4e7a13` |
+| Indicator/unknown | `--indicator-unknown` | `#75715e` | `#7a7566` |
+| Danger/tint | `--danger-tint` | `rgba(255, 158, 170, 0.12)` | `rgba(173, 12, 61, 0.1)` |
+| Danger/text | `--danger-text` | `#ffd6df` | `#880e4f` |
+| Notice | `--notice` | `#e6db74` | `#7a5a00` |
+| Overlay/scrim | `--scrim` | `rgba(10, 10, 8, 0.65)` | `rgba(39, 40, 34, 0.35)` |
 | Glass bar | `--bar-bg` | `color-mix(in srgb, var(--bg-panel) 72%, transparent)` | same expression |
 | Glass card | `--card-glass` | `color-mix(in srgb, var(--bg-elevated) 80%, transparent)` | same expression |
 | Glass blur | `--glass-blur` | `saturate(180%) blur(20px)` | same |
-| Drawer shadow | `--shadow-drawer` | `0 0 40px rgba(0, 0, 0, 0.6)` | `0 0 40px rgba(40, 32, 22, 0.22)` |
-| Popover shadow | `--shadow-pop` | `0 16px 48px rgba(0, 0, 0, 0.55), 0 0 0 1px var(--border)` | `0 16px 48px rgba(40, 32, 22, 0.16), 0 0 0 1px var(--border)` |
-| Card shadow | `--shadow-card` | `0 4px 16px rgba(0, 0, 0, 0.35)` | `0 4px 16px rgba(40, 32, 22, 0.07)` |
+| Drawer shadow | `--shadow-drawer` | `0 0 40px rgba(0, 0, 0, 0.65)` | `0 0 40px rgba(39, 40, 34, 0.2)` |
+| Popover shadow | `--shadow-pop` | `0 16px 48px rgba(0, 0, 0, 0.6), 0 0 0 1px var(--border)` | `0 16px 48px rgba(39, 40, 34, 0.16), 0 0 0 1px var(--border)` |
+| Card shadow | `--shadow-card` | `0 4px 16px rgba(0, 0, 0, 0.35)` | `0 4px 16px rgba(39, 40, 34, 0.08)` |
 | Document surface | `--pdf-page` | `#ffffff` | `#ffffff` |
 
 `--pdf-page` is the one color with the same value in both columns, on purpose: a PDF page is
@@ -79,14 +79,25 @@ paper, not UI, and the viewer (`.file-viewer-pdf`) must not tint it for the them
 
 ### Opt-in palettes
 
-`settings.palette` (`amber` default, `charcoal`, `catppuccin`) is written as `data-palette`. The
-tables above are amber, the base blocks; the two opt-in palettes override them in
-`[data-theme][data-palette]` blocks of `src/styles.css`, which hold the complete values.
+`settings.palette` (`monokai` default, `amber`, `charcoal`, `catppuccin`) is written as
+`data-palette`. The tables above are Monokai, this checkout's default and the base blocks; the
+three opt-in palettes override them in `[data-theme][data-palette]` blocks of `src/styles.css`,
+which hold the complete values. `settings.paletteLight` and `settings.paletteDark` name the pair
+System mode switches between, and a record naming a removed palette (report, lilac, forest) loads
+as Monokai.
 
 `--bubble-border` is the edge of the chat's user bubble. It is `transparent` where `--bg-elevated`
-alone parts the bubble from `--bg`: dark amber and dark charcoal. It is `var(--border)`
-where the two surfaces sit close: every light theme (the `[data-theme="light"]` block sets it for
-all palettes) and dark Catppuccin, whose elevated surface is darker than its canvas.
+alone parts the bubble from `--bg`: Monokai in both themes, dark amber and dark charcoal. It is
+`var(--border)` where the two surfaces sit close: light amber, light charcoal, and Catppuccin in
+both themes.
+
+- **Monokai (OMP)** is this checkout's default: the base blocks themselves — olive-black surfaces
+  with orange actions, cyan working, pink blocked and green done states, and quiet ledger paper in
+  light. Its own sixteen ANSI colors go on the terminal grid in dark
+  (`MONOKAI_DARK_ANSI` in `src/components/PaneTerminal.tsx`), so the grid reads as a Monokai
+  terminal rather than xterm's defaults, and its corners are the smaller
+  `4/6/8px` (`--radius-sm/md/lg`). `src/lib/settings.ts` mirrors the palette list and the
+  `--term-*` values (`PALETTES`, `TERMINAL_THEMES`, `THEME_COLOR`).
 
 - **Charcoal** is a neutral Ghostty-style dark: `--bg` `#0f0f0f`, panel and terminal `#171717`, text
   `#cbc7c0` / `#918c85` / `#f5f2ec`, accent and primary near-white `#e8e4dc` with `#171717` text,
@@ -115,10 +126,14 @@ CSS tokens verbatim for each resolved theme and palette (`settings.test.ts` chec
 
 | Role | Token | Dark | Light | xterm key |
 |------|-------|------|-------|-----------|
-| Background | `--term-bg` | `#181613` | `#faf8f3` | `background` |
-| Foreground | `--term-fg` | `#d8d0c3` | `#2a251f` | `foreground` |
-| Cursor | `--term-cursor` | `#f0a830` | `#8c5000` | `cursor` |
-| Selection | `--term-selection` | `#4a3d26` | `#f0d9ae` | `selectionBackground` |
+| Background | `--term-bg` | `#272822` | `#faf9f5` | `background` |
+| Foreground | `--term-fg` | `#f8f8f2` | `#272822` | `foreground` |
+| Cursor | `--term-cursor` | `#fd971f` | `#d46b00` | `cursor` |
+| Selection | `--term-selection` | `#49483e` | `#e0dccf` | `selectionBackground` |
+
+Dark Monokai also sets xterm's ANSI colors in `PaneTerminal.tsx`: pink red, green, yellow,
+cyan blue/cyan and purple magenta, with olive-black black and off-white white. Other palettes
+and light Monokai retain xterm's standard ANSI colors.
 
 Programs pick their own colors for one background, so xterm keeps a cell's text at 4.5:1 or more
 against the cell's background (`minimumContrastRatio`, WCAG AA): a foreground below it moves toward
@@ -158,9 +173,10 @@ blue there instead of `--accent`, and Latte's colors are darkened to stay readab
   overlay2 `#9399b2` (5.8:1), Latte `#64677d` (subtext0 darkened to 4.9:1 on `--bg`).
 
 ### Rules
-- Amber is the one chrome color. Accent (selected, focused, informational) and primary (the user's
-  action: Send, primary buttons) are both amber; in light, accent is the darker text-safe ochre and
-  primary the brighter fill carrying ink text. Agent states never use amber.
+- Orange is the chrome color in this checkout's default Monokai palette. Accent (selected, focused,
+  informational) and primary (the user's action: Send, primary buttons) share the Monokai hue; in
+  light, accent is the darker text-safe orange and primary the brighter fill carrying ink text.
+  Agent states use cyan, pink and green. Amber keeps the previous lamp-lit look as an opt-in palette.
 - Agent state has a written label as well as color. The sidebar's compact glyphs keep their labels
   in tooltips and screen-reader text; other surfaces draw the words. In the sidebar ready and
   unknown draw no glyph and keep their label for assistive tech; elsewhere unknown uses dim text
@@ -194,8 +210,8 @@ The values are the ones in `src/styles.css`. Every token but `--fs-input` is `ca
 | Token | Value | Usage |
 |-------|-------|-------|
 | `--ui-scale` | `1`; Settings → Appearance → Interface font size over the density's body size, written on `<html>` | Multiplies every `--fs-*` token but `--fs-input` |
-| `--font-ui` | `"Pretendard Variable", Pretendard, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Noto Sans KR", "Malgun Gothic", sans-serif` | Chrome and chat prose |
-| `--font-mono` | `"Symbols Nerd Font Mono", "JetBrains Mono Web", ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, "D2Coding", monospace` | Code, paths, keys, terminal-adjacent metadata |
+| `--font-ui` | `-apple-system, BlinkMacSystemFont, "PingFang SC", "Hiragino Sans GB", sans-serif` | Chrome and chat prose (the system UI face, with the Chinese fallbacks this checkout asks for) |
+| `--font-mono` | `"Symbols Nerd Font Mono", "JetBrains Mono Web", ui-monospace, "SF Mono", Menlo, Monaco, "PingFang SC", "Hiragino Sans GB", monospace` | Code, paths, keys, terminal-adjacent metadata |
 | `--lh-tight` | `1.2` | Titles |
 | `--lh-base` | `1.5` comfortable / `1.45` compact | Body copy |
 | `--lh-code` | `1.6` | Code blocks; the message box with a mouse |
@@ -237,8 +253,8 @@ The values are the ones in `src/styles.css`. Every token but `--fs-input` is `ca
 
 ### Settings
 - `theme`: `dark`, `light`, or `system`; default `dark`.
-- `palette`: `amber`, `charcoal` or `catppuccin`; default `amber`. A removed palette (`report`,
-  `lilac`, `forest`) loads as `amber`.
+- `palette`: `monokai`, `amber`, `charcoal` or `catppuccin`; default `monokai`. A removed palette
+  (`report`, `lilac`, `forest`) loads as `monokai`.
 - `density`: `comfortable` or `compact`; default `comfortable`.
 - `sidebarRows`: `one` or `two`; default `one`.
 - Terminal font size is independent: default `13px`, clamped to `10–22px`.

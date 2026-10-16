@@ -29,10 +29,10 @@ export type AgentMarks = "color" | "mono";
 export type UsageCount = "used" | "left";
 /** the limit a plan meter shows: the plan's week, or its short session (5 hours on Claude and Codex) */
 export type UsageGlance = "week" | "session";
-/** amber: the herdr look (the default); charcoal: neutral Ghostty-style dark;
- *  catppuccin: Catppuccin Mocha in dark, Latte in light. A record naming a palette that was removed
- *  (report, lilac, forest) loads as amber. */
-export type Palette = "amber" | "charcoal" | "catppuccin";
+/** monokai: the OMP look this checkout defaults to; amber: the herdr look;
+ *  charcoal: neutral Ghostty-style dark; catppuccin: Catppuccin Mocha in dark, Latte in light.
+ *  A record naming a palette that was removed (report, lilac, forest) loads as monokai. */
+export type Palette = "amber" | "charcoal" | "catppuccin" | "monokai";
 /** the chat lane's widest: the transcript, the composer column and the held list share it (--chat-w in src/styles.css).
  *  narrow: 820px; default: follows the pane, up to 60rem (chatLaneWidth); wide: 72rem; full: the pane, less the gutters */
 export type ChatWidth = "narrow" | "default" | "wide" | "full";
@@ -263,9 +263,9 @@ export const DEFAULT_SETTINGS: Settings = {
   agentOrder: "workspace",
   agentMarks: "color",
   statusIndicators: "classic",
-  palette: "amber",
-  paletteLight: "amber",
-  paletteDark: "amber",
+  palette: "monokai",
+  paletteLight: "monokai",
+  paletteDark: "monokai",
   terminalFontSize: 13,
   terminalWheelSpeed: 1,
   terminalFontFamily: "",
@@ -518,9 +518,13 @@ const TERMINAL_THEMES: Record<Palette, Record<ResolvedTheme, TerminalColors>> = 
     light: { background: "#eff1f5", foreground: "#4c4f69", cursor: "#dc8a78", selectionBackground: "#d2d4dc" },
     dark: { background: "#1e1e2e", foreground: "#cdd6f4", cursor: "#f5e0dc", selectionBackground: "#3b3d4f" },
   },
+  monokai: {
+    light: { background: "#faf9f5", foreground: "#272822", cursor: "#d46b00", selectionBackground: "#e0dccf" },
+    dark: { background: "#272822", foreground: "#f8f8f2", cursor: "#fd971f", selectionBackground: "#49483e" },
+  },
 };
 
-export function terminalTheme(theme: ResolvedTheme, palette: Palette = "amber"): TerminalColors {
+export function terminalTheme(theme: ResolvedTheme, palette: Palette = "monokai"): TerminalColors {
   return TERMINAL_THEMES[palette][theme];
 }
 
@@ -529,6 +533,7 @@ const THEME_COLOR: Record<Palette, Record<ResolvedTheme, string>> = {
   amber: { dark: "#181613", light: "#faf8f3" },
   charcoal: { dark: "#171717", light: "#fafaf9" },
   catppuccin: { dark: "#181825", light: "#e6e9ef" },
+  monokai: { dark: "#272822", light: "#faf9f5" },
 };
 
 function applyToDocument(settings: Settings, resolved: ResolvedTheme, palette: Palette, language: Language): void {

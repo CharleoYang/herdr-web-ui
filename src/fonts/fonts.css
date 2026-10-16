@@ -7,7 +7,7 @@
  * whose characters a page draws: the demo's English chat takes three (90 KB) and the same
  * chat in Korean eight more (200 KB). Vite fingerprints each into /assets/, where the service worker keeps what was fetched.
  */
-@import "./pretendard/pretendardvariable-dynamic-subset.css";
+/* @import "./pretendard/pretendardvariable-dynamic-subset.css"; */
 
 /* The code face of the chat and the chrome (--font-mono in styles.css). Its family name is the
    app's own on purpose: the terminal's stack (lib/fontFamily.ts) names "JetBrains Mono", and

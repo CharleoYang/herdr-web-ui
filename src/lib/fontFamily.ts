@@ -11,10 +11,11 @@
 // It stays first, ahead of a chosen font too, so the icons draw even when that font has none.
 // The chrome's code stack (--font-mono, lib/typography.ts) opens with it for the same reason
 export const SYMBOLS_FONT = '"Symbols Nerd Font Mono"';
-// xterm sizes every cell from the first matching font, so a proportional one (Malgun Gothic)
-// must never win it: it stays behind the generic monospace as a per-glyph Hangul fallback
+// xterm sizes every cell from the first matching font, so a proportional one (PingFang SC) must
+// never win it: it stays behind the generic monospace as the per-glyph Chinese fallback, since
+// neither Menlo nor Monaco draws Han and this device ships no monospaced Han face
 const TERMINAL_TEXT_FONTS =
-  '"JetBrains Mono", "Fira Code", "D2Coding", Menlo, Monaco, "Cascadia Mono", Consolas, "Noto Sans Mono CJK KR", monospace, "Malgun Gothic"';
+  'ui-monospace, "SF Mono", Menlo, Monaco, monospace, "PingFang SC", "Hiragino Sans GB"';
 export const TERMINAL_FONT_STACK = `${SYMBOLS_FONT}, ${TERMINAL_TEXT_FONTS}`;
 
 /** the chat's own stack: --font-ui in src/styles.css */

@@ -541,17 +541,18 @@ describe("language", () => {
 });
 
 describe("palette", () => {
-  it("defaults to amber, the look before this setting, and keeps only a known palette", () => {
-    expect(DEFAULT_SETTINGS.palette).toBe("amber");
+  it("defaults to monokai, and keeps only a known palette", () => {
+    expect(DEFAULT_SETTINGS.palette).toBe("monokai");
     // settings stored before palettes existed carry no palette key
-    expect(sanitizeSettings({ theme: "light" }).palette).toBe("amber");
+    expect(sanitizeSettings({ theme: "light" }).palette).toBe("monokai");
     expect(sanitizeSettings({ palette: "charcoal" }).palette).toBe("charcoal");
     expect(sanitizeSettings({ palette: "catppuccin" }).palette).toBe("catppuccin");
-    expect(sanitizeSettings({ palette: "pink" }).palette).toBe("amber");
+    expect(sanitizeSettings({ palette: "monokai" }).palette).toBe("monokai");
+    expect(sanitizeSettings({ palette: "pink" }).palette).toBe("monokai");
   });
 
-  it("loads a removed palette (report, lilac, forest) as amber", () => {
-    for (const removed of ["report", "lilac", "forest"]) expect(sanitizeSettings({ palette: removed }).palette).toBe("amber");
+  it("loads a removed palette (report, lilac, forest) as monokai", () => {
+    for (const removed of ["report", "lilac", "forest"]) expect(sanitizeSettings({ palette: removed }).palette).toBe("monokai");
   });
 
   it("preserves Catppuccin through a saved settings round-trip and unrelated edits", () => {
@@ -569,12 +570,14 @@ describe("palette", () => {
   };
   // each case lists its blocks from the most specific to the base; the first one naming a token wins
   const cases = [
-    { theme: "dark", palette: "amber", layers: [":root"] },
-    { theme: "light", palette: "amber", layers: ['[data-theme="light"]', ":root"] },
+    { theme: "dark", palette: "amber", layers: ['[data-theme="dark"][data-palette="amber"]', ":root"] },
+    { theme: "light", palette: "amber", layers: ['[data-theme="light"][data-palette="amber"]', '[data-theme="light"]', ":root"] },
     { theme: "dark", palette: "charcoal", layers: ['[data-theme="dark"][data-palette="charcoal"]', ":root"] },
     { theme: "light", palette: "charcoal", layers: ['[data-theme="light"][data-palette="charcoal"]', '[data-theme="light"]', ":root"] },
     { theme: "dark", palette: "catppuccin", layers: ['[data-theme="dark"][data-palette="catppuccin"]', ":root"] },
     { theme: "light", palette: "catppuccin", layers: ['[data-theme="light"][data-palette="catppuccin"]', '[data-theme="light"]', ":root"] },
+    { theme: "dark", palette: "monokai", layers: [":root"] },
+    { theme: "light", palette: "monokai", layers: ['[data-theme="light"]', ":root"] },
   ] as const;
   const tokens = (layers: readonly string[]) => (name: string): string =>
     layers.map((selector) => block(selector).match(new RegExp(`--${name}: ([^;]+);`))?.[1]).find((value) => value !== undefined)!;
@@ -624,12 +627,12 @@ describe("palette", () => {
     expect(failures).toEqual([]);
   });
 
-  it("paints amber before settings load: the base blocks are the default palette's", () => {
+  it("paints monokai before settings load: the base blocks are the default palette's", () => {
     const css = readFileSync(join(import.meta.dir, "..", "styles.css"), "utf8");
     const root = css.slice(css.indexOf(":root {"), css.indexOf("}", css.indexOf(":root {")));
     expect(root).toContain(`--term-bg: ${terminalTheme("dark").background};`);
     expect(root).toContain(`--term-cursor: ${terminalTheme("dark").cursor};`);
-    expect(terminalTheme("dark")).toEqual(terminalTheme("dark", "amber"));
+    expect(terminalTheme("dark")).toEqual(terminalTheme("dark", "monokai"));
   });
 });
 

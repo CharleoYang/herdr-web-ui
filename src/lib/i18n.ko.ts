@@ -112,6 +112,7 @@ export const KO: Record<string, string> = {
   "Charcoal": "차콜",
   "Amber": "앰버",
   "Catppuccin": "Catppuccin",
+  "Monokai (OMP)": "모노카이 (OMP)",
   "Pin agent": "에이전트 고정",
   "Unpin agent": "에이전트 고정 해제",
   "Pin workspace": "워크스페이스 고정",

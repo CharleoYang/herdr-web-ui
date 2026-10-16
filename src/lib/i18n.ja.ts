@@ -114,6 +114,7 @@ export const JA: Record<string, string> = {
   "Charcoal": "チャコール",
   "Amber": "アンバー",
   "Catppuccin": "Catppuccin",
+  "Monokai (OMP)": "モノカイ (OMP)",
   "Pin agent": "エージェントを固定",
   "Unpin agent": "エージェントの固定を解除",
   "Pin workspace": "ワークスペースを固定",
