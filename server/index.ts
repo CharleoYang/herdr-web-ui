@@ -593,32 +593,49 @@ export function createServer(
     }
     return panes;
   };
+  /** one prompt read per pane at a time: a slow read must never publish after a newer one */
+  const promptReads = new Map<string, Promise<void>>();
+  /** a read already waiting its turn for that pane: further ticks add nothing until it starts */
+  const promptQueued = new Set<string>();
+  const publishPanePrompts = async (paneId: string, kinds: Set<"f" | "w">): Promise<void> => {
+    for (const kind of kinds) {
+      const restricted = kind === "w";
+      let state: PromptState;
+      try {
+        state = await readPromptState(paneId, {
+          codexHome: options.codexHome,
+          claudeTranscript: (id) => claudeAgents.sessionOf(id)?.path ?? null,
+          readOnly: restricted,
+        });
+      } catch { continue; }
+      const key = `${kind}:${paneId}`;
+      const body = JSON.stringify(state);
+      if (promptBodies.get(key) === body) continue;
+      let delivered = false;
+      for (const client of clients) {
+        if (!conversationEligible(client, paneId) || !client.data.features?.includes("prompt-push")) continue;
+        if (promptRestricted(client) !== restricted) continue;
+        if (send(client, { type: "prompt-push", pane_id: paneId, ...state }) !== 0) delivered = true;
+      }
+      if (delivered) promptBodies.set(key, body);
+    }
+  };
   const publishPrompts = async (): Promise<void> => {
     const panes = promptSubscribers();
     for (const key of promptBodies.keys()) if (!panes.has(key.slice(2))) promptBodies.delete(key);
-    await Promise.all([...panes].map(async ([paneId, kinds]) => {
-      for (const kind of kinds) {
-        const restricted = kind === "w";
-        let state: PromptState;
-        try {
-          state = await readPromptState(paneId, {
-            codexHome: options.codexHome,
-            claudeTranscript: (id) => claudeAgents.sessionOf(id)?.path ?? null,
-            readOnly: restricted,
-          });
-        } catch { continue; }
-        const key = `${kind}:${paneId}`;
-        const body = JSON.stringify(state);
-        if (promptBodies.get(key) === body) continue;
-        let delivered = false;
-        for (const client of clients) {
-          if (!conversationEligible(client, paneId) || !client.data.features?.includes("prompt-push")) continue;
-          if (promptRestricted(client) !== restricted) continue;
-          if (send(client, { type: "prompt-push", pane_id: paneId, ...state }) !== 0) delivered = true;
-        }
-        if (delivered) promptBodies.set(key, body);
-      }
-    }));
+    const runs: Promise<void>[] = [];
+    for (const [paneId, kinds] of panes) {
+      // Reads of one pane run in turn: each publishes the snapshot it took before the next starts,
+      // so a late answer can never land after a newer one. One read waits at most.
+      if (promptQueued.has(paneId)) continue;
+      promptQueued.add(paneId);
+      const run = (promptReads.get(paneId) ?? Promise.resolve())
+        .catch(() => { /* a failed read keeps the last body */ })
+        .then(() => { promptQueued.delete(paneId); return publishPanePrompts(paneId, kinds); });
+      promptReads.set(paneId, run);
+      runs.push(run.finally(() => { if (promptReads.get(paneId) === run) promptReads.delete(paneId); }));
+    }
+    await Promise.all(runs);
   };
   const promptTimer = setInterval(() => { void publishPrompts(); }, PROMPT_PUSH_MS);
   promptTimer.unref();

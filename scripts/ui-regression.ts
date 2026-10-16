@@ -1876,6 +1876,17 @@ try {
   // the same text suggested again after the turn shows again
   await paintSuggestion(paneA, "run the tests");
   await until(async () => await composer.getAttribute("placeholder") === "run the tests", "the same suggestion again");
+  // A REST read that started before a push must not paint over it: the held stale answer is dropped.
+  const staleRead = await holdPromptRead(paneA, "run the tests", reconcilePrompt);
+  await paintSuggestion(paneA, "a newer suggestion");
+  await until(async () => await composer.getAttribute("placeholder") === "a newer suggestion", "the push replaced the placeholder");
+  await staleRead.deliver();
+  assert.equal(await composer.getAttribute("placeholder"), "a newer suggestion", "an answer from before the push cannot repaint it");
+  await staleRead.finish();
+  assert.equal(await composer.getAttribute("placeholder"), "a newer suggestion", "and it stays dropped");
+  await paintSuggestion(paneA, "run the tests");
+  await until(async () => await composer.getAttribute("placeholder") === "run the tests", "the pane's own suggestion returns");
+  console.log("PASS a prompt pushed after a REST read started wins, and the late answer cannot repaint it");
   await herdrRpc("pane.report_agent", { pane_id: paneB, source: "manual", agent: "claude", state: "idle" });
   await paintSuggestion(paneB, "review pane B");
   const beforePaneSwitch = await holdPromptRead(paneB, "review pane B", () => selectPane(paneB));

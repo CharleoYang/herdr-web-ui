@@ -1223,6 +1223,8 @@ export const ChatView = memo(function ChatView({ paneId, active = true, visible:
   const pollPrompt = connected && !ended && agent !== null;
   const promptPushesRef = useRef(promptPushes);
   promptPushesRef.current = promptPushes;
+  /** A REST read that started before a push must not paint over it: every newer prompt bumps this. */
+  const promptGeneration = useRef(0);
   useEffect(() => {
     if (!pollPrompt) { setPrompt(null); setRestored(null); onSuggestionRef.current?.(paneId, null); onRestoredRef.current?.(paneId, null); return; }
     if (!visible) return;
@@ -1230,9 +1232,10 @@ export const ChatView = memo(function ChatView({ paneId, active = true, visible:
     let timer = 0;
     const readPrompt = async (): Promise<void> => {
       const sent = sentKeyRef.current;
+      const generation = ++promptGeneration.current;
       try {
         const next = await fetchPanePromptState(paneId);
-        if (!cancelled) {
+        if (!cancelled && promptGeneration.current === generation) {
           setPrompt((current) => current?.id === next.prompt?.id ? current : next.prompt);
           if (sentKeyRef.current === sent) {
             onSuggestionRef.current?.(paneId, next.suggestion);
@@ -1241,7 +1244,7 @@ export const ChatView = memo(function ChatView({ paneId, active = true, visible:
           }
         }
       }
-      catch { if (!cancelled) { setPrompt(null); setRestored(null); onSuggestionRef.current?.(paneId, null); onRestoredRef.current?.(paneId, null); } }
+      catch { if (!cancelled && promptGeneration.current === generation) { setPrompt(null); setRestored(null); onSuggestionRef.current?.(paneId, null); onRestoredRef.current?.(paneId, null); } }
       finally { if (!cancelled && !promptPushesRef.current) timer = window.setTimeout(() => void readPrompt(), PROMPT_POLL_MS); }
     };
     void readPrompt();
@@ -1251,6 +1254,7 @@ export const ChatView = memo(function ChatView({ paneId, active = true, visible:
     if (!promptPushes || !visible) return;
     const applyPush = (message: Extract<ServerMessage, { type: "prompt-push" }>): void => {
       if (message.pane_id !== paneId) return;
+      promptGeneration.current += 1;
       const sent = sentKeyRef.current;
       setPrompt((current) => current?.id === message.prompt?.id ? current : message.prompt);
       if (sentKeyRef.current === sent) {

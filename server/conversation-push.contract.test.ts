@@ -763,6 +763,55 @@ describe("native conversation invalidation", () => {
     }
   }, 30_000);
 
+  it("serializes a pane's prompt reads so a slow one cannot publish after a newer one", async () => {
+    const other = await workspaceCreate({ cwd: root, label: `herdr-web-ui-test-serialize-${Date.now()}` });
+    const clockWorkspaceId = other.workspace.workspace_id;
+    const clockPane = other.root_pane.pane_id;
+    const socket = await connect();
+    attach(socket);
+    // the clock pane needs its own attach: a push only reaches an attached, interested client
+    socket.send({ type: "attach", pane_id: clockPane, cols: 80, rows: 24, keep_size: true });
+    watch(socket);
+    watch(socket, true, clockPane);
+    await socket.waitFor((frame) => frame.type === "input-ready" && frame.pane_id === paneId && frame.ready !== false);
+    const held = Promise.withResolvers<void>();
+    let heldStarted = false;
+    let ticks = 0;
+    let paneReads = 0;
+    let overlaps = 0;
+    let inFlight = 0;
+    const read = spyOn(promptReader, "readPromptState").mockImplementation(async (id: string) => {
+      inFlight += 1;
+      if (inFlight > 1 && id === paneId) overlaps += 1;
+      try {
+        if (id === clockPane) {
+          ticks += 1;
+          // a new body every read, so the clock pane's frames count the publisher's ticks
+          return { prompt: null, suggestion: `tick ${ticks}`, restored: null };
+        }
+        paneReads += 1;
+        if (paneReads === 1) { heldStarted = true; await held.promise; return { prompt: null, suggestion: "old", restored: null }; }
+        return { prompt: null, suggestion: "new", restored: null };
+      } finally { inFlight -= 1; }
+    });
+    const pushes = (id: string) => socket.frames.filter(
+      (frame): frame is Extract<ServerMessage, { type: "prompt-push" }> => frame.type === "prompt-push" && frame.pane_id === id);
+    try {
+      await until(() => heldStarted, "the pane's first prompt read started");
+      // three clock frames prove three publish ticks went by while the pane's read is still held
+      await until(() => pushes(clockPane).length >= 3, "the publisher ticked while a prompt read was held");
+      held.resolve();
+      await until(() => pushes(paneId).some((frame) => frame.suggestion === "new"), "the pane published after the slow read");
+      expect(overlaps).toBe(0);
+      expect(pushes(paneId).map((frame) => frame.suggestion)).toEqual(["old", "new"]);
+    } finally {
+      held.resolve();
+      read.mockRestore();
+      socket.ws.close();
+      await workspaceClose(clockWorkspaceId);
+    }
+  }, 45_000);
+
   it("releases native interest when the owned pane ends and refuses a stale enable", async () => {
     const socket = await connect();
     attach(socket);
