@@ -4,7 +4,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "no
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { paneRead, paneSendKeys, paneSendText } from "../server/herdr/client.ts";
-
+import { terminalOracle } from "./terminal-input-oracle.ts";
 /** Mac keyboard events in an isolated context, against a pane owned by the UI suite. */
 export async function checkCommandBackspace(browser: Browser, origin: string, paneId: string): Promise<void> {
   const context = await browser.newContext({ viewport: { width: 1100, height: 650 } });
@@ -112,22 +112,18 @@ process.stdin.on("data", (data) => {
     await context.close();
   }
   const nonMac = await browser.newContext();
-  await nonMac.addInitScript((id) => {
+  await nonMac.addInitScript(({ expectedOrigin, paneId }) => {
+    if (location.origin !== expectedOrigin) return;
     Object.defineProperty(navigator, "platform", { get: () => "Linux x86_64" });
-    localStorage.setItem(`herdr-web-ui:view:${id}`, "terminal");
-  }, paneId);
+    localStorage.setItem(`herdr-web-ui:view:${paneId}`, "terminal");
+  }, { expectedOrigin: new URL(origin).origin, paneId });
   try {
     const page = await nonMac.newPage();
-    const inputs: string[] = [];
-    page.on("websocket", (socket) => socket.on("framesent", ({ payload }) => {
-      const message = JSON.parse(String(payload));
-      if (message.type === "input") inputs.push(message.text);
-    }));
+    const oracle = terminalOracle(page, paneId);
     await page.goto(`${origin}/?pane=${encodeURIComponent(paneId)}`);
-    await page.locator(".conn-live").waitFor();
-    await page.locator(".xterm-helper-textarea").press("Meta+Backspace");
-    await page.waitForTimeout(300);
-    assert.deepEqual(inputs, ["\x7f"], "non-macOS Meta+Backspace keeps its native sequence");
+    await oracle.ready();
+    assert.deepEqual(await oracle.measure(() => page.locator(".xterm-helper-textarea").press("Meta+Backspace")),
+      [{ type: "input", pane_id: paneId, text: "\x7f" }], "non-macOS Meta+Backspace keeps its native sequence");
     console.log("PASS non-macOS Meta+Backspace keeps native DEL");
   } finally {
     await nonMac.close();
