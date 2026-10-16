@@ -79,6 +79,37 @@ bun run test:ui            # builds, then browser regression on `herdr-web-ui-te
 `bun run test:ssh`. Tests and screenshots use panes and state they create themselves, never your
 running terminals: see [development](docs/development.md#checks).
 
+### Focused terminal smoke
+
+Run the terminal keyboard checks without the full integration/browser suites:
+
+```bash
+bun run smoke:terminal
+bun run smoke:terminal arrows backspace
+bun run smoke:terminal ctrl-enter pane-shortcuts
+```
+
+With no arguments, all four cases run. Arguments select cases by the names shown above;
+an unknown name fails before the fixture starts. Install dependencies with `bun install` first.
+This command needs Bun, Node and herdr as described in **Set up**, plus Chrome/Chromium:
+set `CHROME_PATH`, use `/opt/google/chrome/chrome` on Linux, or install the matching browser with
+`bun node_modules/playwright-core/cli.js install chromium`. `HERDR_WEB_HERDR_BIN` can select herdr.
+
+`smoke:terminal` builds `dist/`, then uses `check run` to allocate a disposable herdr session,
+config and state. Its fixture creates two workspaces with real PTYs, a loopback bridge on an
+ephemeral port, and a headless browser. It never attaches to your existing panes or workspaces.
+Do not set `HERDR_TEST_LIVE=1`; live mode and direct unisolated fixture use are refused.
+If `dist/` is already current, skip rebuilding with
+`bun run check run bun scripts/terminal-smoke.ts arrows` (the same case arguments apply).
+
+A passing command exits 0. A failed check or prerequisite exits nonzero; unknown cases and
+the fixture's unsafe-environment guard exit 2 in the child command. `check run` reports child
+failures instead of treating them as passes. On success or a thrown check, the fixture closes
+its browser, stops its bridge, closes its workspaces/panes and removes its temporary root;
+the wrapper stops its disposable herdr and removes its config/state. `CHECK_DIR`, when explicitly
+set, retains the wrapper directory for inspection, not a running daemon. The printed check-report
+path contains the result and command logs; a terminal smoke PASS is not a full-CI PASS.
+
 ## What a change needs
 
 - **HTTP or WebSocket contract:** change both sides through `shared/protocol.ts` and cover it with a
