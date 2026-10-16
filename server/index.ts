@@ -574,31 +574,50 @@ export function createServer(
     void run.finally(() => { if (conversationReads.get(paneId) === run) conversationReads.delete(paneId); });
   }, options.codexHome, options.devinDbPath, options.opencodeDb, options.hermesHome, options.grokHome);
   const PROMPT_PUSH_MS = 2_000;
+  /** A watching device reads the screen's card, never Claude's plan file: the same narrowing GET applies (`plan=0`). */
+  const promptRestricted = (client: Client): boolean => client.data.readOnly === true || client.data.mode === "observe";
+  /** last body pushed per pane and privilege class (`f` owner, `w` restricted), so an unchanged body stays quiet */
   const promptBodies = new Map<string, string>();
-  const promptWatched = (): Set<string> => {
-    const panes = new Set<string>();
+  const promptSubscribers = (): Map<string, Set<"f" | "w">> => {
+    const panes = new Map<string, Set<"f" | "w">>();
     if (stopped) return panes;
     for (const client of clients) {
       if (client.data.closing || client.readyState !== WebSocket.OPEN || !client.data.features?.includes("prompt-push")) continue;
-      for (const paneId of client.data.conversationInterests.keys()) if (client.data.attached.has(paneId)) panes.add(paneId);
+      const kind: "f" | "w" = promptRestricted(client) ? "w" : "f";
+      for (const paneId of client.data.conversationInterests.keys()) {
+        if (!client.data.attached.has(paneId)) continue;
+        const kinds = panes.get(paneId) ?? new Set<"f" | "w">();
+        kinds.add(kind);
+        panes.set(paneId, kinds);
+      }
     }
     return panes;
   };
   const publishPrompts = async (): Promise<void> => {
-    const panes = promptWatched();
-    for (const paneId of promptBodies.keys()) if (!panes.has(paneId)) promptBodies.delete(paneId);
-    await Promise.all([...panes].map(async (paneId) => {
-      let state: PromptState;
-      try { state = await readPromptState(paneId, { codexHome: options.codexHome, claudeTranscript: (id) => claudeAgents.sessionOf(id)?.path ?? null }); }
-      catch { return; }
-      const body = JSON.stringify(state);
-      if (promptBodies.get(paneId) === body) return;
-      let delivered = false;
-      for (const client of clients) {
-        if (!conversationEligible(client, paneId) || !client.data.features?.includes("prompt-push")) continue;
-        if (send(client, { type: "prompt-push", pane_id: paneId, ...state }) !== 0) delivered = true;
+    const panes = promptSubscribers();
+    for (const key of promptBodies.keys()) if (!panes.has(key.slice(2))) promptBodies.delete(key);
+    await Promise.all([...panes].map(async ([paneId, kinds]) => {
+      for (const kind of kinds) {
+        const restricted = kind === "w";
+        let state: PromptState;
+        try {
+          state = await readPromptState(paneId, {
+            codexHome: options.codexHome,
+            claudeTranscript: (id) => claudeAgents.sessionOf(id)?.path ?? null,
+            readOnly: restricted,
+          });
+        } catch { continue; }
+        const key = `${kind}:${paneId}`;
+        const body = JSON.stringify(state);
+        if (promptBodies.get(key) === body) continue;
+        let delivered = false;
+        for (const client of clients) {
+          if (!conversationEligible(client, paneId) || !client.data.features?.includes("prompt-push")) continue;
+          if (promptRestricted(client) !== restricted) continue;
+          if (send(client, { type: "prompt-push", pane_id: paneId, ...state }) !== 0) delivered = true;
+        }
+        if (delivered) promptBodies.set(key, body);
       }
-      if (delivered) promptBodies.set(paneId, body);
     }));
   };
   const promptTimer = setInterval(() => { void publishPrompts(); }, PROMPT_PUSH_MS);

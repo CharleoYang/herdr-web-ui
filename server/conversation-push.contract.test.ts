@@ -731,6 +731,38 @@ describe("native conversation invalidation", () => {
 
 
 
+  it("keeps a plan card whole for the owner and narrowed for a watching observer", async () => {
+    const owner = await connect();
+    const watcher = await connect();
+    attach(owner);
+    watch(owner);
+    attach(watcher);
+    watch(watcher);
+    await owner.waitFor((frame) => frame.type === "input-ready" && frame.pane_id === paneId && frame.ready !== false);
+    await barrier(watcher, "observe");
+    const card: InteractivePrompt = { id: "plan-card", agent: "claude", kind: "plan", title: "Plan", question: "Approve this plan?", body: "the whole plan text", options: [{ label: "Yes", description: null }], multi_select: false, custom_option_index: null, plan_file: "/tmp/plan.md" };
+    const screen: InteractivePrompt = { ...card, body: null };
+    delete screen.plan_file;
+    const read = spyOn(promptReader, "readPromptState").mockImplementation(async (_id: string, options?: promptReader.PromptRequestOptions) =>
+      options?.readOnly === true
+        ? { prompt: screen, suggestion: null, restored: null }
+        : { prompt: card, suggestion: null, restored: null });
+    try {
+      const owned = await owner.waitFor((frame) => frame.type === "prompt-push" && frame.pane_id === paneId && frame.prompt !== null) as Extract<ServerMessage, { type: "prompt-push" }>;
+      const watched = await watcher.waitFor((frame) => frame.type === "prompt-push" && frame.pane_id === paneId && frame.prompt !== null) as Extract<ServerMessage, { type: "prompt-push" }>;
+      // the owner's own chat reads the same enriched body REST gives it
+      expect(owned.prompt).toEqual(card);
+      // the observer sees the screen's card: no plan-file text and no plan-file path
+      expect(watched.prompt).toEqual(screen);
+      expect(watched.prompt?.plan_file).toBeUndefined();
+      expect(watched.prompt?.body).toBeNull();
+    } finally {
+      read.mockRestore();
+      owner.ws.close();
+      watcher.ws.close();
+    }
+  }, 30_000);
+
   it("releases native interest when the owned pane ends and refuses a stale enable", async () => {
     const socket = await connect();
     attach(socket);
