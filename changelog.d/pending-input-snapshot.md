@@ -6,4 +6,5 @@
   cleanup; preserve the original scenario error and report secondary failures.
 - Correlate remaining browser input assertions with each action while preserving exact message types,
   raw key and IME bytes, routing and delayed-duplicate checks; normalize wrappers only for clipboard
-  paste, not keyboard events or queued message text.
+  paste, not keyboard events or queued message text. Honor the protocol's omitted-immediate delivery
+  default when checking explicit Send now.

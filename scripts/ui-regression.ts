@@ -184,7 +184,7 @@ try {
         if (typeof payload === "string") assert.equal(frame.payload, payload, `${label} wire payload`);
         else { payload.lastIndex = 0; assert.equal(payload.test(frame.payload ?? ""), true, `${label} wire payload`); }
       }
-      if (delivery !== undefined) assert.equal(frame.delivery, delivery, `${label} delivery`);
+      if (delivery !== undefined) assert.equal(frame.delivery ?? "immediate", delivery, `${label} delivery`);
     });
     return frames;
   };
@@ -1051,7 +1051,7 @@ try {
   await Bun.sleep(300);
   assertNoInputs(queueMark, heldTexts, "status change");
   await page.getByRole("button", { name: "Send now", exact: true }).first().click();
-  await expectInputs(queueMark, paneA, queueInputSocket, [heldTexts[0]!], "explicit queue send", "submit", "queue",
+  await expectInputs(queueMark, paneA, queueInputSocket, [heldTexts[0]!], "explicit queue send", "submit", "immediate",
     `\x1b[200~${heldTexts[0]!}\x1b[201~`);
   await until(async () => await page.locator(".composer-queue-text").count() === 1, "only sent item removed");
   assert.equal(await page.locator(".composer-queue-text").inputValue(), "# edited second message");
