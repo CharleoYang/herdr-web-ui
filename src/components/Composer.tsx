@@ -60,6 +60,7 @@ import { AgentMark } from "./AgentMark.tsx";
 import { BackgroundTasks } from "./BackgroundTasks.tsx";
 import { MicButton, VoiceRecordingPill, useDictation } from "./VoiceInput.tsx";
 import { cachedPaneCommands } from "../lib/paneCommandCache.ts";
+import { ModelSwitch } from "./ModelSwitch.tsx";
 import { useT } from "../lib/i18n.ts";
 import { modalOpen } from "../lib/focus.ts";
 
@@ -99,6 +100,8 @@ export interface ComposerProps {
    * note offers to send again with `clearDraft`, which clears that draft from the terminal first, or,
    * where it named none, with `sendAnyway`; a promise settles to any of them */
   onSend: (text: string, clearDraft?: string, sendAnyway?: boolean) => boolean | string | DraftRefusal | Promise<boolean | string | DraftRefusal>;
+  /** omp only: open the model list and apply `/switch` to this session */
+  onSwitchModel?: (selector: string) => boolean | string | Promise<boolean | string>;
   onAbort: () => void;
   onUploadImage: (file: File) => Promise<string>;
 }
@@ -263,6 +266,7 @@ export function Composer({
   branch = null,
   worktreeRepo = null,
   onSend,
+  onSwitchModel,
   onAbort,
   onUploadImage,
 }: ComposerProps) {
@@ -273,6 +277,8 @@ export function Composer({
   const { fetchPaneCommands, fetchPaneFiles } = useMachineApi();
   const { settings } = useSettings();
   const mobile = useMediaQuery("(max-width: 640px), (pointer: coarse)");
+  const [modelOpen, setModelOpen] = useState(false);
+  const [switching, setSwitching] = useState(false);
   const usageEnabled = settings.showUsage && !mobile && machineId === "local" && providerForAgent(agent) !== null;
   const { report: usageReport } = useUsage(usageEnabled);
   const usage = usageEnabled && usageReport !== null ? composerUsage(usageReport.providers, agent, settings.usageOrder, settings.usageHidden) : undefined;
@@ -1070,8 +1076,13 @@ export function Composer({
   const statusCompact = composerStatusCompact(cardWidth);
   const sendShown = sending || composerSendShown({ working: isWorking, text });
   const hint = composerStatusHint({ uploading, connected, text, noRoom: roomless !== undefined });
-  const model = metadata?.model ? modelLabel(metadata.model) : null;
-  const modelShown = Boolean(metadata?.model || metadata?.reasoning_effort);
+  const rawModel = metadata?.model ?? null;
+  const labeled = rawModel ? modelLabel(rawModel) : null;
+  // OMP records a `provider/id` selector: the pill names the id alone and keeps the selector in its title
+  const model = agent === "omp" && rawModel && labeled && !labeled.named && rawModel.includes("/")
+    ? { text: rawModel.slice(rawModel.lastIndexOf("/") + 1), named: false }
+    : labeled;
+  const modelShown = Boolean(metadata?.model || metadata?.reasoning_effort || onSwitchModel);
   const usageDetail = usageWindows.map((window) => {
     const reset = formatResetIn(window.resets_at, Date.now());
     return `${windowLabel(window)} ${meterText(window, settings.usageCount)}${reset ? ` · ${t("Resets in {time}", { time: reset })}` : ""}`;
@@ -1099,6 +1110,17 @@ export function Composer({
 
   return (
     <div className={`composer${notices ? " has-notices" : ""}`} role="group" aria-label={t("Message composer")} data-dictating={dictation.voice.state !== "idle" ? "" : undefined}>
+      {modelOpen && onSwitchModel && <ModelSwitch current={metadata?.model ?? null} busy={switching || !connected || isWorking || agentStatus === "blocked" || answerHint != null} onClose={() => setModelOpen(false)} onPick={(selector) => {
+        if (switching || !connected || isWorking || agentStatus === "blocked" || answerHint != null) return;
+        setSwitching(true);
+        void Promise.resolve().then(() => onSwitchModel(selector)).then((answer) => {
+          if (!mounted.current) return;
+          if (answer === true) setModelOpen(false);
+          else if (typeof answer === "string") setNote(answer);
+        }).catch((error: unknown) => {
+          if (mounted.current) setNote(error instanceof Error ? error.message : String(error));
+        }).finally(() => { if (mounted.current) setSwitching(false); });
+      }} />}
       {greeting}
       {notices}
       {/* no Tab key on a phone: the suggestion can be a chip there that fills the box, when Settings asks for it */}
@@ -1351,14 +1373,15 @@ export function Composer({
             <span className="composer-agent-label visually-hidden">{agentLabel}</span>
             <span className="composer-status-separator visually-hidden" aria-hidden="true">·</span>
             <strong className="visually-hidden">{t(composerStatusWord(shownStatus))}</strong>
-            {/* the mark, the model, the level and the context ring as one quiet pill. It only shows: no role,
-                no focus, nothing to press but the ring inside it. A pane that names no model draws no pill
-                (.is-bare): the mark, a level if it has one, and the ring stand in the row as they are */}
-            <span className={`composer-pill${metadata?.model ? "" : " is-bare"}`}>
+            {/* the mark, the model, the level and the context ring as one quiet pill. OMP's model is
+                the one thing to press in it: it opens the session-only switcher. Every other agent's
+                model label only shows. A pane that names no model draws no pill (.is-bare): the mark,
+                a level if it has one, and the ring stand in the row as they are */}
+            <span className={`composer-pill${metadata?.model || onSwitchModel ? "" : " is-bare"}`}>
               {agent && <AgentMark agent={agent} size={14} />}
-              {modelShown && <span className="composer-model-info" aria-label={t("Model and reasoning")}>
-                {/* a name only for an id modelLabel can name for certain; any other id is drawn as received, in the identifier face */}
-                <span className={`composer-model${model ? model.named ? "" : " is-id" : " is-none"}`} title={metadata?.model ?? t("Model not available")}>{model?.text ?? t("Model —")}</span>
+              {modelShown && <span className="composer-model-info" aria-label={onSwitchModel ? undefined : t("Model and reasoning")}>
+                {/* A known id is named; an unknown provider/id shows its id, with the full selector in the title. */}
+                {onSwitchModel ? <button type="button" className={`composer-model composer-model-button${model ? model.named ? "" : " is-id" : ""}`} disabled={!connected || agentStatus === "working" || agentStatus === "blocked" || answerHint != null || switching} aria-label={t("Switch model")} title={agentStatus === "working" || agentStatus === "blocked" || answerHint != null ? t("Wait until the agent is idle to switch models") : metadata?.model ?? t("Switch model")} onClick={() => setModelOpen(true)}>{model?.text ?? t("Switch model")}</button> : <span className={`composer-model${model ? model.named ? "" : " is-id" : " is-none"}`} title={metadata?.model ?? t("Model not available")}>{model?.text ?? t("Model —")}</span>}
                 {/* behind a name the id as received is still read; a touch cannot reach the title */}
                 {model?.named && <span className="composer-model-id visually-hidden">{metadata?.model}</span>}
                 {/* no level recorded: nothing is drawn for it, no dot and no dash; the sentence is still read */}

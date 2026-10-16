@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import { phaseRows, planRows, taskRows, todoRows } from "./checklist.ts";
+import { itemsRows, phaseRows, planRows, taskRows, todoRows } from "./checklist.ts";
 
 describe("phaseRows", () => {
   test("a phased plan becomes headings followed by their items", () => {
@@ -22,6 +22,15 @@ describe("phaseRows", () => {
     expect(phaseRows([{ phase: "Empty" }, null, "string", { items: [1, "kept"] }])).toEqual([
       { label: "Empty", done: false, heading: true },
       { label: "kept", done: false },
+    ]);
+  });
+});
+
+describe("itemsRows", () => {
+  test("flat items map to pending rows", () => {
+    expect(itemsRows(["Task 1", "Task 2"])).toEqual([
+      { label: "Task 1", done: false },
+      { label: "Task 2", done: false },
     ]);
   });
 });

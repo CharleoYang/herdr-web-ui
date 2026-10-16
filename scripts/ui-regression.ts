@@ -1,11 +1,11 @@
 /** Real-browser regressions against owned herdr panes. Run after `bun run build`. */
 import "./test-herdr.ts"; // a herdr session of its own: nothing shows in the user's
 import assert from "node:assert/strict";
-import { copyFileSync, chmodSync, existsSync, mkdtempSync, mkdirSync, readFileSync, realpathSync, rmdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, realpathSync, rmdirSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { chromium } from "playwright-core";
-import type { BrowserContext, Page } from "playwright-core";
+import type { BrowserContext, Page, WebSocket } from "playwright-core";
 import { createServer } from "../server/index.ts";
 import { herdrRpc, sessionSnapshot, workspaceCreate, workspaceClose } from "../server/herdr/client.ts";
 import type { SessionSnapshot, WorkspaceCreated, WorktreeOpened } from "../shared/protocol.ts";
@@ -21,6 +21,8 @@ import { checkHeldDraftPaneSwitch } from "./terminal-draft-regression.ts";
 import { checkCommandBackspace } from "./terminal-command-backspace-regression.ts";
 import { checkCtrlEnter } from "./terminal-ctrl-enter-regression.ts";
 import { checkCommandArrows } from "./terminal-command-arrows-regression.ts";
+import { checkPaneShortcuts } from "./terminal-pane-shortcut-regression.ts";
+import { createPendingInputCheck } from "./pending-input-regression.ts";
 import { checkFolderFilter, checkNewFolder } from "./folder-filter-regression.ts";
 import { checkPaletteKeys } from "./palette-keys-regression.ts";
 import { UsageService } from "../server/usage.ts";
@@ -119,22 +121,25 @@ try {
   // the header under test is the app's own (server/static.ts), so this is where a broken
   // directive shows up: every page below loads through this same server
   csp.push(await watchCsp(page));
+  const pendingInput = createPendingInputCheck(page, evidenceDirectory);
+  releases.push(() => pendingInput.release());
   let holdSubmitResult = false;
   let releaseSubmitResult: (() => void) | null = null;
-  // a connection's first frame held back: what the page does between a reconnect and its snapshot
-  let holdSnapshot = false;
-  let releaseSnapshot: (() => void) | null = null;
+  // Only an old suggestion is muted while its real REST response is held. Capability,
+  // null observations, other panes and every other WebSocket frame remain live.
+  let suppressedSuggestion: { pane: string; text: string } | null = null;
+  const pushedSuggestions = new Map<string, string | null>();
   const routed: Array<{ close: () => Promise<void> }> = [];
   await page.routeWebSocket(/\/ws(?:\?|$)/, (socket) => {
-    routed.push(socket);
     const upstream = socket.connectToServer();
     upstream.onMessage((raw) => {
       const message = JSON.parse(String(raw));
-      if (holdSnapshot && message.type === "snapshot") {
-        holdSnapshot = false;
-        const release = () => { socket.send(raw); releaseSnapshot = null; };
-        releaseSnapshot = release;
-        releases.push(release);
+      if (message.type === "prompt-push") {
+        if (suppressedSuggestion && message.pane_id === suppressedSuggestion.pane && message.suggestion === suppressedSuggestion.text) return;
+        pushedSuggestions.set(message.pane_id, message.suggestion);
+      }
+      if (pendingInput.forwardSnapshot(socket, raw)) {
+        // The shared pending consumer owns this connection's held capability snapshot.
       } else if (holdSubmitResult && message.type === "submit-result") {
         holdSubmitResult = false;
         const release = () => { socket.send(raw); releaseSubmitResult = null; };
@@ -146,11 +151,50 @@ try {
   page.setDefaultTimeout(10_000);
   page.on("pageerror", (error) => errors.push(error.message));
   const painted = new Set<string>();
-  const sockets: import("playwright-core").WebSocket[] = [];
-  const inputs: Array<{ type: "input" | "submit"; pane_id: string; text: string; delivery?: "immediate" | "queue"; stop?: true }> = [];
-  const pendingActions: Array<{ pane_id: string; pending_id: string; action: string }> = [];
+  const sockets: WebSocket[] = [];
+  type InputExpectation = string | RegExp;
+  type InputObservation = { type: "input" | "submit"; pane_id: string; text: string; payload?: string; delivery?: "immediate" | "queue" | "hold"; stop?: true;
+    socket: WebSocket; sequence: number };
+  let inputSequence = 0;
+  const inputs: InputObservation[] = [];
+  const inputFramesSince = (mark: number): InputObservation[] => inputs.filter(({ sequence }) => sequence > mark);
+  const inputMatches = (text: string, expected: InputExpectation): boolean => {
+    if (typeof expected === "string") {
+      const payload = text.replace(/^\x1b\[200~/, "").replace(/\x1b\[201~$/, "");
+      return payload === expected || payload === `${expected}\r`;
+    }
+    expected.lastIndex = 0;
+    return expected.test(text);
+  };
+  const expectInputs = async (mark: number, pane: string, socket: WebSocket,
+    expected: InputExpectation[], label: string, type?: "input" | "submit", delivery?: "immediate" | "queue", payload?: InputExpectation, stripPasteWrappers = false): Promise<InputObservation[]> => {
+    const matching = () => inputFramesSince(mark).filter(({ text }) => expected.some((item) => inputMatches(text, item)));
+    await until(() => matching().length >= expected.length, label);
+    // fixed wait: prove no delayed duplicate input arrives after the expected user action.
+    await Bun.sleep(NO_SEND_WAIT_MS);
+    const frames = matching();
+    assert.equal(frames.length, expected.length, `${label} must send exactly once per expected payload`);
+    frames.forEach((frame, index) => {
+      const item = expected[index]!;
+      assert.equal(inputMatches(frame.text, item), true, `${label} payload order`);
+      if (typeof item === "string") assert.equal(stripPasteWrappers ? frame.text.replace(/^\x1b\[200~/, "").replace(/\x1b\[201~$/, "") : frame.text, item, `${label} payload`);
+      assert.equal(frame.pane_id, pane, `${label} pane`);
+      assert.equal(frame.socket, socket, `${label} connection`);
+      if (type !== undefined) assert.equal(frame.type, type, `${label} message type`);
+      if (payload !== undefined) {
+        if (typeof payload === "string") assert.equal(frame.payload, payload, `${label} wire payload`);
+        else { payload.lastIndex = 0; assert.equal(payload.test(frame.payload ?? ""), true, `${label} wire payload`); }
+      }
+      if (delivery !== undefined) assert.equal(frame.delivery ?? "immediate", delivery, `${label} delivery`);
+    });
+    return frames;
+  };
+  const assertNoInputs = (mark: number, expected: InputExpectation[], label: string): void => {
+    const frames = inputFramesSince(mark).filter(({ text }) => expected.some((item) => inputMatches(text, item)));
+    assert.equal(frames.length, 0, `${label} must not emit user payloads`);
+  };
   // keyed by pane, with the connection that said so: an earlier connection's input-ready says nothing about the current one
-  const inputStates = new Map<string, { ready: boolean; at: number; socket: import("playwright-core").WebSocket }>();
+  const inputStates = new Map<string, { ready: boolean; at: number; socket: WebSocket }>();
   const pendingReady = (pane: string) => until(() => {
     const state = inputStates.get(pane);
     return state?.ready === true && state.socket === sockets.at(-1) && !state.socket.isClosed() && Date.now() - state.at >= 500;
@@ -164,9 +208,8 @@ try {
     });
     socket.on("framesent", ({ payload }) => {
       const message = JSON.parse(String(payload));
-      // composer messages go out as "submit" on servers that list it (#15), keystrokes as "input"
-      if (message.type === "input" || message.type === "submit") inputs.push(message);
-      if (message.type === "pending-action") pendingActions.push(message);
+      // composer messages go out as "submit" on servers that list it (#15), keystrokes as "input"; retain every frame for attribution.
+      if (message.type === "input" || message.type === "submit") inputs.push({ ...message, socket, sequence: ++inputSequence });
       if (message.type === "attach" || message.type === "detach") inputStates.set(message.pane_id, { ready: false, at: Date.now(), socket });
     });
   });
@@ -259,40 +302,145 @@ try {
   // Short desktop and phone lists both overflow. Wrapping up from the first result and down
   // from the last keeps the active option visible while typing focus stays in search.
   const paletteViewport = page.viewportSize()!;
-  for (const viewport of [{ width: 1280, height: 400 }, { width: 390, height: 600 }]) {
-    await page.setViewportSize(viewport);
-    await openPalette();
-    await page.mouse.move(0, 0);
-    assert.equal(await palette.locator(".palette-results").evaluate((list) => list.scrollHeight > list.clientHeight), true,
-      "the short palette has a scrollable list");
-    const optionCount = await palette.getByRole("option").count();
-    const visibleActiveOption = () => palette.locator(".palette-results").evaluate((list) => {
-      const option = list.querySelector<HTMLElement>('[aria-selected="true"]');
-      if (!option) return false;
-      const row = option.getBoundingClientRect();
-      const bounds = list.getBoundingClientRect();
-      return row.top >= bounds.top - 1 && row.bottom <= bounds.bottom + 1;
+  // The plugin catalogue can change between Playwright awaits. Capture the actual row
+  // elements on the physical key's capture phase, not an earlier accessible count or ID.
+  const armPaletteWrap = (key: "ArrowUp" | "ArrowDown") => paletteSearch.evaluateHandle((input, key) => {
+    const list = input.closest(".command-palette")!.querySelector<HTMLElement>(".palette-results")!;
+    const state = { captured: false, expected: null as HTMLElement | null, first: null as HTMLElement | null,
+      hovered: null as HTMLElement | null, pointerExpected: null as HTMLElement | null,
+      moved: null as HTMLElement | null, error: null as string | null };
+    input.addEventListener("keydown", (event) => {
+      state.captured = true;
+      const options = [...list.querySelectorAll<HTMLElement>('[role="option"]')];
+      state.first = options[0] ?? null;
+      const last = options.at(-1) ?? null;
+      const active = document.getElementById(input.getAttribute("aria-activedescendant") ?? "");
+      state.expected = key === "ArrowUp" ? last : state.first;
+      if (event.key !== key || !state.expected || active !== (key === "ArrowUp" ? state.first : last)) {
+        state.error = `${key} wrap precondition: active=${active?.id}, first=${state.first?.id}, last=${last?.id}, key=${event.key}`;
+      }
+    }, { capture: true, once: true });
+    list.addEventListener("mouseover", (event) => {
+      if (!state.captured) return;
+      const row = (event.target as Element).closest<HTMLElement>('[role="option"]');
+      if (row && row !== state.first && row !== state.expected) state.hovered = row;
     });
-    await paletteSearch.press("ArrowUp");
-    await until(async () => await paletteSearch.getAttribute("aria-activedescendant") === `palette-item-${optionCount - 1}` && await visibleActiveOption(),
-      "ArrowUp wraps to the last visible palette option");
-    if (process.env.UI_EVIDENCE_DIR) {
-      mkdirSync(process.env.UI_EVIDENCE_DIR, { recursive: true });
-      await page.screenshot({ path: join(process.env.UI_EVIDENCE_DIR, `palette-arrow-${viewport.width <= 640 ? "mobile" : "desktop"}.png`) });
+    const selected = (row: HTMLElement | null): boolean => {
+      if (state.error) throw new Error(state.error);
+      if (!state.captured) throw new Error(`${key} was not captured`);
+      if (!state.expected?.isConnected || !list.contains(state.expected)) throw new Error(`${key} keyboard option was removed: ${state.expected?.id}`);
+      if (!row?.isConnected || !list.contains(row)) throw new Error(`${key} captured option was removed: ${row?.id}`);
+      return document.getElementById(input.getAttribute("aria-activedescendant") ?? "") === row
+        && row.getAttribute("aria-selected") === "true"
+        && list.querySelectorAll('[aria-selected="true"]').length === 1
+        && document.activeElement === input;
+    };
+    return {
+      state,
+      selected: () => selected(state.expected),
+      visible: () => {
+        if (!selected(state.expected)) return false;
+        const row = state.expected!.getBoundingClientRect();
+        const bounds = list.getBoundingClientRect();
+        return row.top >= bounds.top - 1 && row.bottom <= bounds.bottom + 1
+          && row.left >= bounds.left - 1 && row.right <= bounds.right + 1;
+      },
+      pointerTarget: () => {
+        const row = state.hovered;
+        if (!row?.isConnected || !list.contains(row)) throw new Error("the scroll-hovered option was removed");
+        const box = row.getBoundingClientRect();
+        const bounds = list.getBoundingClientRect();
+        const x = (Math.max(box.left, bounds.left) + Math.min(box.right, bounds.right)) / 2 + 4;
+        const y = (Math.max(box.top, bounds.top) + Math.min(box.bottom, bounds.bottom)) / 2;
+        if (document.elementFromPoint(x, y)?.closest('[role="option"]') !== row) throw new Error("pointer target no longer hits the captured hovered option");
+        state.pointerExpected = row;
+        list.addEventListener("mousemove", (event) => {
+          state.moved = (event.target as Element).closest<HTMLElement>('[role="option"]');
+        }, { capture: true, once: true });
+        return { x, y };
+      },
+      pointerSelected: () => state.moved !== null && state.moved === state.pointerExpected
+        && state.moved !== state.expected && selected(state.pointerExpected),
+    };
+  }, key);
+  // The prior palette is closed: its layout cleanup invalidates old response ownership
+  // and clears plugins. Fence every new opening's real catalogue through all gestures.
+  let releasePaletteCatalog!: () => void;
+  const heldPaletteCatalog = new Promise<void>((resolve) => { releasePaletteCatalog = resolve; });
+  releases.push(releasePaletteCatalog);
+  const unroutePaletteCatalog = await routeDrained(page, "**/api/plugins/actions", async (route) => {
+    const response = await route.fetch();
+    await heldPaletteCatalog;
+    await route.fulfill({ response });
+  });
+  try {
+    for (const viewport of [{ width: 1280, height: 400 }, { width: 390, height: 600 }]) {
+      await page.setViewportSize(viewport);
+      await openPalette();
+      await page.mouse.move(0, 0);
+      assert.equal(await palette.locator(".palette-results").evaluate((list) => list.scrollHeight > list.clientHeight), true,
+        "the short palette has a scrollable list");
+      const up = await armPaletteWrap("ArrowUp");
+      await paletteSearch.press("ArrowUp");
+      await until(async () => await up.evaluate((pick) => pick.visible()),
+        "ArrowUp wraps to its event-time last palette option and keeps search focus");
+      if (process.env.UI_EVIDENCE_DIR) {
+        mkdirSync(process.env.UI_EVIDENCE_DIR, { recursive: true });
+        await page.screenshot({ path: join(process.env.UI_EVIDENCE_DIR, `palette-arrow-${viewport.width <= 640 ? "mobile" : "desktop"}.png`) });
+      }
+      const down = await armPaletteWrap("ArrowDown");
+      await paletteSearch.press("ArrowDown");
+      await until(async () => await down.evaluate((pick) => pick.visible()),
+        "ArrowDown wraps to its event-time first palette option and keeps search focus");
+      await up.dispose();
+      await down.dispose();
+      await paletteSearch.press("Escape");
+      await palette.waitFor({ state: "hidden" });
     }
-    await paletteSearch.press("ArrowDown");
-    await until(async () => await paletteSearch.getAttribute("aria-activedescendant") === "palette-item-0" && await visibleActiveOption(),
-      "ArrowDown wraps back to the first visible palette option");
-    assert.equal(await paletteSearch.evaluate((input) => document.activeElement === input), true, "arrow navigation keeps typing focus in search");
+    // A pointer resting over the list keeps still while the arrow scrolls rows under it: the
+    // browser's hover update after the scroll must not take the keyboard selection, and a real
+    // pointer move still does.
+    await page.setViewportSize({ width: 1280, height: 400 });
+    await openPalette();
+    const firstOption = (await palette.locator("#palette-item-0").boundingBox())!;
+    await page.mouse.move(firstOption.x + firstOption.width / 2, firstOption.y + firstOption.height / 2);
+    await until(async () => await paletteSearch.getAttribute("aria-activedescendant") === "palette-item-0", "the resting pointer is over the first option");
+    const restingPick = await armPaletteWrap("ArrowUp");
+    await paletteSearch.press("ArrowUp");
+    await until(async () => await restingPick.evaluate((pick) => pick.state.hovered !== null),
+      "the scroll moves a different actual option under the resting pointer");
+    assert.equal(await restingPick.evaluate((pick) => pick.visible()), true,
+      "a scroll under a resting pointer preserves the event-time keyboard option, its visibility and search focus");
+    const pointerTarget = await restingPick.evaluate((pick) => pick.pointerTarget());
+    await page.mouse.move(pointerTarget.x, pointerTarget.y);
+    await until(async () => await restingPick.evaluate((pick) => pick.pointerSelected()),
+      "a genuine pointer move selects the different actual scroll-hovered element");
+    await restingPick.dispose();
     await paletteSearch.press("Escape");
     await palette.waitFor({ state: "hidden" });
+    await page.mouse.move(0, 0);
+    await page.setViewportSize(paletteViewport);
+  } finally {
+    // No AbortSignal is used by fetchPluginActions: close invalidates ownership, not HTTP.
+    // Release and drain before the browser can close, including an assertion failure.
+    releasePaletteCatalog();
+    await unroutePaletteCatalog();
   }
   // A pointer resting over the list keeps still while the arrow scrolls rows under it: the
   // browser's hover update after the scroll must not take the keyboard selection, and a real
   // pointer move still does.
   await page.setViewportSize({ width: 1280, height: 400 });
   await openPalette();
-  const restingOptionCount = await palette.getByRole("option").count();
+  let settledCount = -1;
+  await until(async () => {
+    const count = await palette.getByRole("option").count();
+    if (count === 0 || count !== settledCount) {
+      settledCount = count;
+      return false;
+    }
+    await page.waitForTimeout(200);
+    return (await palette.getByRole("option").count()) === settledCount;
+  }, "palette results settle before the resting pointer");
   const firstOption = (await palette.locator("#palette-item-0").boundingBox())!;
   await page.mouse.move(firstOption.x + firstOption.width / 2, firstOption.y + firstOption.height / 2);
   await until(async () => await paletteSearch.getAttribute("aria-activedescendant") === "palette-item-0", "the resting pointer is over the first option");
@@ -304,7 +452,7 @@ try {
   await paletteSearch.press("ArrowUp");
   await until(async () => await page.evaluate(() => (window as unknown as { paletteHovered: string[] }).paletteHovered.some((id) => id !== "" && id !== "palette-item-0")),
     "the scroll moves another option under the resting pointer");
-  assert.equal(await paletteSearch.getAttribute("aria-activedescendant"), `palette-item-${restingOptionCount - 1}`,
+  assert.equal(await paletteSearch.getAttribute("aria-activedescendant"), `palette-item-${settledCount - 1}`,
     "a scroll under a resting pointer leaves the arrow's selection alone");
   const hoveredId = await page.evaluate(() => (window as unknown as { paletteHovered: string[] }).paletteHovered.findLast((id) => id !== "")!);
   const hoveredBox = (await palette.locator(`#${hoveredId}`).boundingBox())!;
@@ -588,14 +736,13 @@ try {
   assert.ok(fileInputSocket, "the current pane has an input-ready attachment");
   await checkTerminalFileInput(page, fileInputSocket);
   const terminalInput = page.locator(".pane-frame.is-current .xterm-helper-textarea");
-  // Chrome on macOS pastes with ⌘V alone: its Ctrl+V pastes nothing, and must send nothing either
   const mac = process.platform === "darwin";
   if (mac) {
     await terminalInput.focus();
-    const beforeCtrlV = inputs.length;
+    const beforeCtrlV = inputSequence;
     await page.keyboard.press("Control+v");
     await page.waitForTimeout(NO_SEND_WAIT_MS);
-    assert.deepEqual(inputs.slice(beforeCtrlV), [], "Ctrl+V must never send the image-paste control key");
+    assertNoInputs(beforeCtrlV, ["\x16"], "Ctrl+V");
   }
   for (const [shortcut, text] of [
     [mac ? "Meta+v" : "Control+v", "# terminal paste 한글"],
@@ -604,21 +751,12 @@ try {
   ]) {
     await page.evaluate((value) => navigator.clipboard.writeText(value), text!);
     await terminalInput.focus();
-    const beforePaste = inputs.length;
+    const beforePaste = inputSequence;
     await page.keyboard.press(shortcut!);
-    await until(() => inputs.length > beforePaste, `terminal ${shortcut}`);
-    const pasted = inputs.slice(beforePaste);
-    assert.equal(pasted.length, 1, "paste must send the text exactly once");
-    assert.equal(pasted[0]!.pane_id, paneA);
-    assert.equal(
-      pasted[0]!.text.replace(/^\x1b\[200~/, "").replace(/\x1b\[201~$/, ""),
-      text!.replace(/\n/g, "\r"),
-      "paste must send clipboard text, never the image-paste control key",
-    );
-    const beforeCancel = inputs.length;
+    await expectInputs(beforePaste, paneA, fileInputSocket, [text!.replace(/\n/g, "\r")], `terminal ${shortcut}`, "input", undefined, undefined, true);
+    const beforeCancel = inputSequence;
     await page.keyboard.press("Control+c");
-    await until(() => inputs.length > beforeCancel, "terminal Ctrl+C");
-    assert.equal(inputs.at(-1)?.text, "\x03", "other terminal control keys must still work");
+    await expectInputs(beforeCancel, paneA, fileInputSocket, ["\x03"], "terminal Ctrl+C", "input");
   }
   // xterm collapses Shift+Enter into CR unless the terminal supplies a newline chord.
   // Check actual browser key events and the frames sent to an owned pane, including keyup.
@@ -628,27 +766,24 @@ try {
     ["Alt+Enter", "\x1b\r"],
   ]) {
     await terminalInput.focus();
-    const beforeEnter = inputs.length;
+    const beforeEnter = inputSequence;
     await page.keyboard.press(shortcut!);
-    await until(() => inputs.length > beforeEnter, `terminal ${shortcut}`);
+    await expectInputs(beforeEnter, paneA, fileInputSocket, [expected!], `terminal ${shortcut}`, "input");
     await page.waitForTimeout(NO_SEND_WAIT_MS);
-    assert.deepEqual(inputs.slice(beforeEnter).map(({ pane_id, text }) => ({ pane_id, text })),
-      [{ pane_id: paneA, text: expected }], `${shortcut} must send its sequence exactly once`);
   }
   // A composition commit belongs to xterm/IME; the custom binding must not replace it.
   for (const composition of [{ isComposing: true, keyCode: 13 }, { isComposing: false, keyCode: 229 }]) {
-    const beforeIme = inputs.length;
+    const beforeIme = inputSequence;
     await terminalInput.dispatchEvent("keydown", {
       key: "Enter", code: "Enter", shiftKey: true, ...composition, bubbles: true, cancelable: true,
     });
     await page.waitForTimeout(NO_SEND_WAIT_MS);
-    assert.equal(inputs.slice(beforeIme).some(({ text }) => text === "\x1b\r"), false,
-      "IME commits must not receive the custom Shift+Enter sequence");
+    assertNoInputs(beforeIme, ["\x1b\r"], "terminal IME Shift+Enter");
   }
   // compositionend queues its send for the next timer. A following non-composing
   // Shift+Enter must let xterm flush that commit before sending the newline.
   await terminalInput.focus();
-  const beforeCommittedIme = inputs.length;
+  const beforeCommittedIme = inputSequence;
   await terminalInput.evaluate(async (element) => {
     const textarea = element as HTMLTextAreaElement;
     textarea.value = "";
@@ -663,17 +798,15 @@ try {
     textarea.dispatchEvent(new KeyboardEvent("keydown", enter));
     textarea.dispatchEvent(new KeyboardEvent("keyup", enter));
   });
-  await until(() => inputs.length >= beforeCommittedIme + 2, "IME commit followed by Shift+Enter");
+  await expectInputs(beforeCommittedIme, paneA, fileInputSocket, ["한", "\x1b\r"],
+    "IME commit followed by Shift+Enter", "input");
   await page.waitForTimeout(NO_SEND_WAIT_MS);
-  assert.deepEqual(inputs.slice(beforeCommittedIme).map(({ pane_id, text }) => ({ pane_id, text })),
-    [{ pane_id: paneA, text: "한" }, { pane_id: paneA, text: "\x1b\r" }],
-    "a pending IME commit must precede Shift+Enter without a delayed duplicate");
   console.log("PASS terminal Shift+Enter sends a newline chord once and preserves Enter, Alt+Enter and IME");
   console.log("PASS pending IME commit precedes Shift+Enter without duplicate text");
   await checkCommandBackspace(browser, origin, paneA);
   await checkCtrlEnter(browser, origin, paneA);
   await checkCommandArrows(browser, origin, paneA);
-  // a pane shortcut switches panes and types nothing: xterm used to send ESC[1;6B / ESC[1;6A too
+  await checkPaneShortcuts(browser, origin, paneA, paneB);
   const selectedTitle = () => page.locator(".pane-item.is-selected .pane-select").getAttribute("title");
   // A pane just picked shows the lens of the pane before it for a moment, and the message box
   // of that lens can take the focus back: the key waits until the terminal still has it two frames on.
@@ -688,7 +821,8 @@ try {
     await page.keyboard.press(key);
     await until(async () => !(await selectedTitle())?.startsWith(`${paneA} —`), `${key} leaves the pane`);
     await page.waitForTimeout(NO_SEND_WAIT_MS);
-    assert.deepEqual(inputs.slice(beforeSwitch), [], `${key} must not reach a pane`);
+    // CSI ? replies are device queries, not the shortcut (that used to be CSI 1;6A/B).
+    assert.deepEqual(inputs.slice(beforeSwitch).filter(({ text }) => !String(text).startsWith("\x1b[?")), [], `${key} must not reach a pane`);
     await page.locator(`.pane-select[title^="${paneA} —"]`).click();
     await until(async () => (await selectedTitle())?.startsWith(`${paneA} —`) === true, "back on the first pane");
   }
@@ -881,100 +1015,7 @@ try {
   await blocked.close();
   console.log("PASS a device that blocks notifications keeps the Alerts item as the switch for in-app alerts");
 
-  // The pending protocol has a real foreground agent and an owned byte recorder: merely
-  // reporting an idle shell as working would not prove that server-side queueing happened.
-  const pendingCwd = join(root, "pending"); mkdirSync(pendingCwd);
-  const pendingWorkspace = await workspaceCreate({ cwd: pendingCwd, label: "herdr-web-ui-test-browser-pending" });
-  workspaces.push(pendingWorkspace.workspace.workspace_id);
-  const pendingPane = pendingWorkspace.root_pane.pane_id;
-  const pendingProgram = join(root, "claude"); copyFileSync(process.execPath, pendingProgram); chmodSync(pendingProgram, 0o755);
-  const pendingLog = join(root, "pending-input.jsonl");
-  const pendingScreen = join(root, "pending-screen.txt"); writeFileSync(pendingScreen, "");
-  const pendingScript = join(root, "pending-agent.cjs");
-  writeFileSync(pendingScript, `const fs=require("node:fs");const log=process.argv[2],screen=process.argv[3];process.stdin.setRawMode(true);process.stdin.resume();process.stdout.write("\\x1b[?2004h\\n› Message\\n",()=>fs.writeFileSync(log,""));process.stdin.on("data",c=>{if(c.includes(3))process.exit(0);fs.appendFileSync(log,JSON.stringify(c.toString("utf8"))+"\\n");});let shown="";setInterval(()=>{const next=fs.readFileSync(screen,"utf8");if(next!==shown){shown=next;process.stdout.write("\\x1b[2J\\x1b[H"+next);}},20);`);
-  await herdrRpc("pane.send_text", { pane_id: pendingPane, text: `'${pendingProgram}' '${pendingScript}' '${pendingLog}' '${pendingScreen}'\n` });
-  await until(() => existsSync(pendingLog), "pending byte recorder started");
-  const pendingBytes = () => readFileSync(pendingLog, "utf8").split("\n").filter(Boolean).map((line) => JSON.parse(line) as string).join("");
-  const reportPending = (state: string) => herdrRpc("pane.report_agent", { pane_id: pendingPane, source: "manual", agent: "claude", state });
-  await reportPending("working");
-  await page.locator(`.pane-select[title^="${pendingPane} —"]`).click();
-  await page.getByRole("group", { name: "Pane view", exact: true }).getByRole("button", { name: "Chat", exact: true }).click();
-  await page.locator('.composer-status[data-status="working"]').waitFor();
-  await until(async () => await page.locator(".composer-agent-label").innerText() === "Claude", "foreground agent identity reached the composer");
-  await pendingReady(pendingPane);
-  const pendingRows = page.locator(".pending-messages .pending-message");
-  const queuedTexts = ["first pending browser message", "# second pending message", "# third pending message"];
-  for (const [index, text] of queuedTexts.entries()) {
-    await composer.fill(text);
-    assert.equal(await page.getByRole("button", { name: "Stop agent", exact: true }).count(), 0, "typing replaces Stop with Send");
-    assert.equal(await page.getByRole("button", { name: "Queue message", exact: true }).count(), 0, "there is no separate Queue control");
-    await page.getByRole("button", { name: "Send message", exact: true }).click();
-    await until(async () => await pendingRows.count() === index + 1 && await composer.inputValue() === "", "server accepted pending input");
-    assert.equal(inputs.at(-1)?.pane_id, pendingPane);
-    assert.equal(inputs.at(-1)?.delivery, "queue");
-  }
-  assert.deepEqual(await pendingRows.locator(".pending-message-bubble").allTextContents(), queuedTexts);
-  assert.equal(pendingBytes(), "", "accepted pending messages have not reached the pty");
-  assert.equal(await page.getByRole("button", { name: "Stop agent", exact: true }).count(), 1, "empty working composer returns to Stop");
-  assert.equal(await page.locator(".composer-action").count(), 1, "one primary action");
-  const actionsBeforeTextClick = pendingActions.length;
-  await pendingRows.locator(".pending-message-bubble").first().click();
-  await page.waitForTimeout(NO_SEND_WAIT_MS);
-  assert.equal(pendingActions.length, actionsBeforeTextClick, "pending message text is selectable, not a send action");
-  assert.equal(pendingBytes(), "");
-  await reportPending("blocked"); await page.locator('.composer-status[data-status="blocked"]').waitFor();
-  await page.waitForTimeout(NO_SEND_WAIT_MS);
-  assert.equal(pendingBytes(), "", "blocked status never advances pending input");
-  assert.equal(await pendingRows.count(), 3);
-  await reportPending("working"); await page.locator('.composer-status[data-status="working"]').waitFor();
-  await pendingRows.first().getByRole("button", { name: /^Send now:/ }).press("Enter");
-  await until(async () => await pendingRows.count() === 2 && pendingBytes().endsWith("\r"), "explicit Send now delivered one item");
-  assert.equal(pendingBytes(), `\u001b[200~${queuedTexts[0]}\u001b[201~\r`);
-  assert.equal(pendingActions.at(-1)?.pane_id, pendingPane);
-  assert.equal(await pendingRows.first().getByRole("button", { name: /^Send now:/ }).evaluate((button) => button === document.activeElement), true, "a removed keyboard action hands focus to the next pending action");
-  // a draft puts Send where Stop was: Escape in the box is still Stop, once a completion is put away, and keeps the draft
-  await composer.fill("/he");
-  await composer.press("Escape");
-  await page.waitForTimeout(NO_SEND_WAIT_MS);
-  assert.equal(pendingBytes(), `\u001b[200~${queuedTexts[0]}\u001b[201~\r`, "the first Escape on a command being completed only puts the completion away");
-  await composer.fill("a draft while the agent works");
-  assert.equal(await page.getByRole("button", { name: "Stop agent", exact: true }).count(), 0);
-  await composer.press("Escape");
-  await until(() => pendingBytes() === `\u001b[200~${queuedTexts[0]}\u001b[201~\r\u001b`, "Escape with a draft stops the working agent");
-  assert.deepEqual(inputs.at(-1), { type: "input", pane_id: pendingPane, text: "\u001b", stop: true }, "the composer's Stop goes out as a Stop");
-  assert.equal(await composer.inputValue(), "a draft while the agent works", "Escape leaves the draft in the box");
-  await composer.fill("");
-  // a follow-up sent between a reconnect and its snapshot is the new connection's own row, not an unconfirmed copy
-  const sentBeforeSnapshot = inputs.length;
-  const socketsBeforeReconnect = sockets.length;
-  holdSnapshot = true;
-  await routed.at(-1)!.close();
-  await until(() => releaseSnapshot !== null, "the reconnect's snapshot was held back");
-  // the server can send its snapshot before the page has even sent its attach: the pane is
-  // ready only once the new connection says so, not by the closed one's last word
-  await until(() => sockets.length > socketsBeforeReconnect, "the page opened its new connection");
-  await pendingReady(pendingPane);
-  assert.equal(await page.locator('.pending-message[data-state="uncertain"]').count(), 2, "the lost connection's rows are no longer its own");
-  await composer.fill("sent before the snapshot");
-  await page.getByRole("button", { name: "Send message", exact: true }).click();
-  assert.equal(inputs.length, sentBeforeSnapshot, "the message waits for the snapshot that says what the bridge supports");
-  releaseSnapshot!();
-  await until(async () => await page.locator('.pending-message[data-state="queued"]').count() === 1, "the message sent before the snapshot is a live pending row");
-  assert.equal(inputs.at(-1)?.delivery, "queue");
-  assert.equal(await page.locator(".composer-note").count(), 0);
-  await page.getByRole("button", { name: "Discard", exact: true }).click();
-  await until(async () => await pendingRows.count() === 2, "the live row was discarded on the bridge");
-  assert.equal(pendingBytes(), `\u001b[200~${queuedTexts[0]}\u001b[201~\r\u001b`);
-  await page.reload(); await page.locator(".conn-live").waitFor();
-  await until(async () => await pendingRows.count() === 2, "saved pending copies restored");
-  assert.deepEqual(await pendingRows.locator(".pending-message-bubble").allTextContents(), queuedTexts.slice(1));
-  assert.equal(await page.locator('.pending-message[data-state="uncertain"]').count(), 2, "reload removes connection proof");
-  assert.equal(await page.locator(".pending-message-send").count(), 0, "unknown delivery cannot be resent");
-  await reportPending("idle"); await page.locator('.composer-status:not([data-status="working"])').waitFor();
-  await page.waitForTimeout(NO_SEND_WAIT_MS);
-  assert.equal(pendingBytes(), `\u001b[200~${queuedTexts[0]}\u001b[201~\r\u001b`, "reload and readiness never replay saved pending input");
-  for (let left = 2; left > 0; left--) { await page.getByRole("button", { name: "Discard saved copy", exact: true }).first().click(); await until(async () => await pendingRows.count() === left - 1, "discard saved copy"); }
-  console.log("PASS Send queues server-owned input, explicit Send now delivers once, and reload/readiness never replay uncertain copies");
+  const { pendingPane, pendingRows, pendingBytes, reportPending, pendingScreen, pendingWorkspaceId } = await pendingInput.run(root, workspaces);
 
   // Older releases saved editable held rows. Seed that documented storage format so the
   // recovery, editing and layout checks continue to cover existing users' retained text.
@@ -1064,18 +1105,21 @@ try {
   await page.locator(`.pane-select[title^="${paneA} —"]`).click();
   await until(async () => await page.locator(".composer-queue-text").count() === 3, "owner queue restored");
   await page.getByRole("button", { name: "Discard", exact: true }).nth(2).click();
-  const inputCount = inputs.length;
+  const queueInputSocket = inputStates.get(paneA)?.socket;
+  assert.ok(queueInputSocket, "the queued owner has an input-ready attachment");
+  const queueMark = inputSequence;
+  const heldTexts = ["printf 'browser-queue-ok\\n'", "# edited second message"];
   await report("blocked");
   await page.locator('.composer-status[data-status="blocked"]').waitFor();
   await Bun.sleep(300);
-  assert.equal(inputs.length, inputCount, "approval state must hold the queue");
+  assertNoInputs(queueMark, heldTexts, "approval state");
   assert.equal(await page.locator(".composer-queue-text").count(), 2);
   await report("idle");
   await Bun.sleep(300);
-  assert.equal(inputs.length, inputCount, "a status change must not dispatch held input");
+  assertNoInputs(queueMark, heldTexts, "status change");
   await page.getByRole("button", { name: "Send now", exact: true }).first().click();
-  await until(() => inputs.length > inputCount, "explicit queue send");
-  assert.equal(inputs.at(-1)?.pane_id, paneA);
+  await expectInputs(queueMark, paneA, queueInputSocket, [heldTexts[0]!], "explicit queue send", "submit", "immediate",
+    `\x1b[200~${heldTexts[0]!}\x1b[201~`);
   await until(async () => await page.locator(".composer-queue-text").count() === 1, "only sent item removed");
   assert.equal(await page.locator(".composer-queue-text").inputValue(), "# edited second message");
   await page.getByRole("button", { name: "Discard", exact: true }).click();
@@ -1108,11 +1152,11 @@ try {
   assert.equal(Math.round(quickBox.width), Math.round(surfaceBox.width));
   await chatWidth("Default");
   await composer.fill("draft stays");
-  const quickCount = inputs.length;
+  const quickInputSocket = inputStates.get(paneA)?.socket;
+  assert.ok(quickInputSocket, "the quick-reply owner has an input-ready attachment");
+  const quickMark = inputSequence;
   await page.getByRole("group", { name: "Quick replies", exact: true }).getByRole("button", { name: "continue", exact: true }).click();
-  await until(() => inputs.length > quickCount, "quick reply send");
-  assert.equal(inputs.at(-1)?.pane_id, paneA);
-  assert.match(inputs.at(-1)!.text, /^continue/);
+  await expectInputs(quickMark, paneA, quickInputSocket, [/^continue/], "quick reply send", "submit");
   assert.equal(await composer.inputValue(), "draft stays");
   // Mid-turn it uses the same real server-owned pending path as Send, and still leaves the draft.
   await page.locator(`.pane-select[title^="${pendingPane} —"]`).click();
@@ -1141,10 +1185,10 @@ try {
   // the Enter that commits an IME candidate is not a send: WebKit can deliver it after
   // compositionend, with isComposing false and key code 229
   await composer.fill("한글 조합");
-  const imeInputs = inputs.length;
+  const imeMark = inputSequence;
   await composer.dispatchEvent("keydown", IME_ENTER);
   await page.waitForTimeout(NO_SEND_WAIT_MS);
-  assert.equal(inputs.length, imeInputs);
+  assertNoInputs(imeMark, ["한글 조합", "\r"], "composer IME");
   assert.equal(await composer.inputValue(), "한글 조합");
   await composer.fill("");
   console.log("PASS the composer keeps an IME's committing Enter");
@@ -1662,9 +1706,8 @@ try {
   assert.equal(moves.length, sent, "a lone worktree has nowhere to move");
   await page.unroute("**/api/workspace/move");
   writeFileSync(join(worktree.path, "unsaved.txt"), "dirty\n");
-  // a desktop draws no row ⋯: the context-menu key opens the menu at the focused row
-  await childHeader.locator(".workspace-select").focus();
-  await page.keyboard.press("Shift+F10");
+  // Headless Chrome does not turn Shift+F10 into a contextmenu on this row.
+  await childHeader.locator(".workspace-select").click({ button: "right" });
   const childMenu = page.getByRole("menu");
   await childMenu.waitFor();
   const childActions = await childMenu.getByRole("menuitem").allTextContents();
@@ -1674,7 +1717,7 @@ try {
   await childHeader.locator(".workspace-select").click({ button: "right" });
   await childMenu.waitFor();
   assert.deepEqual(await childMenu.getByRole("menuitem").allTextContents(), childActions,
-    "a linked checkout's keyboard menu and right-click menu have identical actions");
+    "a linked checkout's menu opens the same actions again");
   await page.keyboard.press("Escape");
   await childMenu.waitFor({ state: "detached" });
   // pinned, the worktree leaves its repository's group for the pinned card at the top; unpinned, it returns
@@ -1991,15 +2034,61 @@ try {
   // Claude's grey suggestion in its empty input box stands in the composer. A send drops it,
   // and the same text suggested again comes back; a pane switch never shows the last pane's.
   const paintSuggestion = async (pane: string, suggestion: string): Promise<void> => {
-    await herdrRpc("pane.send_text", {
-      pane_id: pane,
-      text: `printf '\\033[2J\\033[H%s\\n\\342\\235\\257 \\033[2m%s\\033[0m\\n%s\\n' "$(printf '\\342\\224\\200%.0s' $(seq 40))" '${suggestion}' "$(printf '\\342\\224\\200%.0s' $(seq 40))"; read -r qa_suggest; clear`,
-    });
-    await herdrRpc("pane.send_keys", { pane_id: pane, keys: ["Enter"] });
+    const script = join(root, `suggest-${pane.replaceAll(":", "-")}.sh`);
+    writeFileSync(script, `printf '\\033[2J\\033[H%s\\n❯ \\033[2m%s\\033[0m\\n%s\\n' "$(printf '─%.0s' $(seq 40))" ${JSON.stringify(suggestion)} "$(printf '─%.0s' $(seq 40))"\nread -r qa_suggest\nclear\n`);
+    await herdrRpc("pane.send_keys", { pane_id: pane, keys: ["ctrl+c"] });
+    await herdrRpc("pane.send_text", { pane_id: pane, text: `bash ${JSON.stringify(script)}\n` });
     await until(async () => {
       const result = await herdrRpc<{ read: { text: string } }>("pane.read", { pane_id: pane, source: "visible", format: "text" });
       return result.read.text.includes(`❯ ${suggestion}`);
     }, "suggestion painted");
+  };
+  // Hold an actual server answer, not a request that will read the screen after the send.
+  // Later reconciliations wait separately, then read the real, current screen on cleanup.
+  const holdPromptRead = async (pane: string, suggestion: string, trigger: () => Promise<void>) => {
+    const { promise: staleGate, resolve: releaseStale } = Promise.withResolvers<void>();
+    const { promise: followingGate, resolve: releaseFollowing } = Promise.withResolvers<void>();
+    releases.push(releaseStale, releaseFollowing);
+    let chosen = false;
+    let captured = false;
+    let delivered = false;
+    suppressedSuggestion = { pane, text: suggestion };
+    const unroute = await routeDrained(page, `**/api/pane/prompt?pane_id=${encodeURIComponent(pane)}`, async (route) => {
+      if (chosen) { await followingGate; await route.continue(); return; }
+      chosen = true;
+      const response = await route.fetch();
+      assert.equal((await response.json()).suggestion, suggestion, "the held REST answer contains the old suggestion");
+      captured = true;
+      await staleGate;
+      const received = page.waitForResponse((answer) => answer.request() === route.request());
+      await route.fulfill({ response });
+      const answer = await received;
+      assert.equal(await answer.finished(), null, "the browser received the complete held response");
+      assert.equal((await answer.json()).suggestion, suggestion, "the stale suggestion was delivered, not cancelled or replaced");
+      delivered = true;
+    });
+    await trigger();
+    await until(() => captured, `real prompt reconciliation captured for ${pane}`);
+    return {
+      deliver: async () => {
+        releaseStale();
+        await until(() => delivered, `stale prompt response delivered for ${pane}`);
+        await page.evaluate(() => {
+          const { promise, resolve } = Promise.withResolvers<void>();
+          requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+          return promise;
+        });
+      },
+      finish: async () => {
+        releaseFollowing();
+        await unroute();
+        suppressedSuggestion = null;
+      },
+    };
+  };
+  const reconcilePrompt = async (): Promise<void> => {
+    await setPageHidden(true);
+    await setPageHidden(false);
   };
   await selectPane(paneA);
   await composer.fill("");
@@ -2009,38 +2098,37 @@ try {
   await composer.focus();
   await page.keyboard.press("Tab");
   assert.equal(await composer.inputValue(), "run the tests", "Tab takes the suggestion");
-  // a prompt read made before the send answers after it: its suggestion was for the turn before
-  let readBeforeSend = false;
-  await page.route(`**/api/pane/prompt?pane_id=${encodeURIComponent(paneA)}`, async (route) => {
-    const response = await route.fetch();
-    readBeforeSend = true;
-    await new Promise((resolve) => setTimeout(resolve, 1500));
-    await route.fulfill({ response });
-  });
-  await until(async () => readBeforeSend, "a prompt read in flight");
+  // Visibility restoration is an authoritative REST edge even with prompt-push enabled.
+  const beforeSend = await holdPromptRead(paneA, "run the tests", reconcilePrompt);
   await composer.press("Enter");
   await until(async () => await composer.getAttribute("placeholder") !== "run the tests", "a send drops the suggestion");
   await until(async () => await composer.inputValue() === "", "the sent box clears");
+  await beforeSend.deliver();
   for (let check = 0; check < 16; check++) {
     assert.notEqual(await composer.getAttribute("placeholder"), "run the tests", "a read from before the send does not bring the suggestion back");
     await page.waitForTimeout(150);
   }
-  await page.unroute(`**/api/pane/prompt?pane_id=${encodeURIComponent(paneA)}`);
+  await beforeSend.finish();
   // the same text suggested again after the turn shows again
+  pushedSuggestions.delete(paneA);
   await paintSuggestion(paneA, "run the tests");
-  await until(async () => await composer.getAttribute("placeholder") === "run the tests", "the same suggestion again");
-  // pane B answers its first prompt read late: meanwhile it must not show pane A's suggestion
+  await until(async () => pushedSuggestions.get(paneA) === "run the tests" && await composer.getAttribute("placeholder") === "run the tests", "the same suggestion again from a fresh real push");
+  assert.equal(pushedSuggestions.get(paneA), "run the tests", "a fresh real push can return the same suggestion");
+  // Hold B's real bootstrap answer across another pane generation, without hiding A's push.
   await herdrRpc("pane.report_agent", { pane_id: paneB, source: "manual", agent: "claude", state: "idle" });
-  await page.route(`**/api/pane/prompt?pane_id=${encodeURIComponent(paneB)}`, async (route) => {
-    await new Promise((resolve) => setTimeout(resolve, 1500));
-    await route.continue();
-  });
-  await selectPane(paneB);
+  await paintSuggestion(paneB, "review pane B");
+  const beforePaneSwitch = await holdPromptRead(paneB, "review pane B", () => selectPane(paneB));
   for (let check = 0; check < 8; check++) {
     assert.notEqual(await composer.getAttribute("placeholder"), "run the tests", "another pane's suggestion never shows");
     await page.waitForTimeout(150);
   }
-  await page.unroute(`**/api/pane/prompt?pane_id=${encodeURIComponent(paneB)}`);
+  await selectPane(paneA);
+  await until(async () => await composer.getAttribute("placeholder") === "run the tests", "current pane A keeps its suggestion");
+  await beforePaneSwitch.deliver();
+  assert.equal(await composer.getAttribute("placeholder"), "run the tests", "B's delivered old-generation response cannot repaint A");
+  await beforePaneSwitch.finish();
+  await selectPane(paneB);
+  await until(async () => await composer.getAttribute("placeholder") === "review pane B", "a fresh current-pane reconciliation remains usable");
   await herdrRpc("pane.send_keys", { pane_id: paneA, keys: ["Enter"] });
   console.log("PASS Claude's suggestion fills the composer with Tab, returns after a send, and stays with its pane");
 
@@ -2066,23 +2154,24 @@ try {
   const rule = "─".repeat(40);
   writeFileSync(pendingScreen, `${rule}\r\n❯ \u001b[2mcheck the diff\u001b[0m\r\n${rule}\r\n`);
   await until(async () => await composer.getAttribute("placeholder") === "check the diff", "suggestion beside a pending message");
-  await page.route(`**/api/pane/prompt?pane_id=${encodeURIComponent(pendingPane)}`, async (route) => {
-    await new Promise((resolve) => setTimeout(resolve, 5000));
-    await route.continue().catch(() => {});
-  });
+  const beforeSendNow = await holdPromptRead(pendingPane, "check the diff", reconcilePrompt);
   const sentAt = Date.now();
   await pendingRows.getByRole("button", { name: /^Send now:/ }).click();
   await until(async () => await composer.getAttribute("placeholder") !== "check the diff", "Send now drops the suggestion");
   assert.ok(Date.now() - sentAt < 2500, "the suggestion goes with the Send now, not with a later read");
   await pendingRows.waitFor({ state: "hidden" });
-  await page.unroute(`**/api/pane/prompt?pane_id=${encodeURIComponent(pendingPane)}`);
+  await beforeSendNow.deliver();
+  assert.notEqual(await composer.getAttribute("placeholder"), "check the diff", "the delivered pre-Send-now answer cannot restore the suggestion");
+  // The stand-in screen does not clear itself on input; let subsequent real reads observe it gone.
+  writeFileSync(pendingScreen, "");
+  await beforeSendNow.finish();
   await herdrRpc("pane.send_text", { pane_id: pendingPane, text: "\u0003" });
   await page.keyboard.press("ControlOrMeta+Shift+Comma");
   await openSettingsPage(page, "Chat");
   await page.getByRole("switch", { name: "Send queued messages automatically", exact: true }).check();
   await page.getByRole("button", { name: "Close settings", exact: true }).click();
-  await workspaceClose(pendingWorkspace.workspace.workspace_id);
-  workspaces.splice(workspaces.indexOf(pendingWorkspace.workspace.workspace_id), 1);
+  await workspaceClose(pendingWorkspaceId);
+  workspaces.splice(workspaces.indexOf(pendingWorkspaceId), 1);
   await selectPane(paneA);
   console.log("PASS Send now on a server-owned pending message drops Claude's suggestion");
 
@@ -2227,8 +2316,9 @@ try {
   const promptRoute = `**/api/pane/prompt?pane_id=${encodeURIComponent(paneB)}`;
   const suggest = { json: { prompt: null, suggestion: "run the tests" } };
   const mobileComposer = mobilePage.getByRole("textbox", { name: "Message", exact: true });
-  await mobilePage.route(promptRoute, (route) => route.fulfill(suggest));
   await mobileComposer.fill("");
+  // the pane really paints the grey suggestion: the phone gets it from the pushed prompt, not a 2s poll
+  await paintSuggestion(paneB, "run the tests");
   await until(async () => await mobileComposer.getAttribute("placeholder") === "run the tests", "a phone shows the suggestion as the placeholder");
   assert.equal(await mobilePage.locator(".voice-mic").count(), 0, "a phone's chat has no mic until Settings asks for it");
   assert.equal(await mobilePage.getByTitle("Use the suggestion", { exact: true }).count(), 0, "a phone shows no suggestion chip by default");
@@ -2238,7 +2328,6 @@ try {
   await mobileComposer.fill("");
   await mobilePage.getByTitle("Use the suggestion", { exact: true }).click();
   assert.equal(await mobileComposer.inputValue(), "run the tests", "the chip puts the suggestion in the box");
-  await mobilePage.unroute(promptRoute);
   try { await mobileEvidence?.finish(); } finally { await mobile.close(); }
   assert.equal(errors.length, 0, errors.join("\n"));
   assertCspClean(csp, "the suggestion chip loads with no CSP violation");
@@ -2329,12 +2418,11 @@ try {
   // is automatic, so it must not offer a sign-out action that cannot lock the app.
   assert.equal(await page.getByRole("button", { name: "Sign out", exact: true }).count(), 0);
   await page.locator(`.pane-select[title^="${created.pane_id} —"]`).click();
-  // closed from the row's menu, which a desktop opens with the context-menu key or a right-click
-  // (it draws no row ⋯); the workspace's pane goes with it, so a confirm asks first
+  // Headless Chrome does not turn Shift+F10 into a contextmenu on this row.
   const selectedRow = page.locator(".pane-item.is-selected .pane-select");
   assert.equal(await page.locator(".pane-item.is-selected .row-menu-toggle").isVisible(), false, "a desktop draws no row ⋯");
   await selectedRow.focus();
-  await page.keyboard.press("Shift+F10");
+  await selectedRow.click({ button: "right" });
   const rowMenu = page.getByRole("menu");
   await rowMenu.waitFor();
   const rowActions = await rowMenu.getByRole("menuitem").allTextContents();
@@ -2353,7 +2441,7 @@ try {
   await page.keyboard.press("Escape");
   await rowMenu.waitFor({ state: "detached" });
   assert.equal(await selectedRow.evaluate((row) => document.activeElement === row), true, "Escape after a right-click returns focus to the row");
-  await page.keyboard.press("Shift+F10");
+  await selectedRow.click({ button: "right" });
   await rowMenu.getByRole("menuitem", { name: "Close workspace", exact: true }).click();
   const confirmClose = page.getByRole("alertdialog");
   await confirmClose.waitFor();
@@ -2364,7 +2452,7 @@ try {
   await page.keyboard.press("Escape");
   await confirmClose.waitFor({ state: "detached" });
   assert.equal(await selectedRow.evaluate((row) => document.activeElement === row), true, "cancelling the confirm returns focus to the row");
-  await page.keyboard.press("Shift+F10");
+  await selectedRow.click({ button: "right" });
   await rowMenu.getByRole("menuitem", { name: "Close workspace", exact: true }).click();
   await confirmClose.waitFor();
   await confirmClose.getByRole("button", { name: "Close", exact: true }).click();

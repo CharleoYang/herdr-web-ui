@@ -490,7 +490,10 @@ export function App() {
     try { const next = await fetchHealth(); setHealth((previous) => sameData(previous, next) ? previous : next); } catch { setHealth(null); }
   }, []);
   const snapshotRequests = useRef(new SnapshotRequests());
+  const rosterStreamHealthy = useRef(false);
+  const lastRosterRead = useRef(0);
   const load = useCallback(async () => {
+    lastRosterRead.current = performance.now();
     try {
       await snapshotRequests.current.read(fetchMachines, (next) => {
         setMachines((previous) => sameData(previous, next) ? previous : next);
@@ -506,12 +509,13 @@ export function App() {
   }, [rosterIn]);
 
   useEffect(() => {
-    const tick = (): void => {
+    const tick = (forceRoster = false): void => {
       // a hidden tab (or a phone app in the background) polls nothing; it catches up on return
       if (document.visibilityState === "hidden") return;
       void loadHealth();
       // a locked tab only watches health, so a token entered in another tab still unlocks it
-      if (lockedRef.current !== true) void load();
+      // Leave one tick of slack so the visible REST backstop is never later than 30s.
+      if (lockedRef.current !== true && (forceRoster || !rosterStreamHealthy.current || performance.now() - lastRosterRead.current >= 30_000 - POLL_MS)) void load();
     };
     let timer = 0;
     let disposed = false;
@@ -526,7 +530,7 @@ export function App() {
       timer = window.setInterval(tick, POLL_MS);
     })();
     const onVisible = (): void => {
-      if (document.visibilityState === "visible" && !disposed) tick();
+      if (document.visibilityState === "visible" && !disposed) tick(true);
     };
     document.addEventListener("visibilitychange", onVisible);
     return () => {
@@ -541,7 +545,7 @@ export function App() {
     if (refetchTimer.current !== null) return;
     refetchTimer.current = window.setTimeout(() => {
       refetchTimer.current = null;
-      if (lockedRef.current !== true) void load();
+      if (lockedRef.current !== true && document.visibilityState !== "hidden") void load();
     }, REFETCH_DEBOUNCE_MS);
   }, [load]);
 
@@ -596,26 +600,40 @@ export function App() {
 
   // One SSE subscription watches every PC, even when no terminal is selected.
   useEffect(() => {
+    rosterStreamHealthy.current = false;
     if (locked !== false) return;
+    if (typeof EventSource === "undefined") return;
     // the alerts take a pane waiting on its turn's background work for working (shared/notify-policy.ts)
     const alerting = (list: Machine[]) => list.map((machine) => ({
       id: machine.id,
       snapshot: machine.snapshot && { panes: machine.snapshot.panes.map((pane) => ({ pane_id: pane.pane_id, agent_status: alertStatus(pane.agent_status, (pane as HerdrPane).background_wait) })) },
     }));
     const events = new EventSource("/api/machines/events");
+    let disposed = false;
+    // Native EventSource reuses its object on reconnect, but not its snapshot baseline.
+    events.onopen = events.onerror = () => { rosterStreamHealthy.current = false; };
     events.onmessage = (event) => {
+      if (disposed) return;
       let payload: MachineEvent;
       try { payload = JSON.parse(event.data); } catch { return; }
+      if (!payload || typeof payload !== "object") return;
       if (payload.type === "preferences") { receivePreferencesRef.current(payload.preferences); return; }
-      // A poll started before this event can carry an older roster or pane status.
-      snapshotRequests.current.invalidate();
       if (payload.type === "machines") {
+        if (!Array.isArray(payload.machines) || !payload.machines.every((machine) =>
+          machine && typeof machine.id === "string" && typeof machine.name === "string"
+          && (machine.snapshot === null || (machine.snapshot && Array.isArray(machine.snapshot.panes)
+            && Array.isArray(machine.snapshot.agents) && Array.isArray(machine.snapshot.workspaces) && Array.isArray(machine.snapshot.tabs))))) return;
+        // A poll started before this snapshot can carry an older roster or pane status.
+        snapshotRequests.current.invalidate();
         seedStatuses(statusRef.current, alerting(payload.machines), { started: turnStartRef.current, lasted: lastTurnRef.current });
+        rosterStreamHealthy.current = true;
         setMachines((previous) => sameData(previous, payload.machines) ? previous : payload.machines);
         rosterIn();
         setMachineRosterLoaded(true);
         return;
       }
+      if (payload.type !== "machine-message") return;
+      snapshotRequests.current.invalidate();
       const machine = machinesRef.current.find((m) => m.id === payload.machine_id);
       if (!machine) return;
       const message = payload.message;
@@ -660,7 +678,7 @@ export function App() {
       }
       if (message.type === "session-changed" || message.type === "pane-exited") scheduleRefetch();
     };
-    return () => events.close();
+    return () => { disposed = true; rosterStreamHealthy.current = false; events.close(); };
   }, [locked, scheduleRefetch, dropIn, chime]);
 
   const handleServerMessage = useCallback((message: ServerMessage) => {

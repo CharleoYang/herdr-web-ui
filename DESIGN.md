@@ -615,6 +615,12 @@ One set for both themes: the card is island black wherever it shows.
   authoritative when the agent roster and pane status differ. The workspace and agent lists
   share the existing combined machine roster and its SSE updates; neither adds a status subscription.
   A disconnected PC's saved workspace and agent rows are dimmed, inert and draw no state until that PC reconnects.
+- After a valid full `machines` snapshot on the current SSE connection, the browser stops its
+  redundant five-second roster GETs and keeps a visible-page REST backstop of at most 30 seconds.
+  Opening or reconnecting the stream alone is not healthy: before a valid snapshot, after an
+  error, or without EventSource, the existing five-second REST fallback remains. Visibility
+  restore and explicit roster-changing actions force a fresh read; `SnapshotRequests` still
+  fences stale responses. Hidden-page reads pause and health/auth polling stays independent.
 - The Agents list is flat and every row names its own place. Pinned agents (pinned from a row's
   menu) stand first, in the order they were pinned, in a card (a `--hairline` `--border` edge,
   `--radius-lg`, `--space-1` padding, no fill, so hover and selection read inside it as elsewhere),
@@ -898,6 +904,24 @@ One set for both themes: the card is island black wherever it shows.
   its accessible text and in its tooltip. While live the chip takes no room and stays in the
   document as a `role="status"` a screen reader can read (`.conn-live`; never `display: none`).
 
+### Live chat transport
+- The existing per-machine WebSocket advertises optional `conversation-delta` and `prompt-push`
+  features. Clients and bridges without them retain `conversation-changed` plus REST and the
+  existing prompt fallback; no new socket or PTY-derived chat parser is introduced.
+- Conversation deltas update the latest page without the invalidation cooldown. Signatures are
+  opaque; a validated complete page can establish the initial baseline. Baseline mismatch,
+  incomplete payload or oversized envelope falls back to REST; periodic reconciliation and
+  historical-page loading remain REST-based.
+- Prompt pushes share `readPromptState` with REST and reach Chat through `PaneTerminal`'s
+  per-pane callback, including null, changes and plan
+  privacy. Watch-device or explicit screen-only restrictions propagate through a machine relay
+  before its owner-authenticated upstream read; terminal observe mode alone is not a restriction.
+- Prompt observation is single-flight per pane/access policy. Delivery retains the original
+  attachment and interest lifetime; each new interest receives its own initial state.
+- Socket generation, attachment/interest and current-pane fences reject stale frames. Hidden
+  chats do not apply pushes; reconnect and visibility restore reconcile through REST, and newer
+  push state fences delayed REST responses. Snapshot readiness is not transcript-enrichment readiness.
+
 ### Chat turn (`.chat-turn`)
 - Native conversation rows use LegendList 3.3.5, with the chat view as the single
   scroll owner. The centered lane, exchange spacing and prompt portal stay separate from
@@ -1042,6 +1066,18 @@ One set for both themes: the card is island black wherever it shows.
   narrowest phone the title wraps to a second line instead.
 - An OmO or omp `task` row opens to the tasks it starts (`.chat-task-calls`): each summary in
   `--text`, the agent as a hairline mono pill, the prompt in the bounded mono input box.
+
+### Turn todo list (`.chat-todo`)
+- The pane's latest todo state is a single collapsible `.chat-todo-pinned` dock outside the
+  message scroller, above the composer. Scrolling transcript rows or folding a work block does
+  not move or duplicate this progress panel. It is not a separate list on every historical turn.
+- Claude `TodoWrite` and Codex `update_plan` inputs provide complete lists; OMP/OmO tool answers
+  provide phase-grouped states, with flat OMP `init.items` input as the fallback. A later empty
+  list clears the earlier state.
+- The summary shows completed/total counts, an active item or blocked state, and a caret. It
+  stays on one line in a narrow panel; expanding reveals phase headings, status icons and notes.
+  Collapsing hides the details without requiring their DOM nodes to be removed. The same
+  semantic color tokens are used as elsewhere in the interface.
 
 ### Plan (`.bg-tasks-plan`, `.bg-step`, `.plan-count`)
 - A pane's plan has no control of its own: it shares the composer's background-task chip
@@ -1199,12 +1235,18 @@ One set for both themes: the card is island black wherever it shows.
   only the first letter drawn as a capital (`::first-letter`, the text is not rewritten); a pane
   that records no level draws no dot and no dash, only the name. On the
   fill the ring's track is `--border-strong`; a ring left bare on the card keeps `--border`.
-  No part carries a chevron: herdr owns the agent, so none of them opens a menu. It is display only: a `span` with no role, no
-  focus, no hover or pressed state, no pointer cursor and no chevron; the ring inside it is the
-  one thing to press on desktop; mobile keeps the ring inert. The `title` of the model is the id as received, and the level's is its
-  sentence; behind a name the id is also repeated as `.visually-hidden` text, since a touch
-  cannot reach a title. A pane that names no model draws no pill: the mark and the ring stand
-  alone, with a dim `Model —` and the level between them if the pane records only a level.
+  OMP's model is a button, present even before the first recorded model, opening a searchable
+  session-only switcher. The selected PC's `/api/omp/models` supplies chat choices from
+  `omp models --json` (60-second server cache). Selection submits `/switch provider/id` through the
+  existing terminal input receipt path, not a second model authority. It is disabled offline, while
+  working or blocked, or while a prompt or switch waits. The transcript's next metadata read updates
+  the pill; failures leave the dialog open and show the composer's error note, and no other pane or
+  stored default changes. Other agents' model labels stay display-only: a `span` with no role, no
+  focus, no hover or pressed state, no pointer cursor and no chevron. The `title` of the model is
+  the id as received, and the level's is its sentence; behind a name the id is also repeated as
+  `.visually-hidden` text, since a touch cannot reach a title. A pane that names no model draws no
+  pill: the mark and the ring stand alone, with a dim `Model —` and the level between them if the
+  pane records only a level. The context ring stays interactive on desktop and inert on mobile.
 - The model is drawn by name only where its id is one `modelLabel` (`src/lib/modelName.ts`) can
   name for certain, from the vendor's own regular naming and matched whole:
   `claude-<family>-<major>[-<minor>]`, also behind `anthropic/`, is `<Family> <major>.<minor>`
@@ -1214,9 +1256,9 @@ One set for both themes: the card is island black wherever it shows.
   well-formed id of a version that does not exist is named too. Any other id — a dated snapshot, another tier or
   product suffix, another provider's prefix, another vendor, a spelling that is not the vendor's
   canonical one (a leading zero as in `claude-sonnet-5-05`, uppercase, a stray separator or
-  space) — is drawn exactly as received in
-  `--font-mono` at regular weight (`.composer-model.is-id`), so it reads as an identifier and no
-  suffix is dropped.
+  space) — uses `--font-mono` at regular weight (`.composer-model.is-id`), so it reads as an
+  identifier. A provider/id selector shows its final id segment to fit the pill; the full
+  selector remains in its title and in the switcher's model rows. No model name is guessed.
 - What does not fit the row gives way in this order: the task chip's words (icon and count below
   a `640px` card), then the reasoning level and model name according to the measured row. A long
   identifier can shorten inside the pill; the context ring remains visible: a name that would

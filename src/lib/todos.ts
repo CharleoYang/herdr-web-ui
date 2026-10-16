@@ -118,7 +118,7 @@ export function todoCallSummary(part: Tool): string | null {
   const lines = operations(input).map((op) => {
     const what = text(op["op"]) ?? (Array.isArray(op["list"]) ? "init" : "update");
     if (what === "init") {
-      const items = phases(op["list"]);
+      const items = Array.isArray(op["items"]) ? op["items"] : phases(op["list"]);
       return `plan · ${items.length} item${items.length === 1 ? "" : "s"}`;
     }
     if (what === "append") return `add · ${(Array.isArray(op["items"]) ? op["items"] : []).filter((item) => text(item) !== null).length} to ${text(op["phase"]) ?? "list"}`;
@@ -126,4 +126,62 @@ export function todoCallSummary(part: Tool): string | null {
     return target === null ? what : `${what} · ${target}`;
   });
   return lines.join(", ");
+}
+
+/** Extract todo items directly from the tool's input when the output is not yet available or lacks the list. */
+export function parseTodoInput(part: Tool): TodoItem[] | null {
+  const input = args(part);
+  if (toolKind(part.name) === "whole" && Array.isArray(input["todos"])) {
+    return input["todos"].flatMap((entry) => {
+      const rec = record(entry);
+      const content = text(rec["content"]);
+      if (content === null) return [];
+      const status: TodoStatus = rec["status"] === "completed" ? "completed"
+        : rec["status"] === "in_progress" ? "in_progress"
+        : rec["status"] === "blocked" ? "blocked"
+        : rec["status"] === "dropped" ? "dropped"
+        : "pending";
+      return [{ label: content, phase: null, status }];
+    });
+  }
+  if (toolKind(part.name) === "codex-plan" && Array.isArray(input["plan"])) {
+    return input["plan"].flatMap((entry) => {
+      const rec = record(entry);
+      const step = text(rec["step"]);
+      if (step === null) return [];
+      const status: TodoStatus = rec["status"] === "completed" ? "completed"
+        : rec["status"] === "in_progress" ? "in_progress"
+        : rec["status"] === "blocked" ? "blocked"
+        : rec["status"] === "dropped" ? "dropped"
+        : "pending";
+      return [{ label: step, phase: null, status }];
+    });
+  }
+  if (toolKind(part.name) === "ops" && input["op"] === "init") {
+    if (Array.isArray(input["list"])) {
+      return phases(input["list"]);
+    }
+    if (Array.isArray(input["items"])) {
+      return input["items"].flatMap((item) => {
+        const str = text(item);
+        return str !== null ? [{ label: str, phase: text(input["phase"]), status: "pending" as TodoStatus }] : [];
+      });
+    }
+  }
+  return null;
+}
+
+/** Returns the latest todo list state from the turn's tool calls (omp, claude, codex), or null if none was touched. */
+export function turnTodos(parts: readonly ConversationPart[]): TodoItem[] | null {
+  for (let i = parts.length - 1; i >= 0; i--) {
+    const part = parts[i]!;
+    if (part.kind !== "tool") continue;
+    if (isTodoTool(part.name) && !part.error) {
+      const parsed = parseTodoAnswer(part.output);
+      if (parsed !== null) return parsed;
+      const fromInput = parseTodoInput(part);
+      if (fromInput !== null) return fromInput;
+    }
+  }
+  return null;
 }

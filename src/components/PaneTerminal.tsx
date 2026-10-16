@@ -8,6 +8,7 @@ import "./PaneTerminal.css";
 
 import { HerdrSocket, type SubmitDelivery, type SubmitResult } from "../lib/ws.ts";
 import { MachineSession } from "../lib/machineSession.ts";
+import type { ConversationUpdate } from "../lib/conversationRefresh.ts";
 import { useMachineSessions } from "../lib/machineSessionContext.tsx";
 import { ViewportIntentGate } from "../lib/viewportIntent.ts";
 import { PaneCachedContext, PanePresentedContext, PaneFollowContext, PaneShownContext, PaneSubmitContext } from "../lib/paneSubmitContext.ts";
@@ -391,6 +392,15 @@ export function PaneTerminal({
   const [conversationPushes, setConversationPushes] = useState(false);
   const onConversationWatch = useCallback((pane: string, enabled: boolean) => {
     socketRef.current?.watchConversation(pane, enabled);
+  }, []);
+  /** Deliver each frame synchronously, never as React state that could coalesce or replay it. */
+  const chatUpdateRef = useRef<((update: ConversationUpdate) => void) | null>(null);
+  const onConversationUpdate = useCallback((listener: ((update: ConversationUpdate) => void) | null) => {
+    chatUpdateRef.current = listener;
+  }, []);
+  const promptUpdateRef = useRef<((message: Extract<ServerMessage, { type: "prompt-push" }>) => void) | null>(null);
+  const onPromptUpdate = useCallback((listener: ((message: Extract<ServerMessage, { type: "prompt-push" }>) => void) | null) => {
+    promptUpdateRef.current = listener;
   }, []);
   /** A scrollback stand-in's listener; a ref, so terminal output never re-renders the pane. */
   const chatOutputRef = useRef<(() => void) | null>(null);
@@ -1086,12 +1096,23 @@ export function PaneTerminal({
     socketRef.current = socket;
     let outputGeneration = 0;
     let deferredAttach = false;
+    let conversationDisconnected = false;
     const off = session.on((message, sent) => {
       onServerMessageRef.current?.(message);
       pendingScopeRef.current = session.scope;
       pendingEpochRef.current = session.epoch;
       // Every pane-addressed frame, errors included, belongs only to that pane's renderer.
       if ("pane_id" in message && message.pane_id !== undefined && message.pane_id !== paneRef.current) return;
+      if (message.type === "snapshot" && conversationDisconnected) {
+        conversationDisconnected = false;
+        chatUpdateRef.current?.("reconnect");
+      }
+      if (message.type === "conversation-delta" && chatViewRef.current && !releasedRef.current && document.visibilityState !== "hidden") {
+        chatUpdateRef.current?.(message);
+      }
+      if (message.type === "prompt-push" && chatViewRef.current && !releasedRef.current && document.visibilityState !== "hidden") {
+        promptUpdateRef.current?.(message);
+      }
       // the PC's shared connection came back after an overload close (another pane's mount, or an
       // explicit pick, reconnected it): its replayed attach serves this pane again
       if (message.type === "snapshot" && stalledRef.current) {
@@ -1262,6 +1283,8 @@ export function PaneTerminal({
       setConversationPushes(socket.conversationPushes());
     });
     const offDisconnect = session.onDisconnect(() => {
+      conversationDisconnected = true;
+      chatUpdateRef.current?.("disconnect");
       clearModifiers();
       pendingScopeRef.current = session.scope;
       pendingEpochRef.current = session.epoch;
@@ -2864,6 +2887,9 @@ export function PaneTerminal({
             refreshKey={chatRefresh}
             invalidationKey={chatInvalidation}
             onConversationWatch={onConversationWatch}
+            onConversationUpdate={onConversationUpdate}
+            onPromptUpdate={onPromptUpdate}
+            promptPushes={socketRef.current?.promptPushes() === true && !released}
             conversationPushes={conversationPushes && !released}
             onTerminalOutput={onTerminalOutput}
             sentKey={chatSent}
@@ -3005,6 +3031,14 @@ export function PaneTerminal({
             </div>
           ) : null}
           onSend={composerSend}
+          onSwitchModel={agent === "omp" ? (selector) => {
+            if (agentStatus === "working" || agentStatus === "blocked" || heldRef.current || answering !== null) return t("Wait until the agent is idle to switch models");
+            const sent = sendTerminalLine(`/switch ${selector}`);
+            return sent === false ? false : sent.then((answer) => {
+              if (answer === true) setChatRefresh((current) => current + 1);
+              return answer;
+            });
+          } : undefined}
           onAbort={abortTurn}
           onUploadImage={uploadImage}
         />

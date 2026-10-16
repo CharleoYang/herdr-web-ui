@@ -10,7 +10,7 @@
   "scripts/remote-bundle-smoke.ts": 1,
   "scripts/terminal-arrows-clicks-regression.ts": 9,
   "scripts/terminal-pinch-regression.ts": 5,
-  "scripts/ui-regression.ts": 13,
+  "scripts/ui-regression.ts": 10,
   "server/attach-held.contract.test.ts": 5,
   "server/collector.test.ts": 62,
   "server/collector.ts": 1,

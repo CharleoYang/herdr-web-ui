@@ -1441,6 +1441,24 @@
   font-size: var(--fs-xs);
 }
 
+button.composer-model-button {
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  padding: 0;
+  text-align: left;
+  cursor: pointer;
+}
+
+button.composer-model-button:hover:not(:disabled) {
+  text-decoration: underline;
+}
+
+button.composer-model-button:disabled {
+  cursor: default;
+}
+
 /* A phone's input card floats over the transcript's end, as an iPhone's input bar does: the
    composer rises --composer-over into the transcript, whose last lines fade into the chat's
    surface and blur behind the glass card. Only while the card follows the transcript directly

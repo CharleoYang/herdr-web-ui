@@ -60,6 +60,19 @@ describe("recorded conversation model settings", () => {
     }
   });
 
+  it("reads omp's provider/id model field and does not wipe a known model", () => {
+    expect(parseConversationMetadata(jsonl(
+      { type: "message", message: { role: "assistant", model: "grok-4.7" } },
+      { type: "thinking_level_change", thinkingLevel: "high" },
+      { type: "model_change", model: "google-antigravity/gemini-3.8-flash" },
+    ), "omp-transcript")).toEqual({ model: "google-antigravity/gemini-3.8-flash", reasoning_effort: "high" });
+    expect(parseConversationMetadata(jsonl(
+      { type: "model_change", modelId: "kept" },
+      { type: "model_change" },
+      { type: "thinking_level_change", thinkingLevel: "high" },
+    ), "omp-transcript")).toEqual({ model: "kept", reasoning_effort: "high" });
+  });
+
   it("reads Claude's actual model without deriving effort from thinking content", () => {
     expect(parseConversationMetadata(jsonl(
       { type: "assistant", message: { role: "assistant", model: "claude-test", content: [{ type: "thinking", thinking: "text" }] } },

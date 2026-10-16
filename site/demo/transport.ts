@@ -38,6 +38,10 @@ function redrawHistory(paneId: string): void {
   for (const socket of sockets) socket.renderHistory(paneId);
 }
 const PROMPT_ANSWER_TURN_MS = 2600;
+const ompModels = [
+  { provider: "demo", id: "chat-fast", selector: "demo/chat-fast", name: "Demo fast chat" },
+  { provider: "demo", id: "chat-deep", selector: "demo/chat-deep", name: "Demo deep chat" },
+];
 const CHAT_ANSWER_MS = 2400;
 /** the recording's gaps, capped so the replay stays brisk */
 const MAX_FRAME_GAP_MS = 500;
@@ -318,6 +322,11 @@ function submitToChat(paneId: string, text: string): void {
   const key = keyOfPane.get(paneId);
   const chat = key ? chats.get(key) : undefined;
   if (!chat) return;
+  const selector = text.startsWith("/switch ") ? text.slice(8) : null;
+  if (agentOf(paneId) === "omp" && selector !== null && ompModels.some((model) => model.selector === selector)) {
+    chat.metadata = { ...chat.metadata, model: selector, reasoning_effort: chat.metadata?.reasoning_effort ?? null };
+    return;
+  }
   chat.turns.push({ role: "user", ts: now(), parts: [{ kind: "text", text }] });
   conversationChanged(paneId);
   const agent = agentOf(paneId);
@@ -480,6 +489,7 @@ async function route(url: URL, method: string, init: RequestInit | undefined, in
   if (path === "/api/machines") return json({ machines });
   if (path === "/api/session") return json({ snapshot: snapshot() });
   if (path === "/api/agents") return json(agentsFixture);
+  if (path === "/api/omp/models") return method === "GET" ? json({ models: ompModels }) : error("method_not_allowed", "use GET", 400);
   if (path === "/api/integrations") return json({ integrations: integrationsFixture } satisfies IntegrationsResponse);
   if (path === "/api/updates") return json({ managed: false, auto_update: false, phase: "idle", current_revision: null, latest_revision: null, current_version: __APP_VERSION__, latest_version: null, available: false, checked_at: null, blocked_reason: null, error: null }, 200, { "cache-control": "no-store" });
   if (path === "/api/updates/notes") return json({ revision: null, releases: [], omitted: 0 }, 200, { "cache-control": "no-store" });

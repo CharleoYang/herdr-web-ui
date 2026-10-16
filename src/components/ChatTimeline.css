@@ -10,6 +10,17 @@
   position: relative;
   flex: 1 1 auto;
   min-height: 0;
+  /* a column: the pinned todo panel (ChatView.tsx TodoPanel) may take a row above the transcript */
+  display: flex;
+  flex-direction: column;
+}
+
+/* the transcript region: the frame's whole height, less whatever the pinned todo panel took. The
+   minimap and the jump button are inside it, so both stay within the conversation's own box. */
+.chat-frame-scroll {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
 }
 
 .chat-view.chat-view-virtual {

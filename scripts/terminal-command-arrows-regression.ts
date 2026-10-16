@@ -3,8 +3,9 @@ import type { Browser } from "playwright-core";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { paneRead, paneSendKeys } from "../server/herdr/client.ts";
+import { paneRead, paneSendKeys, paneSendText } from "../server/herdr/client.ts";
 import { chromePath } from "./chrome-path.ts";
+import { terminalOracle } from "./terminal-input-oracle.ts";
 
 async function until(check: () => boolean | Promise<boolean>, label: string): Promise<void> {
   const deadline = Date.now() + 10_000;
@@ -16,38 +17,40 @@ async function until(check: () => boolean | Promise<boolean>, label: string): Pr
 
 /** Mac keyboard events, then real readline cursor positions in an owned test pane. */
 export async function checkCommandArrows(browser: Browser, origin: string, paneId: string): Promise<void> {
+  // Own one readline producer for every platform, before any browser attaches.
+  const fixture = mkdtempSync(join(tmpdir(), "herdr-command-arrows-"));
+  const result = join(fixture, "cursor.json");
+  const script = join(fixture, "readline.cjs");
+  writeFileSync(script, `const fs = require("node:fs");
+const readline = require("node:readline");
+const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+rl.on("SIGINT", () => process.exit(0));
+process.stdout.write("\\x1b[2J\\x1b[HOwned macOS Cmd+Left / Cmd+Right test\\r\\n");
+process.stdin.on("data", (data) => {
+  if (data.includes(7)) fs.writeFileSync(${JSON.stringify(result)}, JSON.stringify({ line: rl.line, cursor: rl.cursor }));
+});
+`);
+  try {
+    await paneSendKeys(paneId, ["ctrl+c"]);
+    await paneSendText(paneId, `node '${script.replaceAll("'", "'\\''")}'`);
+    await paneSendKeys(paneId, ["Enter"]);
+    await until(async () => (await paneRead({ paneId, source: "visible" })).text.includes("Owned macOS Cmd+Left"), "readline fixture must start");
   for (const platform of ["MacIntel", "Linux x86_64", "Win32"]) {
     const context = await browser.newContext({ viewport: { width: 1100, height: 650 } });
-    await context.addInitScript(({ platform, paneId }) => {
+    await context.addInitScript(({ platform, paneId, expectedOrigin }) => {
+      if (location.origin !== expectedOrigin) return;
       Object.defineProperty(navigator, "platform", { get: () => platform });
       localStorage.setItem("herdr-web-ui:settings", JSON.stringify({ language: "en" }));
       localStorage.setItem(`herdr-web-ui:view:${paneId}`, "terminal");
-    }, { platform, paneId });
+    }, { platform, paneId, expectedOrigin: new URL(origin).origin });
     try {
       const page = await context.newPage();
-      const inputs: Array<{ pane_id: string; text: string }> = [];
-      let ready = false;
-      page.on("websocket", (socket) => {
-        socket.on("framereceived", ({ payload }) => {
-          const message = JSON.parse(String(payload));
-          if (message.type === "input-ready" && message.pane_id === paneId) ready = message.ready !== false;
-        });
-        socket.on("framesent", ({ payload }) => {
-          const message = JSON.parse(String(payload));
-          if (message.type === "input") inputs.push({ pane_id: message.pane_id, text: message.text });
-        });
-      });
+      const oracle = terminalOracle(page, paneId);
       await page.goto(`${origin}/?pane=${encodeURIComponent(paneId)}`);
-      await until(() => ready, "owned terminal must accept input");
+      await oracle.ready();
       const input = page.locator(".xterm-helper-textarea");
-      // Let deferred IME sends run, then use a WS marker to bound both positive and negative assertions.
       const check = async (action: () => Promise<unknown>, expected: string[], label: string) => {
-        const before = inputs.length;
-        await action();
-        await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
-        await input.press("Control+g");
-        await until(() => inputs.slice(before).some(({ text }) => text === "\x07"), "input marker must arrive");
-        assert.deepEqual(inputs.slice(before), [...expected, "\x07"].map((text) => ({ pane_id: paneId, text })), label);
+        assert.deepEqual(await oracle.measure(action), expected.map((text) => ({ type: "input", pane_id: paneId, text })), label);
       };
       const mac = platform === "MacIntel";
       for (const [key, code, sequence] of [["ArrowLeft", 37, "\x01"], ["ArrowRight", 39, "\x05"]] as const) {
@@ -89,25 +92,8 @@ export async function checkCommandArrows(browser: Browser, origin: string, paneI
       }
       if (!mac) { console.log(`PASS ${platform} Meta/Ctrl+arrows stay native`); continue; }
 
-      const fixture = mkdtempSync(join(tmpdir(), "herdr-command-arrows-"));
-      const result = join(fixture, "cursor.json");
-      const script = join(fixture, "readline.cjs");
-      writeFileSync(script, `const fs = require("node:fs");
-const readline = require("node:readline");
-const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-rl.on("SIGINT", () => process.exit(0));
-process.stdout.write("\\x1b[2J\\x1b[HOwned macOS Cmd+Left / Cmd+Right test\\r\\n");
-process.stdin.on("data", (data) => {
-  if (data.includes(7)) fs.writeFileSync(${JSON.stringify(result)}, JSON.stringify({ line: rl.line, cursor: rl.cursor }));
-});
-`);
-      try {
-        // Keep cleanup and launch behind the earlier browser keystrokes on the same input stream.
-        await input.press("Control+c");
-        await input.pressSequentially(`node '${script.replaceAll("'", "'\\''")}'`);
-        await input.press("Enter");
-        await until(async () => (await paneRead({ paneId, source: "visible" })).text.includes("Owned macOS Cmd+Left"), "readline fixture must start");
         const probe = async (line: string, cursor: number) => {
+          rmSync(result, { force: true });
           await input.press("Control+g");
           await until(() => {
             if (!existsSync(result)) return false;
@@ -115,6 +101,8 @@ process.stdin.on("data", (data) => {
             catch { return false; }
           }, `readline must contain ${JSON.stringify(line)} with cursor ${cursor}`);
         };
+        await input.press("Control+u");
+        await probe("", 0);
         await input.pressSequentially("middle");
         await probe("middle", 6);
         await input.press("Meta+ArrowLeft");
@@ -141,13 +129,14 @@ process.stdin.on("data", (data) => {
         await input.press("Control+ArrowRight"); await probe("start middle end", 6);
         await input.press("Control+ArrowRight"); await probe("start middle end", 13);
         await input.press("Control+ArrowRight"); await probe("start middle end", 16);
-      } finally {
-        await paneSendKeys(paneId, ["ctrl+c"]);
-        rmSync(fixture, { recursive: true, force: true });
-      }
+        await input.press("Control+u");
       console.log("PASS macOS Cmd+Left/Right moves to readline boundaries; normal and word arrows still work");
       console.log("PASS Cmd+arrows preserve IME order and modifiers, suppress browser navigation and handle repeats; Ctrl+arrows reach the pane unchanged");
     } finally { await context.close(); }
+  }
+  } finally {
+    try { await paneSendKeys(paneId, ["ctrl+c"]); }
+    finally { rmSync(fixture, { recursive: true, force: true }); }
   }
 }
 
