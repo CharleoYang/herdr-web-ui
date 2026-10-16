@@ -59,6 +59,7 @@ import { formatTokens, sameMessage } from "../lib/compose.ts";
 import { formatElapsed, taskCallItems, taskResultMarkdown } from "../lib/omoTasks.ts";
 import { sendUserFileCall } from "../lib/sendUserFile.ts";
 import { shouldFoldUserMessage } from "../lib/userMessageFold.ts";
+import { teammateMessageParts, type TeammateMessage } from "../lib/teammateMessage.ts";
 
 /** The pane this chat shows, for what its rows fetch on request (a tool call's whole output). */
 const ChatPaneContext = createContext<string | null>(null);
@@ -689,6 +690,30 @@ function TaskResultRow({ task }: { task: OmoTaskResult }) {
   </ChatDetails>;
 }
 
+/** Claude teammates report availability, not a verified task verdict. */
+function TeammateMessageRow({ message, stateKey }: { message: TeammateMessage; stateKey: string }) {
+  const t = useT();
+  const [opened, setOpened] = useChatRowToggle(`teammate-loaded:${stateKey}`, false);
+  return <ChatDetails memoryKey={`teammate:${stateKey}`} className="chat-task-results chat-task-result chat-teammate-message" onToggle={(event) => { if (event.currentTarget.open) setOpened(true); }}>
+    <summary>
+      <Layers className="chat-task-result-icon" aria-hidden="true" />
+      <span className="chat-task-result-main">
+        <span className="chat-task-result-title">{message.name}</span>
+        {message.summary && <span className="chat-task-result-meta chat-teammate-preview">{message.summary}</span>}
+      </span>
+      <span className="chat-task-result-status">{message.status === "idle" ? t("Teammate idle") : t("Teammate message")}</span>
+      <ChevronDown className="chat-skill-caret" aria-hidden="true" />
+    </summary>
+    {opened && <div className="chat-task-result-body">
+      {message.text ? <Markdown>{message.text}</Markdown> : <p className="chat-task-result-note">{t("The teammate is available; no result was included")}</p>}
+      <ChatDetails memoryKey={`teammate-raw:${stateKey}`} className="chat-teammate-raw">
+        <summary>{t("Original delivery")}</summary>
+        <pre>{message.raw}</pre>
+      </ChatDetails>
+    </div>}
+  </ChatDetails>;
+}
+
 /** what a runtime notice was: a background result by name, anything else by its own first line */
 function noticeLabel(t: ReturnType<typeof useT>, notice: Extract<ConversationPart, { kind: "notice" }>): string {
   if (notice.source === undefined || notice.source === "async-result") return t("Background result delivered");
@@ -734,6 +759,16 @@ const Turn = memo(function Turn({ paneId, turn, live, waiting, showThinking, ski
   }
   if (turn.role === "user") {
     const text = turn.parts.filter((part): part is Extract<ConversationPart, { kind: "text" }> => part.kind === "text").map((part) => part.text).join("\n\n");
+    const teammateParts = teammateMessageParts(text);
+    if (teammateParts !== null) return <section className="chat-teammate-messages" aria-label={t("Claude teammate messages")}>
+      <UserImages paneId={paneId} parts={turn.parts} text={text} />
+      {teammateParts.map((part, index) => part.kind === "teammate"
+        ? <TeammateMessageRow key={index} message={part} stateKey={String(index)} />
+        : <UserMessage key={index} text={part.text} />)}
+      <div className="chat-turn-meta">{time}<CopyButton text={text} label={t("Copy message")} onResult={copied} /></div>
+      {copyError}
+      <SkillActivityList parts={turn.parts} />
+    </section>;
     return <article className="chat-turn chat-turn-user">
       <UserImages paneId={paneId} parts={turn.parts} text={text} />
       {/* one row: with a mouse the time and copy sit beside the bubble, on touch under it */}

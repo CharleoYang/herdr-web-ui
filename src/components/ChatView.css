@@ -1719,6 +1719,14 @@
 }
 .chat-task-result-note { margin: var(--space-2) 0 0; color: var(--text-dim); font-size: var(--fs-xs); }
 
+/* Teammate deliveries share task-card chrome, but idle is not a success verdict. */
+.chat-teammate-message { border: var(--hairline) solid var(--border); }
+.chat-teammate-preview { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chat-teammate-messages { min-width: 0; }
+.chat-teammate-raw { margin-top: var(--space-3); color: var(--text-dim); font-size: var(--fs-xs); }
+.chat-teammate-raw > summary { cursor: pointer; }
+.chat-teammate-raw > pre { white-space: pre-wrap; overflow-wrap: anywhere; }
+
 /* a task call's tasks: what each is for and the agent it runs as, the prompt under it */
 .chat-task-calls {
   display: flex;

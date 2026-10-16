@@ -22,6 +22,11 @@ between releases do not reach them. Remote-PC runtime bundles are versioned sepa
 - Capability-advertising bridges push conversation deltas and prompt changes over the existing
   WebSocket. Visible chats avoid the old two-second refresh delay and idle prompt polling;
   older bridges retain REST fallback, with REST reconciliation on reconnect and visibility restore.
+- Claude teammate deliveries render as collapsible agent cards rather than user-message XML/JSON.
+  Idle notifications show availability, not a success verdict; their result renders as Markdown.
+  The original delivery remains available, including runtime guidance, while ordinary user text,
+  unknown payloads and incomplete envelopes remain readable. This is display-only and does not
+  alter transcript records, permissions, task execution or agent state.
 
 - **Settings → Phone & devices → Portal** gives this PC a public HTTPS address through
   [Portal](https://github.com/gosuda/portal-tunnel), with no account and no domain of your own.
