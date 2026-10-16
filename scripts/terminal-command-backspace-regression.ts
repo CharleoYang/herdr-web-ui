@@ -1,105 +1,11 @@
 import assert from "node:assert/strict";
-import type { Browser, Page, WebSocket } from "playwright-core";
+import type { Browser } from "playwright-core";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { paneRead, paneSendKeys, paneSendText } from "../server/herdr/client.ts";
 
-/** Observe real transport/parser progress; never classify or discard terminal replies by value. */
-function terminalOracle(page: Page, paneId: string) {
-  const traffic: Array<{ socket: WebSocket; direction: string; message: Record<string, unknown> }> = [];
-  const inputs: Array<{ socket: WebSocket; generation: number; pane_id: string; text: string }> = [];
-  const listeners = new Set<() => void>();
-  let current: WebSocket | undefined;
-  let generation = 0;
-  let attached = false;
-  let ready = false;
-  let stream: string | undefined;
-  let outputSeen = false;
-  const pending = new Set<number>();
-  const reset = () => {
-    generation++; ready = false; stream = undefined; outputSeen = false; pending.clear();
-  };
-  const notify = () => { for (const listener of listeners) listener(); };
-  page.on("websocket", (socket) => {
-    socket.on("framesent", ({ payload }) => {
-      const message = JSON.parse(String(payload));
-      traffic.push({ socket, direction: "sent", message });
-      if (message.type === "input") inputs.push({ socket, generation, pane_id: message.pane_id, text: message.text });
-      if (message.pane_id === paneId) {
-        if (message.type === "attach") { current = socket; attached = true; reset(); }
-        if (socket === current && attached) {
-          if (message.type === "detach") { attached = false; reset(); }
-          if (message.type === "pty-ack" && message.stream_id === stream) pending.delete(message.offset);
-        }
-      }
-      notify();
-    });
-    socket.on("framereceived", ({ payload }) => {
-      const message = JSON.parse(String(payload));
-      traffic.push({ socket, direction: "received", message });
-      if (socket === current && attached && message.pane_id === paneId) {
-        if (message.type === "input-ready") {
-          if (message.ready === false) reset();
-          else ready = true;
-        }
-        if (message.type === "pty-exit" || (message.type === "error"
-          && ["attach_held", "input_not_ready"].includes(message.code))) { attached = false; reset(); }
-        if (message.type === "pty-data" && message.flow) {
-          if (stream !== message.flow.stream_id) {
-            generation++; stream = message.flow.stream_id; pending.clear(); outputSeen = false;
-          }
-          outputSeen = true;
-          pending.add(message.flow.offset);
-        }
-      }
-      notify();
-    });
-    socket.on("close", () => {
-      if (socket === current) { attached = false; current = undefined; reset(); }
-      notify();
-    });
-  });
-  const until = (condition: () => boolean, label: string) => new Promise<void>((resolve, reject) => {
-    const check = () => {
-      if (!condition()) return;
-      clearTimeout(timer); listeners.delete(check); resolve();
-    };
-    const timer = setTimeout(() => {
-      listeners.delete(check);
-      reject(new Error(`${label}; transport=${JSON.stringify(traffic.map(({ direction, message }) => ({ direction, message })))}`));
-    }, 5_000);
-    listeners.add(check); check();
-  });
-  const parsed = () => attached && ready && outputSeen && pending.size === 0;
-  return {
-    ready: () => until(parsed, "current terminal input and parsed bootstrap ACK required"),
-    async measure(action: () => Promise<unknown>) {
-      await until(parsed, "current terminal must be input-ready with all observed output parsed");
-      const owner = current;
-      const epoch = generation;
-      const before = inputs.length;
-      await action();
-      // Match the existing key helper: let deferred composition sends run, then an ordered real key marker.
-      await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
-      await page.locator(".xterm-helper-textarea").press("Control+g");
-      await until(() => generation !== epoch || current !== owner
-        || inputs.slice(before).some((frame) => frame.socket === owner && frame.generation === epoch
-          && frame.pane_id === paneId && frame.text === "\x07"), "same-connection input marker required");
-      assert.equal(current, owner, "key oracle must not cross a socket lifetime");
-      assert.equal(generation, epoch, "key oracle must not cross an attachment lifetime");
-      assert(attached && ready, "terminal must remain input-ready through the input marker");
-      const frames = inputs.slice(before);
-      for (const frame of frames) {
-        assert.equal(frame.socket, owner, "another socket cannot supply key success");
-        assert.equal(frame.generation, epoch, "an old attachment cannot supply key success");
-        assert.equal(frame.pane_id, paneId, "another pane cannot supply key success");
-      }
-      assert.equal(frames.at(-1)?.text, "\x07", "ordered marker must end the action");
-      return frames.slice(0, -1).map(({ text }) => text);
-    },
-  };
-}
+import { terminalOracle } from "./terminal-input-oracle.ts";
 
 /** Mac keyboard events in an isolated context, against a pane owned by the UI suite. */
 export async function checkCommandBackspace(browser: Browser, origin: string, paneId: string): Promise<void> {
@@ -149,7 +55,7 @@ process.stdin.on("data", (data) => {
       ["Meta+Control+Backspace", "\b"],
     ]) {
       assert.deepEqual(await oracle.measure(() => input.press(shortcut!)),
-        [expected], `${shortcut} must send its sequence exactly once`);
+        [{ type: "input", pane_id: paneId, text: expected }], `${shortcut} must send its sequence exactly once`);
     }
     // compositionend's timer is still pending when the deletion key arrives.
     const committed = await oracle.measure(() => input.evaluate(async (element) => {
@@ -166,14 +72,15 @@ process.stdin.on("data", (data) => {
       textarea.dispatchEvent(new KeyboardEvent("keyup", backspace));
     }));
     assert.deepEqual(committed,
-      ["한", "\x15"],
+      ["한", "\x15"].map((text) => ({ type: "input", pane_id: paneId, text })),
       "pending IME text must precede line deletion without duplicates");
     for (const composition of [{ isComposing: true, keyCode: 8 }, { isComposing: false, keyCode: 229 }]) {
       const composed = await oracle.measure(() => input.dispatchEvent("keydown", {
         key: "Backspace", code: "Backspace", metaKey: true, ...composition, bubbles: true, cancelable: true,
       }));
-      assert.equal(composed.includes("\x15"), false,
-        "an active composition must not receive a line-deletion sequence");
+      assert.equal(composed.some((frame) => frame.type === "input" ? frame.text.includes("\x15")
+        : frame.keys.some((key) => key.includes("\x15") || /^(?:ctrl|control)\+u$/i.test(key))), false,
+        `an active composition must not receive line deletion; native traffic=${JSON.stringify(composed)}`);
     }
     // Also verify the effect in the same real, owned readline process.
       const probe = async (expected: string): Promise<void> => {
@@ -209,7 +116,7 @@ process.stdin.on("data", (data) => {
     await page.goto(`${origin}/?pane=${encodeURIComponent(paneId)}`);
     await oracle.ready();
     assert.deepEqual(await oracle.measure(() => page.locator(".xterm-helper-textarea").press("Meta+Backspace")),
-      ["\x7f"], "non-macOS Meta+Backspace keeps its native sequence");
+      [{ type: "input", pane_id: paneId, text: "\x7f" }], "non-macOS Meta+Backspace keeps its native sequence");
     console.log("PASS non-macOS Meta+Backspace keeps native DEL");
   } finally {
     await nonMac.close();
