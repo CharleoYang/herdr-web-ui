@@ -92,6 +92,8 @@ between releases do not reach them. Remote-PC runtime bundles are versioned sepa
   ([#860](https://github.com/devswha/herdr-web-ui/pull/860))
 
 ### Fixed
+- The bottom-pinned Todo panel points its caret up when collapsed and down when expanded,
+  matching its upward expansion. Other disclosure carets keep their existing directions.
 - First-device pairing waits for the browser to return its device cookie before restricting
   access. A proxy that drops the cookie no longer locks out an otherwise open installation;
   Settings reports the failed pairing instead. Already restricted installations stay restricted.

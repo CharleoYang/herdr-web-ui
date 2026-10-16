@@ -1525,6 +1525,14 @@
   transform: rotate(180deg);
 }
 
+.chat-todo-pinned > summary > .chat-skill-caret {
+  transform: rotate(180deg);
+}
+
+.chat-todo-pinned[open] > summary > .chat-skill-caret {
+  transform: none;
+}
+
 .chat-todo-detail {
   padding: 0 var(--space-2) var(--space-2);
   overflow-wrap: anywhere;
