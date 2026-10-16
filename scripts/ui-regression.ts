@@ -167,7 +167,7 @@ try {
     return expected.test(text);
   };
   const expectInputs = async (mark: number, pane: string, socket: WebSocket,
-    expected: InputExpectation[], label: string, type?: "input" | "submit", delivery?: "immediate" | "queue", payload?: InputExpectation): Promise<InputObservation[]> => {
+    expected: InputExpectation[], label: string, type?: "input" | "submit", delivery?: "immediate" | "queue", payload?: InputExpectation, stripPasteWrappers = false): Promise<InputObservation[]> => {
     const matching = () => inputFramesSince(mark).filter(({ text }) => expected.some((item) => inputMatches(text, item)));
     await until(() => matching().length >= expected.length, label);
     await Bun.sleep(NO_SEND_WAIT_MS);
@@ -176,7 +176,7 @@ try {
     frames.forEach((frame, index) => {
       const item = expected[index]!;
       assert.equal(inputMatches(frame.text, item), true, `${label} payload order`);
-      if (typeof item === "string") assert.equal(frame.text.replace(/^\x1b\[200~/, "").replace(/\x1b\[201~$/, ""), item, `${label} payload`);
+      if (typeof item === "string") assert.equal(stripPasteWrappers ? frame.text.replace(/^\x1b\[200~/, "").replace(/\x1b\[201~$/, "") : frame.text, item, `${label} payload`);
       assert.equal(frame.pane_id, pane, `${label} pane`);
       assert.equal(frame.socket, socket, `${label} connection`);
       if (type !== undefined) assert.equal(frame.type, type, `${label} message type`);
@@ -716,7 +716,7 @@ try {
     await terminalInput.focus();
     const beforePaste = inputSequence;
     await page.keyboard.press(shortcut!);
-    await expectInputs(beforePaste, paneA, fileInputSocket, [text!.replace(/\n/g, "\r")], `terminal ${shortcut}`, "input");
+    await expectInputs(beforePaste, paneA, fileInputSocket, [text!.replace(/\n/g, "\r")], `terminal ${shortcut}`, "input", undefined, undefined, true);
     const beforeCancel = inputSequence;
     await page.keyboard.press("Control+c");
     await expectInputs(beforeCancel, paneA, fileInputSocket, ["\x03"], "terminal Ctrl+C", "input");

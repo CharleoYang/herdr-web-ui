@@ -4,3 +4,6 @@
   lifetime terminal traffic.
 - Ensure optional pending-smoke diagnostics cannot skip owned context, workspace or temporary-root
   cleanup; preserve the original scenario error and report secondary failures.
+- Correlate remaining browser input assertions with each action while preserving exact message types,
+  raw key and IME bytes, routing and delayed-duplicate checks; normalize wrappers only for clipboard
+  paste, not keyboard events or queued message text.
