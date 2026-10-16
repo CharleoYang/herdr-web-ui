@@ -812,6 +812,29 @@ describe("native conversation invalidation", () => {
     }
   }, 45_000);
 
+  it("publishes a pane's prompt again after a client reads it, so a view the push could not describe heals", async () => {
+    const socket = await connect();
+    attach(socket);
+    watch(socket);
+    await socket.waitFor((frame) => frame.type === "input-ready" && frame.pane_id === paneId && frame.ready !== false);
+    const menu: InteractivePrompt = { id: "heal-menu", agent: "codex", kind: "menu", title: "Trust", question: "Trust this directory?", body: null, options: [{ label: "1. Yes, continue", description: null }, { label: "2. No, quit", description: null }], multi_select: false, custom_option_index: null };
+    const read = spyOn(promptReader, "readPromptState").mockImplementation(async () => ({ prompt: menu, suggestion: null, restored: null }));
+    const pushes = () => socket.frames.filter(
+      (frame): frame is Extract<ServerMessage, { type: "prompt-push" }> => frame.type === "prompt-push" && frame.pane_id === paneId);
+    try {
+      await socket.waitFor((frame) => frame.type === "prompt-push" && frame.pane_id === paneId);
+      const first = pushes().length;
+      // the chat's own reconciliation read: it may have answered a menu the publisher never saw
+      // leave, so the unchanged body has to be said again instead of deduplicated away
+      const answer = await fetch(`http://127.0.0.1:${bridge.port}/api/pane/prompt?pane_id=${encodeURIComponent(paneId)}`);
+      expect(answer.status).toBe(200);
+      await until(() => pushes().length > first, "the unchanged body published again after a REST read");
+    } finally {
+      read.mockRestore();
+      socket.ws.close();
+    }
+  }, 30_000);
+
   it("releases native interest when the owned pane ends and refuses a stale enable", async () => {
     const socket = await connect();
     attach(socket);

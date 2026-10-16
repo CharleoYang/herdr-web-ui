@@ -2908,6 +2908,11 @@ export function createServer(
       if (pathname.startsWith("/api/pane/prompt")) {
         try {
           const response = await handlePromptRequest(request, url, { serialize, codexHome: options.codexHome, claudeTranscript: (paneId) => claudeAgents.sessionOf(paneId)?.path ?? null, readOnly });
+          // A client that just read the prompt may hold a view the last push did not describe (it
+          // answered a menu the publisher never saw leave). Forget the cached bodies, so the next
+          // read publishes the truth again instead of deduplicating against what we last sent.
+          const asked = url.searchParams.get("pane_id");
+          if (response && asked) for (const kind of ["f", "w"]) promptBodies.delete(`${kind}:${asked}`);
           if (response) return response;
         } catch (error) {
           return errorResponse(error);
