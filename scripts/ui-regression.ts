@@ -5,7 +5,7 @@ import { existsSync, mkdtempSync, mkdirSync, readFileSync, realpathSync, rmdirSy
 import { homedir, tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { chromium } from "playwright-core";
-import type { BrowserContext, Page } from "playwright-core";
+import type { BrowserContext, Page, WebSocket } from "playwright-core";
 import { createServer } from "../server/index.ts";
 import { herdrRpc, sessionSnapshot, workspaceCreate, workspaceClose } from "../server/herdr/client.ts";
 import type { SessionSnapshot, WorkspaceCreated, WorktreeOpened } from "../shared/protocol.ts";
@@ -151,10 +151,47 @@ try {
   page.setDefaultTimeout(10_000);
   page.on("pageerror", (error) => errors.push(error.message));
   const painted = new Set<string>();
-  const sockets: import("playwright-core").WebSocket[] = [];
-  const inputs: Array<{ type: "input" | "submit"; pane_id: string; text: string; delivery?: "immediate" | "queue"; stop?: true }> = [];
+  const sockets: WebSocket[] = [];
+  type InputExpectation = string | RegExp;
+  type InputObservation = { type: "input" | "submit"; pane_id: string; text: string; payload?: string; delivery?: "immediate" | "queue" | "hold"; stop?: true;
+    socket: WebSocket; sequence: number };
+  let inputSequence = 0;
+  const inputs: InputObservation[] = [];
+  const inputFramesSince = (mark: number): InputObservation[] => inputs.filter(({ sequence }) => sequence > mark);
+  const inputMatches = (text: string, expected: InputExpectation): boolean => {
+    if (typeof expected === "string") {
+      const payload = text.replace(/^\x1b\[200~/, "").replace(/\x1b\[201~$/, "");
+      return payload === expected || payload === `${expected}\r`;
+    }
+    expected.lastIndex = 0;
+    return expected.test(text);
+  };
+  const expectInputs = async (mark: number, pane: string, socket: WebSocket,
+    expected: InputExpectation[], label: string, type?: "input" | "submit", delivery?: "immediate" | "queue", payload?: InputExpectation): Promise<InputObservation[]> => {
+    const matching = () => inputFramesSince(mark).filter(({ text }) => expected.some((item) => inputMatches(text, item)));
+    await until(() => matching().length >= expected.length, label);
+    const frames = matching();
+    assert.equal(frames.length, expected.length, `${label} must send exactly once per expected payload`);
+    frames.forEach((frame, index) => {
+      const item = expected[index]!;
+      assert.equal(inputMatches(frame.text, item), true, `${label} payload order`);
+      if (typeof item === "string") assert.equal(frame.text, item, `${label} payload`);
+      assert.equal(frame.pane_id, pane, `${label} pane`);
+      assert.equal(frame.socket, socket, `${label} connection`);
+      if (payload !== undefined) {
+        if (typeof payload === "string") assert.equal(frame.payload, payload, `${label} wire payload`);
+        else { payload.lastIndex = 0; assert.equal(payload.test(frame.payload ?? ""), true, `${label} wire payload`); }
+      }
+      if (delivery !== undefined) assert.equal(frame.delivery, delivery, `${label} delivery`);
+    });
+    return frames;
+  };
+  const assertNoInputs = (mark: number, expected: InputExpectation[], label: string): void => {
+    const frames = inputFramesSince(mark).filter(({ text }) => expected.some((item) => inputMatches(text, item)));
+    assert.equal(frames.length, 0, `${label} must not emit user payloads`);
+  };
   // keyed by pane, with the connection that said so: an earlier connection's input-ready says nothing about the current one
-  const inputStates = new Map<string, { ready: boolean; at: number; socket: import("playwright-core").WebSocket }>();
+  const inputStates = new Map<string, { ready: boolean; at: number; socket: WebSocket }>();
   const pendingReady = (pane: string) => until(() => {
     const state = inputStates.get(pane);
     return state?.ready === true && state.socket === sockets.at(-1) && !state.socket.isClosed() && Date.now() - state.at >= 500;
@@ -168,8 +205,8 @@ try {
     });
     socket.on("framesent", ({ payload }) => {
       const message = JSON.parse(String(payload));
-      // composer messages go out as "submit" on servers that list it (#15), keystrokes as "input"
-      if (message.type === "input" || message.type === "submit") inputs.push(message);
+      // composer messages go out as "submit" on servers that list it (#15), keystrokes as "input"; retain every frame for attribution.
+      if (message.type === "input" || message.type === "submit") inputs.push({ ...message, socket, sequence: ++inputSequence });
       if (message.type === "attach" || message.type === "detach") inputStates.set(message.pane_id, { ready: false, at: Date.now(), socket });
     });
   });
@@ -660,14 +697,13 @@ try {
   assert.ok(fileInputSocket, "the current pane has an input-ready attachment");
   await checkTerminalFileInput(page, fileInputSocket);
   const terminalInput = page.locator(".pane-frame.is-current .xterm-helper-textarea");
-  // Chrome on macOS pastes with ⌘V alone: its Ctrl+V pastes nothing, and must send nothing either
   const mac = process.platform === "darwin";
   if (mac) {
     await terminalInput.focus();
-    const beforeCtrlV = inputs.length;
+    const beforeCtrlV = inputSequence;
     await page.keyboard.press("Control+v");
     await page.waitForTimeout(NO_SEND_WAIT_MS);
-    assert.deepEqual(inputs.slice(beforeCtrlV), [], "Ctrl+V must never send the image-paste control key");
+    assertNoInputs(beforeCtrlV, ["\x16"], "Ctrl+V");
   }
   for (const [shortcut, text] of [
     [mac ? "Meta+v" : "Control+v", "# terminal paste 한글"],
@@ -676,21 +712,12 @@ try {
   ]) {
     await page.evaluate((value) => navigator.clipboard.writeText(value), text!);
     await terminalInput.focus();
-    const beforePaste = inputs.length;
+    const beforePaste = inputSequence;
     await page.keyboard.press(shortcut!);
-    await until(() => inputs.length > beforePaste, `terminal ${shortcut}`);
-    const pasted = inputs.slice(beforePaste);
-    assert.equal(pasted.length, 1, "paste must send the text exactly once");
-    assert.equal(pasted[0]!.pane_id, paneA);
-    assert.equal(
-      pasted[0]!.text.replace(/^\x1b\[200~/, "").replace(/\x1b\[201~$/, ""),
-      text!.replace(/\n/g, "\r"),
-      "paste must send clipboard text, never the image-paste control key",
-    );
-    const beforeCancel = inputs.length;
+    await expectInputs(beforePaste, paneA, fileInputSocket, [text!.replace(/\n/g, "\r")], `terminal ${shortcut}`, "input");
+    const beforeCancel = inputSequence;
     await page.keyboard.press("Control+c");
-    await until(() => inputs.length > beforeCancel, "terminal Ctrl+C");
-    assert.equal(inputs.at(-1)?.text, "\x03", "other terminal control keys must still work");
+    await expectInputs(beforeCancel, paneA, fileInputSocket, ["\x03"], "terminal Ctrl+C", "input");
   }
   // xterm collapses Shift+Enter into CR unless the terminal supplies a newline chord.
   // Check actual browser key events and the frames sent to an owned pane, including keyup.
@@ -700,27 +727,24 @@ try {
     ["Alt+Enter", "\x1b\r"],
   ]) {
     await terminalInput.focus();
-    const beforeEnter = inputs.length;
+    const beforeEnter = inputSequence;
     await page.keyboard.press(shortcut!);
-    await until(() => inputs.length > beforeEnter, `terminal ${shortcut}`);
+    await expectInputs(beforeEnter, paneA, fileInputSocket, [expected!], `terminal ${shortcut}`, "input");
     await page.waitForTimeout(NO_SEND_WAIT_MS);
-    assert.deepEqual(inputs.slice(beforeEnter).map(({ pane_id, text }) => ({ pane_id, text })),
-      [{ pane_id: paneA, text: expected }], `${shortcut} must send its sequence exactly once`);
   }
   // A composition commit belongs to xterm/IME; the custom binding must not replace it.
   for (const composition of [{ isComposing: true, keyCode: 13 }, { isComposing: false, keyCode: 229 }]) {
-    const beforeIme = inputs.length;
+    const beforeIme = inputSequence;
     await terminalInput.dispatchEvent("keydown", {
       key: "Enter", code: "Enter", shiftKey: true, ...composition, bubbles: true, cancelable: true,
     });
     await page.waitForTimeout(NO_SEND_WAIT_MS);
-    assert.equal(inputs.slice(beforeIme).some(({ text }) => text === "\x1b\r"), false,
-      "IME commits must not receive the custom Shift+Enter sequence");
+    assertNoInputs(beforeIme, ["\x1b\r"], "terminal IME Shift+Enter");
   }
   // compositionend queues its send for the next timer. A following non-composing
   // Shift+Enter must let xterm flush that commit before sending the newline.
   await terminalInput.focus();
-  const beforeCommittedIme = inputs.length;
+  const beforeCommittedIme = inputSequence;
   await terminalInput.evaluate(async (element) => {
     const textarea = element as HTMLTextAreaElement;
     textarea.value = "";
@@ -735,11 +759,9 @@ try {
     textarea.dispatchEvent(new KeyboardEvent("keydown", enter));
     textarea.dispatchEvent(new KeyboardEvent("keyup", enter));
   });
-  await until(() => inputs.length >= beforeCommittedIme + 2, "IME commit followed by Shift+Enter");
+  await expectInputs(beforeCommittedIme, paneA, fileInputSocket, ["한", "\x1b\r"],
+    "IME commit followed by Shift+Enter", "input");
   await page.waitForTimeout(NO_SEND_WAIT_MS);
-  assert.deepEqual(inputs.slice(beforeCommittedIme).map(({ pane_id, text }) => ({ pane_id, text })),
-    [{ pane_id: paneA, text: "한" }, { pane_id: paneA, text: "\x1b\r" }],
-    "a pending IME commit must precede Shift+Enter without a delayed duplicate");
   console.log("PASS terminal Shift+Enter sends a newline chord once and preserves Enter, Alt+Enter and IME");
   console.log("PASS pending IME commit precedes Shift+Enter without duplicate text");
   await checkCommandBackspace(browser, origin, paneA);
@@ -1014,18 +1036,23 @@ try {
   await page.locator(`.pane-select[title^="${paneA} —"]`).click();
   await until(async () => await page.locator(".composer-queue-text").count() === 3, "owner queue restored");
   await page.getByRole("button", { name: "Discard", exact: true }).nth(2).click();
-  const inputCount = inputs.length;
+  const queueInputSocket = inputStates.get(paneA)?.socket;
+  assert.ok(queueInputSocket, "the queued owner has an input-ready attachment");
+  const queueMark = inputSequence;
+  const heldTexts = ["printf 'browser-queue-ok\\n'", "# edited second message"];
   await report("blocked");
   await page.locator('.composer-status[data-status="blocked"]').waitFor();
   await Bun.sleep(300);
-  assert.equal(inputs.length, inputCount, "approval state must hold the queue");
+  assertNoInputs(queueMark, heldTexts, "approval state");
+  assert.equal(inputFramesSince(queueMark).some(({ type }) => type === "submit"), false, "approval state must hold every queued submit");
   assert.equal(await page.locator(".composer-queue-text").count(), 2);
   await report("idle");
   await Bun.sleep(300);
-  assert.equal(inputs.length, inputCount, "a status change must not dispatch held input");
+  assertNoInputs(queueMark, heldTexts, "status change");
+  assert.equal(inputFramesSince(queueMark).some(({ type }) => type === "submit"), false, "status change must not dispatch any queued submit");
   await page.getByRole("button", { name: "Send now", exact: true }).first().click();
-  await until(() => inputs.length > inputCount, "explicit queue send");
-  assert.equal(inputs.at(-1)?.pane_id, paneA);
+  await expectInputs(queueMark, paneA, queueInputSocket, [heldTexts[0]!], "explicit queue send", "submit", "queue",
+    `\x1b[200~${heldTexts[0]!}\x1b[201~`);
   await until(async () => await page.locator(".composer-queue-text").count() === 1, "only sent item removed");
   assert.equal(await page.locator(".composer-queue-text").inputValue(), "# edited second message");
   await page.getByRole("button", { name: "Discard", exact: true }).click();
@@ -1058,11 +1085,11 @@ try {
   assert.equal(Math.round(quickBox.width), Math.round(surfaceBox.width));
   await chatWidth("Default");
   await composer.fill("draft stays");
-  const quickCount = inputs.length;
+  const quickInputSocket = inputStates.get(paneA)?.socket;
+  assert.ok(quickInputSocket, "the quick-reply owner has an input-ready attachment");
+  const quickMark = inputSequence;
   await page.getByRole("group", { name: "Quick replies", exact: true }).getByRole("button", { name: "continue", exact: true }).click();
-  await until(() => inputs.length > quickCount, "quick reply send");
-  assert.equal(inputs.at(-1)?.pane_id, paneA);
-  assert.match(inputs.at(-1)!.text, /^continue/);
+  await expectInputs(quickMark, paneA, quickInputSocket, [/^continue/], "quick reply send", "submit");
   assert.equal(await composer.inputValue(), "draft stays");
   // Mid-turn it uses the same real server-owned pending path as Send, and still leaves the draft.
   await page.locator(`.pane-select[title^="${pendingPane} —"]`).click();
@@ -1091,10 +1118,11 @@ try {
   // the Enter that commits an IME candidate is not a send: WebKit can deliver it after
   // compositionend, with isComposing false and key code 229
   await composer.fill("한글 조합");
-  const imeInputs = inputs.length;
+  const imeMark = inputSequence;
   await composer.dispatchEvent("keydown", IME_ENTER);
   await page.waitForTimeout(NO_SEND_WAIT_MS);
-  assert.equal(inputs.length, imeInputs);
+  assertNoInputs(imeMark, ["한글 조합", "\r"], "composer IME");
+  assert.equal(inputFramesSince(imeMark).some(({ type }) => type === "submit"), false, "composer IME must not submit");
   assert.equal(await composer.inputValue(), "한글 조합");
   await composer.fill("");
   console.log("PASS the composer keeps an IME's committing Enter");
