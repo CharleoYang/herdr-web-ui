@@ -267,61 +267,130 @@ try {
   // Short desktop and phone lists both overflow. Wrapping up from the first result and down
   // from the last keeps the active option visible while typing focus stays in search.
   const paletteViewport = page.viewportSize()!;
-  for (const viewport of [{ width: 1280, height: 400 }, { width: 390, height: 600 }]) {
-    await page.setViewportSize(viewport);
-    await openPalette();
-    await page.mouse.move(0, 0);
-    assert.equal(await palette.locator(".palette-results").evaluate((list) => list.scrollHeight > list.clientHeight), true,
-      "the short palette has a scrollable list");
-    const optionCount = await palette.getByRole("option").count();
-    const visibleActiveOption = () => palette.locator(".palette-results").evaluate((list) => {
-      const option = list.querySelector<HTMLElement>('[aria-selected="true"]');
-      if (!option) return false;
-      const row = option.getBoundingClientRect();
-      const bounds = list.getBoundingClientRect();
-      return row.top >= bounds.top - 1 && row.bottom <= bounds.bottom + 1;
+  // The plugin catalogue can change between Playwright awaits. Capture the actual row
+  // elements on the physical key's capture phase, not an earlier accessible count or ID.
+  const armPaletteWrap = (key: "ArrowUp" | "ArrowDown") => paletteSearch.evaluateHandle((input, key) => {
+    const list = input.closest(".command-palette")!.querySelector<HTMLElement>(".palette-results")!;
+    const state = { captured: false, expected: null as HTMLElement | null, first: null as HTMLElement | null,
+      hovered: null as HTMLElement | null, pointerExpected: null as HTMLElement | null,
+      moved: null as HTMLElement | null, error: null as string | null };
+    input.addEventListener("keydown", (event) => {
+      state.captured = true;
+      const options = [...list.querySelectorAll<HTMLElement>('[role="option"]')];
+      state.first = options[0] ?? null;
+      const last = options.at(-1) ?? null;
+      const active = document.getElementById(input.getAttribute("aria-activedescendant") ?? "");
+      state.expected = key === "ArrowUp" ? last : state.first;
+      if (event.key !== key || !state.expected || active !== (key === "ArrowUp" ? state.first : last)) {
+        state.error = `${key} wrap precondition: active=${active?.id}, first=${state.first?.id}, last=${last?.id}, key=${event.key}`;
+      }
+    }, { capture: true, once: true });
+    list.addEventListener("mouseover", (event) => {
+      if (!state.captured) return;
+      const row = (event.target as Element).closest<HTMLElement>('[role="option"]');
+      if (row && row !== state.first && row !== state.expected) state.hovered = row;
     });
-    await paletteSearch.press("ArrowUp");
-    await until(async () => await paletteSearch.getAttribute("aria-activedescendant") === `palette-item-${optionCount - 1}` && await visibleActiveOption(),
-      "ArrowUp wraps to the last visible palette option");
-    if (process.env.UI_EVIDENCE_DIR) {
-      mkdirSync(process.env.UI_EVIDENCE_DIR, { recursive: true });
-      await page.screenshot({ path: join(process.env.UI_EVIDENCE_DIR, `palette-arrow-${viewport.width <= 640 ? "mobile" : "desktop"}.png`) });
+    const selected = (row: HTMLElement | null): boolean => {
+      if (state.error) throw new Error(state.error);
+      if (!state.captured) throw new Error(`${key} was not captured`);
+      if (!state.expected?.isConnected || !list.contains(state.expected)) throw new Error(`${key} keyboard option was removed: ${state.expected?.id}`);
+      if (!row?.isConnected || !list.contains(row)) throw new Error(`${key} captured option was removed: ${row?.id}`);
+      return document.getElementById(input.getAttribute("aria-activedescendant") ?? "") === row
+        && row.getAttribute("aria-selected") === "true"
+        && list.querySelectorAll('[aria-selected="true"]').length === 1
+        && document.activeElement === input;
+    };
+    return {
+      state,
+      selected: () => selected(state.expected),
+      visible: () => {
+        if (!selected(state.expected)) return false;
+        const row = state.expected!.getBoundingClientRect();
+        const bounds = list.getBoundingClientRect();
+        return row.top >= bounds.top - 1 && row.bottom <= bounds.bottom + 1
+          && row.left >= bounds.left - 1 && row.right <= bounds.right + 1;
+      },
+      pointerTarget: () => {
+        const row = state.hovered;
+        if (!row?.isConnected || !list.contains(row)) throw new Error("the scroll-hovered option was removed");
+        const box = row.getBoundingClientRect();
+        const bounds = list.getBoundingClientRect();
+        const x = (Math.max(box.left, bounds.left) + Math.min(box.right, bounds.right)) / 2 + 4;
+        const y = (Math.max(box.top, bounds.top) + Math.min(box.bottom, bounds.bottom)) / 2;
+        if (document.elementFromPoint(x, y)?.closest('[role="option"]') !== row) throw new Error("pointer target no longer hits the captured hovered option");
+        state.pointerExpected = row;
+        list.addEventListener("mousemove", (event) => {
+          state.moved = (event.target as Element).closest<HTMLElement>('[role="option"]');
+        }, { capture: true, once: true });
+        return { x, y };
+      },
+      pointerSelected: () => state.moved !== null && state.moved === state.pointerExpected
+        && state.moved !== state.expected && selected(state.pointerExpected),
+    };
+  }, key);
+  // The prior palette is closed: its layout cleanup invalidates old response ownership
+  // and clears plugins. Fence every new opening's real catalogue through all gestures.
+  let releasePaletteCatalog!: () => void;
+  const heldPaletteCatalog = new Promise<void>((resolve) => { releasePaletteCatalog = resolve; });
+  releases.push(releasePaletteCatalog);
+  const unroutePaletteCatalog = await routeDrained(page, "**/api/plugins/actions", async (route) => {
+    const response = await route.fetch();
+    await heldPaletteCatalog;
+    await route.fulfill({ response });
+  });
+  try {
+    for (const viewport of [{ width: 1280, height: 400 }, { width: 390, height: 600 }]) {
+      await page.setViewportSize(viewport);
+      await openPalette();
+      await page.mouse.move(0, 0);
+      assert.equal(await palette.locator(".palette-results").evaluate((list) => list.scrollHeight > list.clientHeight), true,
+        "the short palette has a scrollable list");
+      const up = await armPaletteWrap("ArrowUp");
+      await paletteSearch.press("ArrowUp");
+      await until(async () => await up.evaluate((pick) => pick.visible()),
+        "ArrowUp wraps to its event-time last palette option and keeps search focus");
+      if (process.env.UI_EVIDENCE_DIR) {
+        mkdirSync(process.env.UI_EVIDENCE_DIR, { recursive: true });
+        await page.screenshot({ path: join(process.env.UI_EVIDENCE_DIR, `palette-arrow-${viewport.width <= 640 ? "mobile" : "desktop"}.png`) });
+      }
+      const down = await armPaletteWrap("ArrowDown");
+      await paletteSearch.press("ArrowDown");
+      await until(async () => await down.evaluate((pick) => pick.visible()),
+        "ArrowDown wraps to its event-time first palette option and keeps search focus");
+      await up.dispose();
+      await down.dispose();
+      await paletteSearch.press("Escape");
+      await palette.waitFor({ state: "hidden" });
     }
-    await paletteSearch.press("ArrowDown");
-    await until(async () => await paletteSearch.getAttribute("aria-activedescendant") === "palette-item-0" && await visibleActiveOption(),
-      "ArrowDown wraps back to the first visible palette option");
-    assert.equal(await paletteSearch.evaluate((input) => document.activeElement === input), true, "arrow navigation keeps typing focus in search");
+    // A pointer resting over the list keeps still while the arrow scrolls rows under it: the
+    // browser's hover update after the scroll must not take the keyboard selection, and a real
+    // pointer move still does.
+    await page.setViewportSize({ width: 1280, height: 400 });
+    await openPalette();
+    const firstOption = (await palette.locator("#palette-item-0").boundingBox())!;
+    await page.mouse.move(firstOption.x + firstOption.width / 2, firstOption.y + firstOption.height / 2);
+    await until(async () => await paletteSearch.getAttribute("aria-activedescendant") === "palette-item-0", "the resting pointer is over the first option");
+    const restingPick = await armPaletteWrap("ArrowUp");
+    await paletteSearch.press("ArrowUp");
+    await until(async () => await restingPick.evaluate((pick) => pick.state.hovered !== null),
+      "the scroll moves a different actual option under the resting pointer");
+    assert.equal(await restingPick.evaluate((pick) => pick.visible()), true,
+      "a scroll under a resting pointer preserves the event-time keyboard option, its visibility and search focus");
+    const pointerTarget = await restingPick.evaluate((pick) => pick.pointerTarget());
+    await page.mouse.move(pointerTarget.x, pointerTarget.y);
+    await until(async () => await restingPick.evaluate((pick) => pick.pointerSelected()),
+      "a genuine pointer move selects the different actual scroll-hovered element");
+    await restingPick.dispose();
     await paletteSearch.press("Escape");
     await palette.waitFor({ state: "hidden" });
+    await page.mouse.move(0, 0);
+    await page.setViewportSize(paletteViewport);
+  } finally {
+    // No AbortSignal is used by fetchPluginActions: close invalidates ownership, not HTTP.
+    // Release and drain before the browser can close, including an assertion failure.
+    releasePaletteCatalog();
+    await unroutePaletteCatalog();
   }
-  // A pointer resting over the list keeps still while the arrow scrolls rows under it: the
-  // browser's hover update after the scroll must not take the keyboard selection, and a real
-  // pointer move still does.
-  await page.setViewportSize({ width: 1280, height: 400 });
-  await openPalette();
-  const restingOptionCount = await palette.getByRole("option").count();
-  const firstOption = (await palette.locator("#palette-item-0").boundingBox())!;
-  await page.mouse.move(firstOption.x + firstOption.width / 2, firstOption.y + firstOption.height / 2);
-  await until(async () => await paletteSearch.getAttribute("aria-activedescendant") === "palette-item-0", "the resting pointer is over the first option");
-  await palette.locator(".palette-results").evaluate((list) => {
-    const hovered: string[] = [];
-    (window as unknown as { paletteHovered: string[] }).paletteHovered = hovered;
-    list.addEventListener("mouseover", (event) => hovered.push((event.target as HTMLElement).closest("[role=option]")?.id ?? ""));
-  });
-  await paletteSearch.press("ArrowUp");
-  await until(async () => await page.evaluate(() => (window as unknown as { paletteHovered: string[] }).paletteHovered.some((id) => id !== "" && id !== "palette-item-0")),
-    "the scroll moves another option under the resting pointer");
-  assert.equal(await paletteSearch.getAttribute("aria-activedescendant"), `palette-item-${restingOptionCount - 1}`,
-    "a scroll under a resting pointer leaves the arrow's selection alone");
-  const hoveredId = await page.evaluate(() => (window as unknown as { paletteHovered: string[] }).paletteHovered.findLast((id) => id !== "")!);
-  const hoveredBox = (await palette.locator(`#${hoveredId}`).boundingBox())!;
-  await page.mouse.move(hoveredBox.x + hoveredBox.width / 2 + 4, hoveredBox.y + hoveredBox.height / 2);
-  await until(async () => await paletteSearch.getAttribute("aria-activedescendant") === hoveredId, "a real pointer move selects the option under it");
-  await paletteSearch.press("Escape");
-  await palette.waitFor({ state: "hidden" });
-  await page.mouse.move(0, 0);
-  await page.setViewportSize(paletteViewport);
   console.log("PASS palette buttons keep native Enter, IME keeps its keys, and arrow selection stays visible on short desktop and phone lists");
   await checkPaletteKeys(page, { workspaceId: workspaces[1]! });
 
