@@ -3128,7 +3128,10 @@ export function createServer(
                   send(client, { type: "error", code: "not_attached", message: "conversation interest requires an attached pane", pane_id: message.pane_id });
                   break;
                 }
-                if (!client.data.conversationInterests.has(message.pane_id)) client.data.conversationInterests.set(message.pane_id, { signature: null });
+                // A client that watches again wants the prompt as if it were new: its own view may
+                // have moved on (it answered a menu) while no observation ever saw the bridge's
+                // view change, so the interest's sent baseline must not outlive that client's move.
+                client.data.conversationInterests.set(message.pane_id, { signature: null });
                 conversations.watch(message.pane_id);
                 reconcilePrompts(message.pane_id);
               } else {

@@ -752,6 +752,52 @@ describe("native conversation invalidation", () => {
     }
   }, 30_000);
 
+  it("states the prompt again to a client that watches again, unchanged or not", async () => {
+    const reader = await connect();
+    let screen = "No menu on this valid idle screen.";
+    let observations = 0;
+    const actualRead = herdrClient.paneRead;
+    const screens = spyOn(herdrClient, "paneRead").mockImplementation(async (...args) => {
+      const result = await actualRead(...args);
+      if (args[0].paneId !== paneId || args[0].source !== "detection") return result;
+      observations++;
+      return { ...result, text: screen };
+    });
+    const menu = `
+╭─ Ask ───────────────────╮
+│ Which target?            │
+├─────────────────────────┤
+│❯ ○ Jetson Orin          │
+│  ○ RK3588               │
+│  ○ Other (type your own) │
+├─────────────────────────┤
+│ Enter select · n note · ↑/↓ move · Esc cancel
+╰─────────────────────────╯`;
+    const promptFrames = () => reader.frames.filter((frame) => frame.type === "prompt-push");
+    try {
+      attach(reader); watch(reader);
+      await reader.waitFor((frame) => frame.type === "prompt-push" && frame.prompt === null);
+      let after = reader.frames.length;
+      screen = menu;
+      const appeared = await reader.waitFor((frame) => frame.type === "prompt-push" && frame.prompt !== null, after) as PromptPush;
+      const settled = promptFrames().length;
+      const seen = observations;
+      // the bridge keeps observing the same menu and stays quiet about it
+      await until(() => observations >= seen + 2, "the same menu observed twice");
+      expect(promptFrames().length).toBe(settled);
+      // a client whose own view moved on (it answered this menu) watches again: it must be told
+      // what the bridge sees now, even though that is exactly what it was told before
+      after = reader.frames.length;
+      watch(reader);
+      const again = await reader.waitFor((frame) => frame.type === "prompt-push", after) as PromptPush;
+      expect(again).toEqual(appeared);
+    } finally {
+      watch(reader, false); await barrier(reader);
+      reader.ws.close();
+      screens.mockRestore();
+    }
+  }, 30_000);
+
   it("matches local and real machine-relay REST plan policy without treating observe as a watch credential", async () => {
     const state = join(root, "plan-policy");
     const deviceStore = new DeviceStore(state);

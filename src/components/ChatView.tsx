@@ -1630,6 +1630,8 @@ export const ChatView = memo(function ChatView({ paneId, active = true, visible:
       // the card reports only while it is the one shown; still, only its own prompt is cleared
       onPromptAnswered?.(toMessageBox);
       setPrompt((current) => current === prompt ? null : current);
+      // the client's own view moved on: ask the bridge to state the prompt again, unchanged or not
+      onConversationWatch?.(paneId, true);
       // a form of several questions goes on to its next one: read it now, not at the next poll
       if (prompt.steps) setPromptPollKey((key) => key + 1);
       onPendingAnswerDone?.(paneId, prompt.id);
