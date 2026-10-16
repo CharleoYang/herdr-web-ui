@@ -876,6 +876,32 @@
   overflow-wrap: anywhere;
 }
 
+/* Historical questions grow with the transcript, not a nested tool-JSON scroller. */
+.chat-ask-questions {
+  margin: 0;
+  padding-left: var(--space-5);
+  color: var(--text);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.chat-ask-question + .chat-ask-question { margin-top: var(--space-4); }
+.chat-ask-question p { margin: 0; }
+.chat-ask-header, .chat-ask-meta { color: var(--text-dim); font-size: var(--fs-xs); }
+.chat-ask-text, .chat-ask-label { font-weight: var(--fw-semibold); }
+.chat-ask-options { margin: var(--space-2) 0 0; padding-left: var(--space-5); }
+.chat-ask-options > li + li { margin-top: var(--space-2); }
+.chat-ask-preview {
+  margin: var(--space-1) 0 0;
+  padding: var(--space-2);
+  border: var(--hairline) solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-panel);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 .chat-tool-io pre,
 .chat-tool-io p { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
 /* blocks stacked in a call's detail; a file link inside an output's text is not one */
@@ -1523,6 +1549,14 @@
 
 .chat-todo[open] .chat-skill-caret {
   transform: rotate(180deg);
+}
+
+.chat-todo-pinned > summary > .chat-skill-caret {
+  transform: rotate(180deg);
+}
+
+.chat-todo-pinned[open] > summary > .chat-skill-caret {
+  transform: none;
 }
 
 .chat-todo-detail {

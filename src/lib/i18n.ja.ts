@@ -616,6 +616,7 @@ export const JA: Record<string, string> = {
   "Choose one of the options above: type {range}.": "上の選択肢から 1 つ選んでください: {range} を入力。",
 
   // ---- chat view ----
+  "Multiple selections": "複数選択",
   "Copied": "コピーしました",
   "Couldn't copy. Select the text and copy it manually.": "コピーできませんでした。テキストを選択して手動でコピーしてください。",
   "Output": "出力",
