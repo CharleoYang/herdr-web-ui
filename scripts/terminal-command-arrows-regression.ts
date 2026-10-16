@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { paneRead, paneSendKeys } from "../server/herdr/client.ts";
 import { chromePath } from "./chrome-path.ts";
+import { terminalOracle } from "./terminal-input-oracle.ts";
 
 async function until(check: () => boolean | Promise<boolean>, label: string): Promise<void> {
   const deadline = Date.now() + 10_000;
@@ -18,36 +19,20 @@ async function until(check: () => boolean | Promise<boolean>, label: string): Pr
 export async function checkCommandArrows(browser: Browser, origin: string, paneId: string): Promise<void> {
   for (const platform of ["MacIntel", "Linux x86_64", "Win32"]) {
     const context = await browser.newContext({ viewport: { width: 1100, height: 650 } });
-    await context.addInitScript(({ platform, paneId }) => {
+    await context.addInitScript(({ platform, paneId, expectedOrigin }) => {
+      if (location.origin !== expectedOrigin) return;
       Object.defineProperty(navigator, "platform", { get: () => platform });
       localStorage.setItem("herdr-web-ui:settings", JSON.stringify({ language: "en" }));
       localStorage.setItem(`herdr-web-ui:view:${paneId}`, "terminal");
-    }, { platform, paneId });
+    }, { platform, paneId, expectedOrigin: new URL(origin).origin });
     try {
       const page = await context.newPage();
-      const inputs: Array<{ pane_id: string; text: string }> = [];
-      let ready = false;
-      page.on("websocket", (socket) => {
-        socket.on("framereceived", ({ payload }) => {
-          const message = JSON.parse(String(payload));
-          if (message.type === "input-ready" && message.pane_id === paneId) ready = message.ready !== false;
-        });
-        socket.on("framesent", ({ payload }) => {
-          const message = JSON.parse(String(payload));
-          if (message.type === "input") inputs.push({ pane_id: message.pane_id, text: message.text });
-        });
-      });
+      const oracle = terminalOracle(page, paneId);
       await page.goto(`${origin}/?pane=${encodeURIComponent(paneId)}`);
-      await until(() => ready, "owned terminal must accept input");
+      await oracle.ready();
       const input = page.locator(".xterm-helper-textarea");
-      // Let deferred IME sends run, then use a WS marker to bound both positive and negative assertions.
       const check = async (action: () => Promise<unknown>, expected: string[], label: string) => {
-        const before = inputs.length;
-        await action();
-        await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
-        await input.press("Control+g");
-        await until(() => inputs.slice(before).some(({ text }) => text === "\x07"), "input marker must arrive");
-        assert.deepEqual(inputs.slice(before), [...expected, "\x07"].map((text) => ({ pane_id: paneId, text })), label);
+        assert.deepEqual(await oracle.measure(action), expected.map((text) => ({ type: "input", pane_id: paneId, text })), label);
       };
       const mac = platform === "MacIntel";
       for (const [key, code, sequence] of [["ArrowLeft", 37, "\x01"], ["ArrowRight", 39, "\x05"]] as const) {

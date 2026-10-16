@@ -424,6 +424,10 @@ export function PaneTerminal({
   const onConversationUpdate = useCallback((listener: ((update: ConversationUpdate) => void) | null) => {
     chatUpdateRef.current = listener;
   }, []);
+  const promptUpdateRef = useRef<((message: Extract<ServerMessage, { type: "prompt-push" }>) => void) | null>(null);
+  const onPromptUpdate = useCallback((listener: ((message: Extract<ServerMessage, { type: "prompt-push" }>) => void) | null) => {
+    promptUpdateRef.current = listener;
+  }, []);
   /** A scrollback stand-in's listener; a ref, so terminal output never re-renders the pane. */
   const chatOutputRef = useRef<(() => void) | null>(null);
   const onTerminalOutput = useCallback((listener: (() => void) | null) => {
@@ -1122,6 +1126,9 @@ export function PaneTerminal({
       }
       if (message.type === "conversation-delta" && chatViewRef.current && !releasedRef.current && document.visibilityState !== "hidden") {
         chatUpdateRef.current?.(message);
+      }
+      if (message.type === "prompt-push" && chatViewRef.current && !releasedRef.current && document.visibilityState !== "hidden") {
+        promptUpdateRef.current?.(message);
       }
       // the PC's shared connection came back after an overload close (another pane's mount, or an
       // explicit pick, reconnected it): its replayed attach serves this pane again
@@ -2861,6 +2868,8 @@ export function PaneTerminal({
             invalidationKey={chatInvalidation}
             onConversationWatch={onConversationWatch}
             onConversationUpdate={onConversationUpdate}
+            onPromptUpdate={onPromptUpdate}
+            promptPushes={socketRef.current?.promptPushes() === true && !released}
             conversationPushes={conversationPushes && !released}
             onTerminalOutput={onTerminalOutput}
             sentKey={chatSent}

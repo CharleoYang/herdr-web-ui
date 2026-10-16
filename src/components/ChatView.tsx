@@ -69,7 +69,7 @@ const ChatHistoryContext = createContext("");
  */
 const ImageViewerContext = createContext<(images: GalleryImage[], index: number) => void>(() => {});
 import type { TypedAnswer } from "../lib/promptAnswer.ts";
-import type { AgentStatus, ConversationMetadata, ConversationPart, ConversationResponse, ConversationTurn, InteractivePrompt, OmoTaskResult } from "../../shared/protocol.ts";
+import type { AgentStatus, ConversationMetadata, ConversationPart, ConversationResponse, ConversationTurn, InteractivePrompt, OmoTaskResult, ServerMessage } from "../../shared/protocol.ts";
 import { chatIsBlank, type ChatRead } from "../lib/greeting.ts";
 import { TurnTime } from "./TurnTime.tsx";
 import { useT } from "../lib/i18n.ts";
@@ -107,6 +107,9 @@ export interface ChatViewProps {
   conversationPushes?: boolean;
   /** Direct current-connection frames and lifecycle edges; never stored for replay. */
   onConversationUpdate?: (listener: ((update: ConversationUpdate) => void) | null) => void;
+  /** the bridge pushes this pane's prompt; without, the visible chat keeps its 2s poll */
+  promptPushes?: boolean;
+  onPromptUpdate?: (listener: ((message: Extract<ServerMessage, { type: "prompt-push" }>) => void) | null) => void;
   /** while the chat shows herdr's scrollback, the pane's terminal output invalidates it */
   onTerminalOutput?: (listener: (() => void) | null) => void;
   /** bumped when a composer message goes out, before the transcript holds it */
@@ -801,7 +804,7 @@ function TerminalFallback({ paneId, visible }: { paneId: string; visible: boolea
 }
 
 // the app re-renders on every pane-status and poll; an unchanged transcript sits those out
-export const ChatView = memo(function ChatView({ paneId, active = true, visible: paneVisible = true, pageScroll, refreshKey, invalidationKey = 0, onConversationWatch, conversationPushes = false, onConversationUpdate, onTerminalOutput, sentKey = 0, connected, ended, agent, agentStatus, onMetadata, onRead, greeted = false, onPrompt, onSuggestion, onRestored, promptRefreshKey = 0, pendingAnswer = null, onPendingAnswerDone, promptDock = null, onPromptAnswered }: ChatViewProps) {
+export const ChatView = memo(function ChatView({ paneId, active = true, visible: paneVisible = true, pageScroll, refreshKey, invalidationKey = 0, onConversationWatch, conversationPushes = false, onConversationUpdate, promptPushes = false, onPromptUpdate, onTerminalOutput, sentKey = 0, connected, ended, agent, agentStatus, onMetadata, onRead, greeted = false, onPrompt, onSuggestion, onRestored, promptRefreshKey = 0, pendingAnswer = null, onPendingAnswerDone, promptDock = null, onPromptAnswered }: ChatViewProps) {
   const t = useT();
   const { fetchPaneConversation, peekPaneConversation, fetchPanePromptState, fetchPaneTranscript } = useMachineApi();
   const { settings } = useSettings();
@@ -1215,16 +1218,17 @@ export const ChatView = memo(function ChatView({ paneId, active = true, visible:
     if (index >= 0) void timeline.current?.scrollToIndex({ index, viewPosition: 0, viewOffset: anchor.offset, animated: false });
   }, [older]);
 
-  // Prompts belong to the visible screen, not the native transcript: a Codex directory-trust
-  // menu can appear while idle without any file mutation. Keep their independent 2s poll.
+  // Prompts belong to the visible screen, not the native transcript. A bridge that pushes them
+  // replaces the 2s poll; the first read, a reconnect, and coming back from hidden stay on REST.
   const pollPrompt = connected && !ended && agent !== null;
+  const promptPushesRef = useRef(promptPushes);
+  promptPushesRef.current = promptPushes;
   useEffect(() => {
     if (!pollPrompt) { setPrompt(null); setRestored(null); onSuggestionRef.current?.(paneId, null); onRestoredRef.current?.(paneId, null); return; }
     if (!visible) return;
     let cancelled = false;
     let timer = 0;
     const readPrompt = async (): Promise<void> => {
-      // the same prompt keeps its object: the composer and the card only change with it
       const sent = sentKeyRef.current;
       try {
         const next = await fetchPanePromptState(paneId);
@@ -1238,11 +1242,27 @@ export const ChatView = memo(function ChatView({ paneId, active = true, visible:
         }
       }
       catch { if (!cancelled) { setPrompt(null); setRestored(null); onSuggestionRef.current?.(paneId, null); onRestoredRef.current?.(paneId, null); } }
-      finally { if (!cancelled) timer = window.setTimeout(() => void readPrompt(), PROMPT_POLL_MS); }
+      finally { if (!cancelled && !promptPushesRef.current) timer = window.setTimeout(() => void readPrompt(), PROMPT_POLL_MS); }
     };
     void readPrompt();
     return () => { cancelled = true; window.clearTimeout(timer); };
-  }, [pollPrompt, paneId, promptPollKey, promptRefreshKey, fetchPanePromptState, visible]);
+  }, [pollPrompt, paneId, promptPollKey, promptRefreshKey, fetchPanePromptState, visible, promptPushes]);
+  useEffect(() => {
+    if (!promptPushes || !visible) return;
+    const applyPush = (message: Extract<ServerMessage, { type: "prompt-push" }>): void => {
+      if (message.pane_id !== paneId) return;
+      const sent = sentKeyRef.current;
+      setPrompt((current) => current?.id === message.prompt?.id ? current : message.prompt);
+      if (sentKeyRef.current === sent) {
+        onSuggestionRef.current?.(paneId, message.suggestion);
+        setRestored(message.restored);
+        onRestoredRef.current?.(paneId, message.restored);
+      }
+    };
+    onPromptUpdate?.(applyPush);
+    return () => onPromptUpdate?.(null);
+  }, [promptPushes, visible, paneId, onPromptUpdate]);
+
 
   useEffect(() => {
     onPrompt?.(paneId, prompt);

@@ -2,12 +2,13 @@ import { afterAll, beforeAll, describe, expect, it, spyOn } from "bun:test";
 import { appendFileSync, chmodSync, mkdirSync, mkdtempSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { ClientMessage, ConversationResponse, ServerMessage } from "../shared/protocol.ts";
+import type { ClientMessage, ConversationResponse, InteractivePrompt, ServerMessage } from "../shared/protocol.ts";
 import { ConversationMonitor } from "./conversation-monitor.ts";
 import * as conversationReader from "./conversation.ts";
 import { forgetTranscriptState } from "./conversation.ts";
 import { CompletionTracker } from "./completion.ts";
 import { createServer } from "./index.ts";
+import * as promptReader from "./prompt.ts";
 import { herdrRpc, sessionSnapshot, workspaceClose, workspaceCreate } from "./herdr/client.ts";
 
 type TestBridge = { port: number; stop: () => void };
@@ -472,7 +473,7 @@ describe("native conversation invalidation", () => {
     const unattached = await connect();
     const snapshot = first.frames.find((frame) => frame.type === "snapshot");
     expect(snapshot?.type === "snapshot" && snapshot.features).toContain("conversation-delta");
-    expect(snapshot?.type === "snapshot" && snapshot.features).not.toContain("prompt-push");
+    expect(snapshot?.type === "snapshot" && snapshot.features).toContain("prompt-push");
     attach(first);
     watch(first);
     const initial = await first.delta(paneId);
@@ -689,6 +690,77 @@ describe("native conversation invalidation", () => {
     expect(socket.frames.some((frame) => frame.type === "conversation-delta" || frame.type === "prompt-push")).toBe(false);
     watch(socket, false);
     socket.ws.close();
+  }, 30_000);
+
+  it("pushes the same prompt body the REST reader returns, and only to an attached watcher", async () => {
+    const first = await connect();
+    const idle = await connect();
+    const snapshot = first.frames.find((frame) => frame.type === "snapshot");
+    expect(snapshot?.type === "snapshot" && snapshot.features).toContain("prompt-push");
+    attach(first);
+    watch(first);
+    await first.waitFor((frame) => frame.type === "input-ready" && frame.pane_id === paneId && frame.ready !== false);
+    const menu: InteractivePrompt = { id: "push-menu", agent: "codex", kind: "approval", title: "Trust", question: "Trust this directory?", body: null, options: [{ label: "Yes", description: null }, { label: "No", description: null }], multi_select: false, custom_option_index: null };
+    let reads = 0;
+    const read = spyOn(promptReader, "readPromptState").mockImplementation(async (id: string) => {
+      reads += 1;
+      if (id !== paneId) return { prompt: null, suggestion: null, restored: null };
+      return reads < 3
+        ? { prompt: menu, suggestion: "next command", restored: null }
+        : { prompt: null, suggestion: null, restored: "put back" };
+    });
+    try {
+      const pushed = await first.waitFor((frame) => frame.type === "prompt-push" && frame.pane_id === paneId && frame.prompt !== null);
+      expect(pushed).toEqual({ type: "prompt-push", pane_id: paneId, prompt: menu, suggestion: "next command", restored: null });
+      expect(idle.frames.some((frame) => frame.type === "prompt-push")).toBe(false);
+      const after = first.frames.length;
+      const seen = reads;
+      const gone = await first.waitFor((frame) => frame.type === "prompt-push" && frame.pane_id === paneId && frame.prompt === null, after);
+      expect(gone).toMatchObject({ suggestion: null, restored: "put back" });
+      expect(reads).toBeGreaterThan(seen);
+      const quiet = first.frames.length;
+      const settled = reads;
+      await until(() => reads > settled + 1, "unchanged prompt read again");
+      expect(first.frames.length).toBe(quiet);
+    } finally {
+      read.mockRestore();
+      first.ws.close();
+      idle.ws.close();
+    }
+  }, 30_000);
+
+
+
+  it("keeps a plan card whole for the owner and narrowed for a watching observer", async () => {
+    const owner = await connect();
+    const watcher = await connect();
+    attach(owner);
+    watch(owner);
+    attach(watcher);
+    watch(watcher);
+    await owner.waitFor((frame) => frame.type === "input-ready" && frame.pane_id === paneId && frame.ready !== false);
+    await barrier(watcher, "observe");
+    const card: InteractivePrompt = { id: "plan-card", agent: "claude", kind: "plan", title: "Plan", question: "Approve this plan?", body: "the whole plan text", options: [{ label: "Yes", description: null }], multi_select: false, custom_option_index: null, plan_file: "/tmp/plan.md" };
+    const screen: InteractivePrompt = { ...card, body: null };
+    delete screen.plan_file;
+    const read = spyOn(promptReader, "readPromptState").mockImplementation(async (_id: string, options?: promptReader.PromptRequestOptions) =>
+      options?.readOnly === true
+        ? { prompt: screen, suggestion: null, restored: null }
+        : { prompt: card, suggestion: null, restored: null });
+    try {
+      const owned = await owner.waitFor((frame) => frame.type === "prompt-push" && frame.pane_id === paneId && frame.prompt !== null) as Extract<ServerMessage, { type: "prompt-push" }>;
+      const watched = await watcher.waitFor((frame) => frame.type === "prompt-push" && frame.pane_id === paneId && frame.prompt !== null) as Extract<ServerMessage, { type: "prompt-push" }>;
+      // the owner's own chat reads the same enriched body REST gives it
+      expect(owned.prompt).toEqual(card);
+      // the observer sees the screen's card: no plan-file text and no plan-file path
+      expect(watched.prompt).toEqual(screen);
+      expect(watched.prompt?.plan_file).toBeUndefined();
+      expect(watched.prompt?.body).toBeNull();
+    } finally {
+      read.mockRestore();
+      owner.ws.close();
+      watcher.ws.close();
+    }
   }, 30_000);
 
   it("releases native interest when the owned pane ends and refuses a stale enable", async () => {
