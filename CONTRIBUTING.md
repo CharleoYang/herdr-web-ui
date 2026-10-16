@@ -110,6 +110,21 @@ the wrapper stops its disposable herdr and removes its config/state. `CHECK_DIR`
 set, retains the wrapper directory for inspection, not a running daemon. The printed check-report
 path contains the result and command logs; a terminal smoke PASS is not a full-CI PASS.
 
+### Focused pending-input smoke
+
+Run `bun run smoke:pending-input` for the real foreground-agent queue/reconnect scene,
+without the full browser journey. It uses the same consumer module as `ui-regression.ts`
+and the guarded isolated terminal fixture. It retains Queue, Send now, Stop, uncertain
+reload and discard checks; the reconnect oracle observes both legacy input and submit,
+the current socket/pane, bridge acceptance and the owned raw PTY recorder. Constructed
+early, duplicate, missing, wrong-route/text and rejected-ack controls must fail.
+
+Set `CHECK_BROWSER_EVIDENCE_DIR` to retain raw phase/socket/pane frames, PTY bytes,
+DOM and a screenshot. With an already-current build, use
+`bun run check run bun scripts/pending-input-smoke.ts`. A focused PASS is not full CI.
+A diagnostic failure still closes the owned workspace and temporary root, then reports
+the original error.
+
 ## What a change needs
 
 - **HTTP or WebSocket contract:** change both sides through `shared/protocol.ts` and cover it with a

@@ -1,7 +1,7 @@
 /** Real-browser regressions against owned herdr panes. Run after `bun run build`. */
 import "./test-herdr.ts"; // a herdr session of its own: nothing shows in the user's
 import assert from "node:assert/strict";
-import { copyFileSync, chmodSync, existsSync, mkdtempSync, mkdirSync, readFileSync, realpathSync, rmdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, realpathSync, rmdirSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { chromium } from "playwright-core";
@@ -23,6 +23,7 @@ import { checkCtrlEnter } from "./terminal-ctrl-enter-regression.ts";
 import { checkCommandArrows } from "./terminal-command-arrows-regression.ts";
 import { checkFolderFilter } from "./folder-filter-regression.ts";
 import { checkPaletteKeys } from "./palette-keys-regression.ts";
+import { createPendingInputCheck } from "./pending-input-regression.ts";
 import { UsageService } from "../server/usage.ts";
 import { openSettingsPage } from "./settings-page.ts";
 import { assertCspClean, watchCsp } from "./csp-violations.ts";
@@ -119,22 +120,16 @@ try {
   // the header under test is the app's own (server/static.ts), so this is where a broken
   // directive shows up: every page below loads through this same server
   csp.push(await watchCsp(page));
+  const pendingInput = createPendingInputCheck(page, evidenceDirectory);
+  releases.push(() => pendingInput.release());
   let holdSubmitResult = false;
   let releaseSubmitResult: (() => void) | null = null;
-  // a connection's first frame held back: what the page does between a reconnect and its snapshot
-  let holdSnapshot = false;
-  let releaseSnapshot: (() => void) | null = null;
-  const routed: Array<{ close: () => Promise<void> }> = [];
   await page.routeWebSocket(/\/ws(?:\?|$)/, (socket) => {
-    routed.push(socket);
     const upstream = socket.connectToServer();
     upstream.onMessage((raw) => {
       const message = JSON.parse(String(raw));
-      if (holdSnapshot && message.type === "snapshot") {
-        holdSnapshot = false;
-        const release = () => { socket.send(raw); releaseSnapshot = null; };
-        releaseSnapshot = release;
-        releases.push(release);
+      if (pendingInput.forwardSnapshot(socket, raw)) {
+        // The shared pending consumer owns this connection's held capability snapshot.
       } else if (holdSubmitResult && message.type === "submit-result") {
         holdSubmitResult = false;
         const release = () => { socket.send(raw); releaseSubmitResult = null; };
@@ -867,100 +862,7 @@ try {
   await blocked.close();
   console.log("PASS a device that blocks notifications keeps the Alerts item as the switch for in-app alerts");
 
-  // The pending protocol has a real foreground agent and an owned byte recorder: merely
-  // reporting an idle shell as working would not prove that server-side queueing happened.
-  const pendingCwd = join(root, "pending"); mkdirSync(pendingCwd);
-  const pendingWorkspace = await workspaceCreate({ cwd: pendingCwd, label: "herdr-web-ui-test-browser-pending" });
-  workspaces.push(pendingWorkspace.workspace.workspace_id);
-  const pendingPane = pendingWorkspace.root_pane.pane_id;
-  const pendingProgram = join(root, "claude"); copyFileSync(process.execPath, pendingProgram); chmodSync(pendingProgram, 0o755);
-  const pendingLog = join(root, "pending-input.jsonl");
-  const pendingScreen = join(root, "pending-screen.txt"); writeFileSync(pendingScreen, "");
-  const pendingScript = join(root, "pending-agent.cjs");
-  writeFileSync(pendingScript, `const fs=require("node:fs");const log=process.argv[2],screen=process.argv[3];process.stdin.setRawMode(true);process.stdin.resume();process.stdout.write("\\x1b[?2004h\\n› Message\\n",()=>fs.writeFileSync(log,""));process.stdin.on("data",c=>{if(c.includes(3))process.exit(0);fs.appendFileSync(log,JSON.stringify(c.toString("utf8"))+"\\n");});let shown="";setInterval(()=>{const next=fs.readFileSync(screen,"utf8");if(next!==shown){shown=next;process.stdout.write("\\x1b[2J\\x1b[H"+next);}},20);`);
-  await herdrRpc("pane.send_text", { pane_id: pendingPane, text: `'${pendingProgram}' '${pendingScript}' '${pendingLog}' '${pendingScreen}'\n` });
-  await until(() => existsSync(pendingLog), "pending byte recorder started");
-  const pendingBytes = () => readFileSync(pendingLog, "utf8").split("\n").filter(Boolean).map((line) => JSON.parse(line) as string).join("");
-  const reportPending = (state: string) => herdrRpc("pane.report_agent", { pane_id: pendingPane, source: "manual", agent: "claude", state });
-  await reportPending("working");
-  await page.locator(`.pane-select[title^="${pendingPane} —"]`).click();
-  await page.getByRole("group", { name: "Pane view", exact: true }).getByRole("button", { name: "Chat", exact: true }).click();
-  await page.locator('.composer-status[data-status="working"]').waitFor();
-  await until(async () => await page.locator(".composer-agent-label").innerText() === "Claude", "foreground agent identity reached the composer");
-  await pendingReady(pendingPane);
-  const pendingRows = page.locator(".pending-messages .pending-message");
-  const queuedTexts = ["first pending browser message", "# second pending message", "# third pending message"];
-  for (const [index, text] of queuedTexts.entries()) {
-    await composer.fill(text);
-    assert.equal(await page.getByRole("button", { name: "Stop agent", exact: true }).count(), 0, "typing replaces Stop with Send");
-    assert.equal(await page.getByRole("button", { name: "Queue message", exact: true }).count(), 0, "there is no separate Queue control");
-    await page.getByRole("button", { name: "Send message", exact: true }).click();
-    await until(async () => await pendingRows.count() === index + 1 && await composer.inputValue() === "", "server accepted pending input");
-    assert.equal(inputs.at(-1)?.pane_id, pendingPane);
-    assert.equal(inputs.at(-1)?.delivery, "queue");
-  }
-  assert.deepEqual(await pendingRows.locator(".pending-message-bubble").allTextContents(), queuedTexts);
-  assert.equal(pendingBytes(), "", "accepted pending messages have not reached the pty");
-  assert.equal(await page.getByRole("button", { name: "Stop agent", exact: true }).count(), 1, "empty working composer returns to Stop");
-  assert.equal(await page.locator(".composer-action").count(), 1, "one primary action");
-  const actionsBeforeTextClick = pendingActions.length;
-  await pendingRows.locator(".pending-message-bubble").first().click();
-  await page.waitForTimeout(NO_SEND_WAIT_MS);
-  assert.equal(pendingActions.length, actionsBeforeTextClick, "pending message text is selectable, not a send action");
-  assert.equal(pendingBytes(), "");
-  await reportPending("blocked"); await page.locator('.composer-status[data-status="blocked"]').waitFor();
-  await page.waitForTimeout(NO_SEND_WAIT_MS);
-  assert.equal(pendingBytes(), "", "blocked status never advances pending input");
-  assert.equal(await pendingRows.count(), 3);
-  await reportPending("working"); await page.locator('.composer-status[data-status="working"]').waitFor();
-  await pendingRows.first().getByRole("button", { name: /^Send now:/ }).press("Enter");
-  await until(async () => await pendingRows.count() === 2 && pendingBytes().endsWith("\r"), "explicit Send now delivered one item");
-  assert.equal(pendingBytes(), `\u001b[200~${queuedTexts[0]}\u001b[201~\r`);
-  assert.equal(pendingActions.at(-1)?.pane_id, pendingPane);
-  assert.equal(await pendingRows.first().getByRole("button", { name: /^Send now:/ }).evaluate((button) => button === document.activeElement), true, "a removed keyboard action hands focus to the next pending action");
-  // a draft puts Send where Stop was: Escape in the box is still Stop, once a completion is put away, and keeps the draft
-  await composer.fill("/he");
-  await composer.press("Escape");
-  await page.waitForTimeout(NO_SEND_WAIT_MS);
-  assert.equal(pendingBytes(), `\u001b[200~${queuedTexts[0]}\u001b[201~\r`, "the first Escape on a command being completed only puts the completion away");
-  await composer.fill("a draft while the agent works");
-  assert.equal(await page.getByRole("button", { name: "Stop agent", exact: true }).count(), 0);
-  await composer.press("Escape");
-  await until(() => pendingBytes() === `\u001b[200~${queuedTexts[0]}\u001b[201~\r\u001b`, "Escape with a draft stops the working agent");
-  assert.deepEqual(inputs.at(-1), { type: "input", pane_id: pendingPane, text: "\u001b", stop: true }, "the composer's Stop goes out as a Stop");
-  assert.equal(await composer.inputValue(), "a draft while the agent works", "Escape leaves the draft in the box");
-  await composer.fill("");
-  // a follow-up sent between a reconnect and its snapshot is the new connection's own row, not an unconfirmed copy
-  const sentBeforeSnapshot = inputs.length;
-  const socketsBeforeReconnect = sockets.length;
-  holdSnapshot = true;
-  await routed.at(-1)!.close();
-  await until(() => releaseSnapshot !== null, "the reconnect's snapshot was held back");
-  // the server can send its snapshot before the page has even sent its attach: the pane is
-  // ready only once the new connection says so, not by the closed one's last word
-  await until(() => sockets.length > socketsBeforeReconnect, "the page opened its new connection");
-  await pendingReady(pendingPane);
-  assert.equal(await page.locator('.pending-message[data-state="uncertain"]').count(), 2, "the lost connection's rows are no longer its own");
-  await composer.fill("sent before the snapshot");
-  await page.getByRole("button", { name: "Send message", exact: true }).click();
-  assert.equal(inputs.length, sentBeforeSnapshot, "the message waits for the snapshot that says what the bridge supports");
-  releaseSnapshot!();
-  await until(async () => await page.locator('.pending-message[data-state="queued"]').count() === 1, "the message sent before the snapshot is a live pending row");
-  assert.equal(inputs.at(-1)?.delivery, "queue");
-  assert.equal(await page.locator(".composer-note").count(), 0);
-  await page.getByRole("button", { name: "Discard", exact: true }).click();
-  await until(async () => await pendingRows.count() === 2, "the live row was discarded on the bridge");
-  assert.equal(pendingBytes(), `\u001b[200~${queuedTexts[0]}\u001b[201~\r\u001b`);
-  await page.reload(); await page.locator(".conn-live").waitFor();
-  await until(async () => await pendingRows.count() === 2, "saved pending copies restored");
-  assert.deepEqual(await pendingRows.locator(".pending-message-bubble").allTextContents(), queuedTexts.slice(1));
-  assert.equal(await page.locator('.pending-message[data-state="uncertain"]').count(), 2, "reload removes connection proof");
-  assert.equal(await page.locator(".pending-message-send").count(), 0, "unknown delivery cannot be resent");
-  await reportPending("idle"); await page.locator('.composer-status:not([data-status="working"])').waitFor();
-  await page.waitForTimeout(NO_SEND_WAIT_MS);
-  assert.equal(pendingBytes(), `\u001b[200~${queuedTexts[0]}\u001b[201~\r\u001b`, "reload and readiness never replay saved pending input");
-  for (let left = 2; left > 0; left--) { await page.getByRole("button", { name: "Discard saved copy", exact: true }).first().click(); await until(async () => await pendingRows.count() === left - 1, "discard saved copy"); }
-  console.log("PASS Send queues server-owned input, explicit Send now delivers once, and reload/readiness never replay uncertain copies");
+  const { pendingPane, pendingRows, pendingBytes, reportPending, pendingScreen } = await pendingInput.run(root, workspaces);
 
   // Older releases saved editable held rows. Seed that documented storage format so the
   // recovery, editing and layout checks continue to cover existing users' retained text.
