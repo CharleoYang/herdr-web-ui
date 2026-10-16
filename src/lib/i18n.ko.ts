@@ -614,6 +614,7 @@ export const KO: Record<string, string> = {
   "Choose one of the options above: type {range}.": "위 선택지 중 하나를 고르세요: {range} 입력.",
 
   // ---- chat view ----
+  "Multiple selections": "복수 선택",
   "Copied": "복사됨",
   "Couldn't copy. Select the text and copy it manually.": "복사하지 못했습니다. 텍스트를 선택해 직접 복사하세요.",
   "Output": "출력",

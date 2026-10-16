@@ -274,6 +274,33 @@ function ToolInputView({ part }: { part: ToolPartType }) {
   try { parsed = JSON.parse(part.input) as Record<string, unknown>; }
   catch { return <pre className="chat-tool-io">{part.input}</pre>; }
   if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) return <pre className="chat-tool-io">{part.input}</pre>;
+  // Native ask history is a read-only record, never another answering surface.
+  if (part.name === "ask" && Array.isArray(parsed["questions"]) && parsed["questions"].length > 0) {
+    const questions = parsed["questions"] as Array<Record<string, unknown>>;
+    const readable = questions.every((question) => question !== null && typeof question === "object"
+      && typeof question["question"] === "string"
+      && (question["header"] == null || typeof question["header"] === "string")
+      && (question["multi"] == null || typeof question["multi"] === "boolean")
+      && (question["recommended"] == null || typeof question["recommended"] === "number")
+      && Array.isArray(question["options"]) && question["options"].every((option: unknown) => {
+        if (option === null || typeof option !== "object") return false;
+        const item = option as Record<string, unknown>;
+        return typeof item["label"] === "string"
+          && (item["description"] == null || typeof item["description"] === "string")
+          && (item["preview"] == null || typeof item["preview"] === "string");
+      }));
+    if (readable) return <ol className="chat-ask-questions">{questions.map((question, index) => <li key={index} className="chat-ask-question">
+      {typeof question["header"] === "string" && <p className="chat-ask-header">{question["header"]}</p>}
+      <p className="chat-ask-text">{question["question"] as string}</p>
+      {question["multi"] === true && <p className="chat-ask-meta">{t("Multiple selections")}</p>}
+      <ol className="chat-ask-options">{(question["options"] as Array<Record<string, unknown>>).map((option, optionIndex) => <li key={optionIndex}>
+        <p className="chat-ask-label">{option["label"] as string}{question["recommended"] === optionIndex && <> <span className="chat-ask-meta">({t("Recommended")})</span></>}</p>
+        {typeof option["description"] === "string" && <p>{option["description"]}</p>}
+        {typeof option["preview"] === "string" && <pre className="chat-ask-preview">{option["preview"]}</pre>}
+      </li>)}</ol>
+    </li>)}</ol>;
+    return <pre className="chat-tool-io">{part.input}</pre>;
+  }
   // an OmO or omp `task` call: the tasks it starts, not its JSON or a checklist nobody ticks
   const spawned = part.name === "task" ? taskCallItems(parsed) : null;
   if (spawned !== null) return <ol className="chat-task-calls">{spawned.map((item, index) => <li key={index} className="chat-task-call">

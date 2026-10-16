@@ -617,6 +617,7 @@ export const ZH: Record<string, string> = {
   "Choose one of the options above: type {range}.": "请从上方选项中选择一项：输入 {range}。",
 
   // ---- chat view ----
+  "Multiple selections": "多选",
   "Copied": "已复制",
   "Couldn't copy. Select the text and copy it manually.": "无法复制。请选中文本并手动复制。",
   "Output": "输出",

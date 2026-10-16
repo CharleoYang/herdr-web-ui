@@ -92,6 +92,8 @@ between releases do not reach them. Remote-PC runtime bundles are versioned sepa
   ([#860](https://github.com/devswha/herdr-web-ui/pull/860))
 
 ### Fixed
+- Historical native Ask calls show every question and option as readable, read-only transcript
+  content instead of clipped JSON, preserving descriptions, previews and cancellation output.
 - The bottom-pinned Todo panel points its caret up when collapsed and down when expanded,
   matching its upward expansion. Other disclosure carets keep their existing directions.
 - First-device pairing waits for the browser to return its device cookie before restricting
