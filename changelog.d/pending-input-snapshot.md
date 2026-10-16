@@ -8,3 +8,6 @@
   raw key and IME bytes, routing and delayed-duplicate checks; normalize wrappers only for clipboard
   paste, not keyboard events or queued message text. Honor the protocol's omitted-immediate delivery
   default when checking explicit Send now.
+- Return pending-scene workspace ownership to the full browser runner for its existing cleanup.
+- Account for native DA1/DECRQM replies only with matching queries on the same socket, pane and
+  attachment lifetime; retain exact foreground key bytes, physical markers and foreign-pane checks.
