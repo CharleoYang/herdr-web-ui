@@ -279,15 +279,15 @@ function ToolInputView({ part }: { part: ToolPartType }) {
     const questions = parsed["questions"] as Array<Record<string, unknown>>;
     const readable = questions.every((question) => question !== null && typeof question === "object"
       && typeof question["question"] === "string"
-      && (question["header"] === undefined || typeof question["header"] === "string")
-      && (question["multi"] === undefined || typeof question["multi"] === "boolean")
-      && (question["recommended"] === undefined || typeof question["recommended"] === "number")
+      && (question["header"] == null || typeof question["header"] === "string")
+      && (question["multi"] == null || typeof question["multi"] === "boolean")
+      && (question["recommended"] == null || typeof question["recommended"] === "number")
       && Array.isArray(question["options"]) && question["options"].every((option: unknown) => {
         if (option === null || typeof option !== "object") return false;
         const item = option as Record<string, unknown>;
         return typeof item["label"] === "string"
-          && (item["description"] === undefined || typeof item["description"] === "string")
-          && (item["preview"] === undefined || typeof item["preview"] === "string");
+          && (item["description"] == null || typeof item["description"] === "string")
+          && (item["preview"] == null || typeof item["preview"] === "string");
       }));
     if (readable) return <ol className="chat-ask-questions">{questions.map((question, index) => <li key={index} className="chat-ask-question">
       {typeof question["header"] === "string" && <p className="chat-ask-header">{question["header"]}</p>}
