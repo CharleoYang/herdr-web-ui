@@ -1,7 +1,7 @@
 import { createContext, memo, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type ComponentType } from "react";
 import { createPortal } from "react-dom";
 import {
-  ArrowDown, BookOpen, Check, ChevronDown, ChevronRight, Circle, CircleAlert, CircleCheck, CircleDot, CircleSlash, CircleX, Copy, Layers, Target,
+  ArrowDown, BookOpen, Check, CheckSquare, ChevronDown, ChevronRight, Circle, CircleAlert, CircleCheck, CircleDot, CircleSlash, CircleX, Copy, Layers, ListTodo, Target,
   type LucideProps,
 } from "lucide-react";
 
@@ -29,17 +29,18 @@ import { ApiError } from "../lib/api.ts";
 import { copyText } from "../lib/clipboard.ts";
 import { attachmentFileName, mentionFileName, type GalleryImage } from "../lib/imageViewer.ts";
 import { useMachineApi } from "../lib/machineContext.tsx";
+import { useMachineSessions } from "../lib/machineSessionContext.tsx";
 import { toTranscriptMessages, type TranscriptMessage } from "../lib/transcript.ts";
 import { isLiveWorkTurn, isWaitingWorkTurn, formatWorkDuration, splitTurn, workFailed, workStartsOpen, workSummary, type ToolPart as ToolPartType } from "../lib/workBlocks.ts";
-import { phaseRows, planRows, taskRows, todoRows, type ChecklistRow } from "../lib/checklist.ts";
-import { isTodoTool, parseTodoAnswer, todoCallSummary, type TodoItem, type TodoStatus } from "../lib/todos.ts";
+import { itemsRows, phaseRows, planRows, taskRows, todoRows, type ChecklistRow } from "../lib/checklist.ts";
+import { isTodoTool, parseTodoAnswer, todoCallSummary, turnTodos, type TodoItem, type TodoStatus } from "../lib/todos.ts";
 import { formatGoalTime, turnGoal, type GoalState, type GoalStatus } from "../lib/goals.ts";
 import { useSettings } from "../lib/settings.ts";
 import { PAGE_OVERLAP_ROWS, pageScrollDistance } from "../lib/pageScroll.ts";
 import { followGlides } from "../lib/followScroll.ts";
 import { useMediaQuery } from "../lib/useMediaQuery.ts";
 import { statusEdgeRead } from "../lib/status.ts";
-import { ConversationRefresh } from "../lib/conversationRefresh.ts";
+import { ConversationRefresh, type ConversationUpdate } from "../lib/conversationRefresh.ts";
 import { usePageVisible } from "../lib/visibility.ts";
 import { dismissKeyboardOn } from "../lib/keyboard.ts";
 import { useFacesArrived } from "../lib/fontFaces.ts";
@@ -58,6 +59,7 @@ import { formatTokens, sameMessage } from "../lib/compose.ts";
 import { formatElapsed, taskCallItems, taskResultMarkdown } from "../lib/omoTasks.ts";
 import { sendUserFileCall } from "../lib/sendUserFile.ts";
 import { shouldFoldUserMessage } from "../lib/userMessageFold.ts";
+import { teammateMessageParts, type TeammateMessage } from "../lib/teammateMessage.ts";
 
 /** The pane this chat shows, for what its rows fetch on request (a tool call's whole output). */
 const ChatPaneContext = createContext<string | null>(null);
@@ -69,7 +71,7 @@ const ChatHistoryContext = createContext("");
  */
 const ImageViewerContext = createContext<(images: GalleryImage[], index: number) => void>(() => {});
 import type { TypedAnswer } from "../lib/promptAnswer.ts";
-import type { AgentStatus, ConversationMetadata, ConversationPart, ConversationResponse, ConversationTurn, InteractivePrompt, OmoTaskResult } from "../../shared/protocol.ts";
+import type { AgentStatus, ConversationMetadata, ConversationPart, ConversationResponse, ConversationTurn, InteractivePrompt, OmoTaskResult, ServerMessage } from "../../shared/protocol.ts";
 import { chatIsBlank, type ChatRead } from "../lib/greeting.ts";
 import { TurnTime } from "./TurnTime.tsx";
 import { useT } from "../lib/i18n.ts";
@@ -105,6 +107,11 @@ export interface ChatViewProps {
   onConversationWatch?: (paneId: string, enabled: boolean) => void;
   /** the bridge pushes this pane's transcript changes; without, the chat reads every 2s as before */
   conversationPushes?: boolean;
+  /** Direct current-connection frames and lifecycle edges; never stored for replay. */
+  onConversationUpdate?: (listener: ((update: ConversationUpdate) => void) | null) => void;
+  /** the bridge pushes this pane's prompt; without, the visible chat keeps its 2s poll */
+  promptPushes?: boolean;
+  onPromptUpdate?: (listener: ((message: Extract<ServerMessage, { type: "prompt-push" }>) => void) | null) => void;
   /** while the chat shows herdr's scrollback, the pane's terminal output invalidates it */
   onTerminalOutput?: (listener: (() => void) | null) => void;
   /** bumped when a composer message goes out, before the transcript holds it */
@@ -272,6 +279,33 @@ function ToolInputView({ part }: { part: ToolPartType }) {
   try { parsed = JSON.parse(part.input) as Record<string, unknown>; }
   catch { return <pre className="chat-tool-io">{part.input}</pre>; }
   if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) return <pre className="chat-tool-io">{part.input}</pre>;
+  // Native ask history is a read-only record, never another answering surface.
+  if (part.name === "ask" && Array.isArray(parsed["questions"]) && parsed["questions"].length > 0) {
+    const questions = parsed["questions"] as Array<Record<string, unknown>>;
+    const readable = questions.every((question) => question !== null && typeof question === "object"
+      && typeof question["question"] === "string"
+      && (question["header"] == null || typeof question["header"] === "string")
+      && (question["multi"] == null || typeof question["multi"] === "boolean")
+      && (question["recommended"] == null || typeof question["recommended"] === "number")
+      && Array.isArray(question["options"]) && question["options"].every((option: unknown) => {
+        if (option === null || typeof option !== "object") return false;
+        const item = option as Record<string, unknown>;
+        return typeof item["label"] === "string"
+          && (item["description"] == null || typeof item["description"] === "string")
+          && (item["preview"] == null || typeof item["preview"] === "string");
+      }));
+    if (readable) return <ol className="chat-ask-questions">{questions.map((question, index) => <li key={index} className="chat-ask-question">
+      {typeof question["header"] === "string" && <p className="chat-ask-header">{question["header"]}</p>}
+      <p className="chat-ask-text">{question["question"] as string}</p>
+      {question["multi"] === true && <p className="chat-ask-meta">{t("Multiple selections")}</p>}
+      <ol className="chat-ask-options">{(question["options"] as Array<Record<string, unknown>>).map((option, optionIndex) => <li key={optionIndex}>
+        <p className="chat-ask-label">{option["label"] as string}{question["recommended"] === optionIndex && <> <span className="chat-ask-meta">({t("Recommended")})</span></>}</p>
+        {typeof option["description"] === "string" && <p>{option["description"]}</p>}
+        {typeof option["preview"] === "string" && <pre className="chat-ask-preview">{option["preview"]}</pre>}
+      </li>)}</ol>
+    </li>)}</ol>;
+    return <pre className="chat-tool-io">{part.input}</pre>;
+  }
   // an OmO or omp `task` call: the tasks it starts, not its JSON or a checklist nobody ticks
   const spawned = part.name === "task" ? taskCallItems(parsed) : null;
   if (spawned !== null) return <ol className="chat-task-calls">{spawned.map((item, index) => <li key={index} className="chat-task-call">
@@ -302,7 +336,7 @@ function ToolInputView({ part }: { part: ToolPartType }) {
   if (content !== undefined) return <div className="chat-tool-io">{(str("file_path") ?? str("path")) !== undefined && <ToolFile path={(str("file_path") ?? str("path"))!} />}<pre>{content}</pre></div>;
   const path = str("file_path") ?? str("path");
   if (path !== undefined) return <div className="chat-tool-io"><ToolFile path={path} suffix={str("pattern") !== undefined ? ` — /${str("pattern")}/` : undefined} /></div>;
-  for (const [key, toRows] of [["list", phaseRows], ["todos", todoRows], ["plan", planRows], ["tasks", taskRows]] as const) {
+  for (const [key, toRows] of [["list", phaseRows], ["items", itemsRows], ["todos", todoRows], ["plan", planRows], ["tasks", taskRows]] as const) {
     const value = parsed[key];
     if (Array.isArray(value)) {
       const rows = toRows(value);
@@ -485,6 +519,66 @@ function GoalActivity({ goal }: { goal: GoalState }) {
   </ChatDetails>;
 }
 
+/** The agent's todo list, pinned to the chat's last row, above the input card rather than inside the
+ *  transcript: folding the tool rows never hides it, and it stands outside the `role="log"` scroller,
+ *  so a change to the list is not read as a new message. Closed it is one row: the mark, the word,
+ *  the count and the running step. */
+function TodoPanel({ items, open, onToggle }: { items: TodoItem[]; open: boolean; onToggle: (open: boolean) => void }) {
+  const t = useT();
+  const total = items.length;
+  const completed = items.filter((i) => i.status === "completed").length;
+  const inProgress = items.find((i) => i.status === "in_progress");
+  const blocked = items.find((i) => i.status === "blocked");
+  const allDone = total > 0 && completed === total;
+
+  const groups: { phase: string | null; items: TodoItem[] }[] = [];
+  for (const item of items) {
+    const group = groups[groups.length - 1];
+    if (group && group.phase === item.phase) group.items.push(item);
+    else groups.push({ phase: item.phase, items: [item] });
+  }
+
+  return (
+    <details className={`chat-todo chat-todo-pinned${allDone ? " is-done" : blocked ? " is-blocked" : inProgress ? " is-active" : ""}`} open={open} onToggle={(event) => onToggle(event.currentTarget.open)}>
+      <summary>
+        <span className="chat-todo-mark" aria-hidden="true">
+          {allDone ? <CheckSquare /> : <ListTodo />}
+        </span>
+        <span className="chat-todo-label">{t("Todo")}</span>
+        <span className="chat-todo-progress">{total > 0 ? `${completed}/${total} done` : ""}</span>
+        {inProgress && <span className="chat-todo-active-task">· {inProgress.label}</span>}
+        {blocked && !inProgress && <span className="chat-todo-blocked-task">· {t("blocked")}</span>}
+        <ChevronDown className="chat-skill-caret" aria-hidden="true" />
+      </summary>
+      <div className="chat-todo-detail">
+        {groups.map((group, gIdx) => (
+          <div key={gIdx} className="chat-todo-group">
+            {group.phase !== null && <p className="chat-todo-phase">{group.phase}</p>}
+            <ul className="chat-todo-tree">
+              {group.items.map((item, row) => {
+                const isLast = row === group.items.length - 1;
+                const Icon = TODO_ICONS[item.status] ?? Circle;
+                return (
+                  <li key={row} className={`chat-todo-item is-${item.status}`}>
+                    <span className="chat-todo-branch" aria-hidden="true">{isLast ? "└" : "├"}</span>
+                    <span className="chat-todo-status-icon" aria-hidden="true">
+                      <Icon />
+                    </span>
+                    <span className="chat-todo-item-label">
+                      {item.label}
+                      {item.note && <span className="chat-todo-item-note">({item.note})</span>}
+                    </span>
+                  </li>
+                );
+              })}
+            </ul>
+          </div>
+        ))}
+      </div>
+    </details>
+  );
+}
+
 /** Image files a message mentions as `@path`, the way this app attaches them: shown as thumbnails. */
 const IMAGE_MENTION = /(?:^|\s)@(\S+\.(?:png|jpe?g|gif|webp))(?=\s|$)/gi;
 
@@ -512,7 +606,7 @@ function UserImages({ paneId, parts, text }: { paneId: string; parts: Conversati
  * every row) the last line fades into the card and "Show full message" opens it. Opened, it stays
  * open while its row leaves and re-enters the list (useChatRowToggle).
  */
-function UserMessage({ text }: { text: string }) {
+function UserMessage({ text, skills = null }: { text: string; skills?: SkillMatcher | null }) {
   const t = useT();
   const canFold = useMemo(() => shouldFoldUserMessage(text), [text]);
   const [chosen, setOpen] = useChatRowToggle("fold", false);
@@ -545,7 +639,7 @@ function UserMessage({ text }: { text: string }) {
     if (node && view && node.getBoundingClientRect().top < view.getBoundingClientRect().top) node.scrollIntoView({ block: "start" });
   }, [open]);
   return <div ref={card} className={`chat-bubble${capped ? " is-capped" : ""}${clipped ? " is-folded" : ""}`}>
-    <div ref={body} className="chat-bubble-body"><Markdown>{text}</Markdown></div>
+    <div ref={body} className="chat-bubble-body"><Markdown skills={skills}>{text}</Markdown></div>
     {(open || clipped) && <div className="chat-bubble-foot">
       <button type="button" className="chat-bubble-fold" aria-expanded={open} onClick={toggle}>{open ? t("Show less") : t("Show full message")}</button>
     </div>}
@@ -562,6 +656,8 @@ interface TurnProps {
   showThinking: boolean;
   /** the pane's skill names: an answer's text chips them */
   skills?: SkillMatcher | null;
+  /** omo only: the user's own `$skill:x` and the `[skill: x]` omo leaves where one stood are chipped too */
+  userSkills?: SkillMatcher | null;
 }
 
 const TASK_RESULT_ICONS: Record<OmoTaskResult["status"], ComponentType<LucideProps>> = { completed: CircleCheck, failed: CircleX, cancelled: CircleSlash };
@@ -596,6 +692,30 @@ function TaskResultRow({ task }: { task: OmoTaskResult }) {
   </ChatDetails>;
 }
 
+/** Claude teammates report availability, not a verified task verdict. */
+function TeammateMessageRow({ message, stateKey }: { message: TeammateMessage; stateKey: string }) {
+  const t = useT();
+  const [opened, setOpened] = useChatRowToggle(`teammate-loaded:${stateKey}`, false);
+  return <ChatDetails memoryKey={`teammate:${stateKey}`} className="chat-task-results chat-task-result chat-teammate-message" onToggle={(event) => { if (event.currentTarget.open) setOpened(true); }}>
+    <summary>
+      <Layers className="chat-task-result-icon" aria-hidden="true" />
+      <span className="chat-task-result-main">
+        <span className="chat-task-result-title">{message.name}</span>
+        {message.summary && <span className="chat-task-result-meta chat-teammate-preview">{message.summary}</span>}
+      </span>
+      <span className="chat-task-result-status">{message.status === "idle" ? t("Teammate idle") : t("Teammate message")}</span>
+      <ChevronDown className="chat-skill-caret" aria-hidden="true" />
+    </summary>
+    {opened && <div className="chat-task-result-body">
+      {message.text ? <Markdown>{message.text}</Markdown> : <p className="chat-task-result-note">{t("The teammate is available; no result was included")}</p>}
+      <ChatDetails memoryKey={`teammate-raw:${stateKey}`} className="chat-teammate-raw">
+        <summary>{t("Original delivery")}</summary>
+        <pre>{message.raw}</pre>
+      </ChatDetails>
+    </div>}
+  </ChatDetails>;
+}
+
 /** what a runtime notice was: a background result by name, anything else by its own first line */
 function noticeLabel(t: ReturnType<typeof useT>, notice: Extract<ConversationPart, { kind: "notice" }>): string {
   if (notice.source === undefined || notice.source === "async-result") return t("Background result delivered");
@@ -608,7 +728,7 @@ function noticeLabel(t: ReturnType<typeof useT>, notice: Extract<ConversationPar
 }
 
 // a turn that did not change keeps its object across polls: skip re-rendering it
-const Turn = memo(function Turn({ paneId, turn, live, waiting, showThinking, skills = null }: TurnProps) {
+const Turn = memo(function Turn({ paneId, turn, live, waiting, showThinking, skills = null, userSkills = null }: TurnProps) {
   const t = useT();
   // under the turn, not in its meta row: that row fades out once the pointer and focus leave
   const [copyFailed, setCopyFailed] = useChatRowToggle("copy-failed", false);
@@ -641,11 +761,21 @@ const Turn = memo(function Turn({ paneId, turn, live, waiting, showThinking, ski
   }
   if (turn.role === "user") {
     const text = turn.parts.filter((part): part is Extract<ConversationPart, { kind: "text" }> => part.kind === "text").map((part) => part.text).join("\n\n");
+    const teammateParts = teammateMessageParts(text);
+    if (teammateParts !== null) return <section className="chat-teammate-messages" aria-label={t("Claude teammate messages")}>
+      <UserImages paneId={paneId} parts={turn.parts} text={text} />
+      {teammateParts.map((part, index) => part.kind === "teammate"
+        ? <TeammateMessageRow key={index} message={part} stateKey={String(index)} />
+        : <UserMessage key={index} text={part.text} />)}
+      <div className="chat-turn-meta">{time}<CopyButton text={text} label={t("Copy message")} onResult={copied} /></div>
+      {copyError}
+      <SkillActivityList parts={turn.parts} />
+    </section>;
     return <article className="chat-turn chat-turn-user">
       <UserImages paneId={paneId} parts={turn.parts} text={text} />
       {/* one row: with a mouse the time and copy sit beside the bubble, on touch under it */}
       <div className="chat-user-row">
-        {text.length > 0 && <UserMessage text={text} />}
+        {text.length > 0 && <UserMessage text={text} skills={userSkills} />}
         <div className="chat-turn-meta">{time}{text.length > 0 && <CopyButton text={text} label={t("Copy message")} onResult={copied} />}</div>
       </div>
       {copyError}
@@ -712,11 +842,13 @@ function TerminalFallback({ paneId, visible }: { paneId: string; visible: boolea
 }
 
 // the app re-renders on every pane-status and poll; an unchanged transcript sits those out
-export const ChatView = memo(function ChatView({ paneId, active = true, visible: paneVisible = true, pageScroll, refreshKey, invalidationKey = 0, onConversationWatch, conversationPushes = false, onTerminalOutput, sentKey = 0, connected, ended, agent, agentStatus, onMetadata, onRead, greeted = false, onPrompt, onSuggestion, onRestored, promptRefreshKey = 0, pendingAnswer = null, onPendingAnswerDone, promptDock = null, onPromptAnswered }: ChatViewProps) {
+export const ChatView = memo(function ChatView({ paneId, active = true, visible: paneVisible = true, pageScroll, refreshKey, invalidationKey = 0, onConversationWatch, conversationPushes = false, onConversationUpdate, promptPushes = false, onPromptUpdate, onTerminalOutput, sentKey = 0, connected, ended, agent, agentStatus, onMetadata, onRead, greeted = false, onPrompt, onSuggestion, onRestored, promptRefreshKey = 0, pendingAnswer = null, onPendingAnswerDone, promptDock = null, onPromptAnswered }: ChatViewProps) {
   const t = useT();
   const { fetchPaneConversation, peekPaneConversation, fetchPanePromptState, fetchPaneTranscript } = useMachineApi();
   const { settings } = useSettings();
   const machineId = useMachineId();
+  const machineSessions = useMachineSessions();
+  const promptSession = machineSessions?.get(machineId) ?? null;
   const skillMatcher = useSkillMatcher(paneId);
   // polls pause while the page or the pane is hidden and pick up at once when it is back
   const pageVisible = usePageVisible();
@@ -847,6 +979,38 @@ export const ChatView = memo(function ChatView({ paneId, active = true, visible:
     // cancelled mid-way (a pane switch, the page hidden during a gap fill) is redone
     lastAnswer.current = conversation;
   };
+  // Register after each commit so frames read the current pane/visibility, not a captured page.
+  useLayoutEffect(() => {
+    const updateConversation = (update: ConversationUpdate): void => {
+      if (update === "disconnect") {
+        conversationRefresh.resetConnection();
+        olderGeneration.current += 1;
+        loadingOlder.current = false; setOlderState("idle");
+        return;
+      }
+      if (update === "reconnect") {
+        conversationRefresh.resetConnection();
+        if (visible) conversationRefresh.refresh();
+        return;
+      }
+      if (!visible || document.visibilityState === "hidden" || shownPane.current !== paneId || loadingOlder.current) return;
+      const conversation = conversationRefresh.replacePage(update, paneId, lastAnswer.current, olderCount.current > 0 || heldFrom.current !== null);
+      if (conversation === null) return;
+      // No history setters, role merging or asynchronous chunk loads on the push path.
+      if (heldFrom.current === null) setOlderCursor(conversation.source === "scrollback" ? undefined : conversation.cursor);
+      showAnswer(conversation, conversation.source === "scrollback"
+        ? { source: "scrollback", turns: conversation.turns, messages: state.messages, truncated: state.truncated }
+        : conversationState(conversation));
+    };
+    onConversationUpdate?.(updateConversation);
+    // A quick hide/show can be batched into one React render. Fence it synchronously too.
+    const visibilityChanged = (): void => updateConversation(document.visibilityState === "hidden" ? "disconnect" : "reconnect");
+    document.addEventListener("visibilitychange", visibilityChanged);
+    return () => {
+      document.removeEventListener("visibilitychange", visibilityChanged);
+      onConversationUpdate?.(null);
+    };
+  });
 
   useLayoutEffect(() => {
     shownPane.current = paneId;
@@ -867,6 +1031,16 @@ export const ChatView = memo(function ChatView({ paneId, active = true, visible:
       showAnswer(cached, conversationState(cached));
     }
   }, [paneId, machineId]);
+
+  // Fence a hidden/replaced screen at commit, before passive reader cleanup or a late REST result.
+  useLayoutEffect(() => {
+    conversationRefresh.resetConnection();
+    return () => {
+      conversationRefresh.resetConnection();
+      olderGeneration.current += 1;
+      loadingOlder.current = false;
+    };
+  }, [paneId, machineId, visible, conversationRefresh]);
 
 
   useEffect(() => {
@@ -890,12 +1064,12 @@ export const ChatView = memo(function ChatView({ paneId, active = true, visible:
     if (!visible) return;
     let cancelled = false;
     /** The turns between the held start and where the newest page now starts, a page at a time; null when they cannot be joined. */
-    const turnsBetween = async (held: string | null, start: string): Promise<ConversationTurn[] | null> => {
+    const turnsBetween = async (held: string | null, start: string, isCurrent: () => boolean): Promise<ConversationTurn[] | null> => {
       const pages: ConversationTurn[][] = [];
       let before = start;
       try {
         for (let step = 0; step < 32 && before !== held; step++) {
-          if (cancelled) return null;
+          if (cancelled || !isCurrent()) return null;
           const page = await fetchPaneConversation(paneId, { before, ...(held === null ? {} : { since: held }) });
           if (page.cursor === held) {
             pages.unshift(page.turns);
@@ -910,7 +1084,7 @@ export const ChatView = memo(function ChatView({ paneId, active = true, visible:
       }
       return before === held ? pages.flat() : null;
     };
-    const read = async (): Promise<void> => {
+    const read = async (isCurrent: () => boolean): Promise<void> => {
       let generation = olderGeneration.current;
       try {
         let conversation;
@@ -919,16 +1093,16 @@ export const ChatView = memo(function ChatView({ paneId, active = true, visible:
         } catch (cause) {
           // a new session or a Codex backtrack replaced the transcript the older pages came from
           if (heldFrom.current === null || !(cause instanceof ApiError) || cause.status !== 409) throw cause;
-          if (cancelled || generation !== olderGeneration.current) return;
+          if (cancelled || !isCurrent() || generation !== olderGeneration.current) return;
           dropOlder(); setState(EMPTY_STATE); setLoaded(false); signature.current = ""; lastAnswer.current = null;
           generation = olderGeneration.current;
           conversation = await fetchPaneConversation(paneId);
         }
-        if (cancelled || generation !== olderGeneration.current) return;
+        if (cancelled || !isCurrent() || generation !== olderGeneration.current) return;
         // the timeline's chunk is in hand before any turn is: the list mounts once, with the refs bound
         if (conversation.source !== "scrollback" && loadedChatTimeline() === null) {
           await loadChatTimeline();
-          if (cancelled || generation !== olderGeneration.current) return;
+          if (cancelled || !isCurrent() || generation !== olderGeneration.current) return;
         }
         if (history.current !== conversation.history_id) {
           dropOlder(); generation = olderGeneration.current;
@@ -943,8 +1117,8 @@ export const ChatView = memo(function ChatView({ paneId, active = true, visible:
         const held = heldFrom.current ?? (previous?.source !== "scrollback" && previous?.history_id === conversation.history_id ? previous?.cursor : undefined);
         let moved: ConversationTurn[] = [];
         if (held !== undefined && conversation.source !== "scrollback" && typeof conversation.cursor === "string" && conversation.cursor !== held) {
-          const between = await turnsBetween(held, conversation.cursor);
-          if (cancelled || generation !== olderGeneration.current) return;
+          const between = await turnsBetween(held, conversation.cursor, isCurrent);
+          if (cancelled || !isCurrent() || generation !== olderGeneration.current) return;
           if (between === null) {
             dropOlder(); setState(EMPTY_STATE); setLoaded(false); signature.current = ""; lastAnswer.current = null;
             setPollKey((key) => key + 1); return;
@@ -968,12 +1142,12 @@ export const ChatView = memo(function ChatView({ paneId, active = true, visible:
             signature.current = ""; lastAnswer.current = null;
           }
           const result = await fetchPaneTranscript(paneId, TRANSCRIPT_LINES);
-          if (cancelled || generation !== olderGeneration.current) return;
+          if (cancelled || !isCurrent() || generation !== olderGeneration.current) return;
           next = { source: "scrollback", turns: [], messages: toTranscriptMessages(result.text).filter((message) => message.role !== "status"), truncated: result.truncated === true };
         }
         showAnswer(conversation, next);
       } catch (cause) {
-        if (cancelled || generation !== olderGeneration.current) return;
+        if (cancelled || !isCurrent() || generation !== olderGeneration.current) return;
         setLoaded(true);
         setError(cause instanceof Error ? cause.message : String(cause));
         setErrorStatus(cause instanceof ApiError ? cause.status : null);
@@ -1018,6 +1192,8 @@ export const ChatView = memo(function ChatView({ paneId, active = true, visible:
   // connection after the pane shows (a fresh attach) is no reconnect: while the mount read is
   // still in flight, that read already answers for it, and a second full read would only repeat it.
   useEffect(() => {
+    // The socket callback fences disconnects synchronously, including edges React batches away.
+    if (onConversationUpdate !== undefined) return;
     const before = seenConnected.current;
     seenConnected.current = connected;
     const reconnect = wasConnected.current;
@@ -1025,7 +1201,7 @@ export const ChatView = memo(function ChatView({ paneId, active = true, visible:
     if (!connected || before || !visible) return;
     if (!reconnect && conversationRefresh.reading) return;
     conversationRefresh.refresh();
-  }, [connected, visible, conversationRefresh]);
+  }, [connected, visible, conversationRefresh, onConversationUpdate]);
 
   const loadOlder = useCallback(async (): Promise<void> => {
     const node = scroller.current;
@@ -1082,34 +1258,87 @@ export const ChatView = memo(function ChatView({ paneId, active = true, visible:
     if (index >= 0) void timeline.current?.scrollToIndex({ index, viewPosition: 0, viewOffset: anchor.offset, animated: false });
   }, [older]);
 
-  // Prompts belong to the visible screen, not the native transcript: a Codex directory-trust
-  // menu can appear while idle without any file mutation. Keep their independent 2s poll.
+  // Idle trust/approval menus need observation even without transcript mutations. An advertised
+  // bridge observes them; older bridges retain this chat's independent 2s REST fallback.
   const pollPrompt = connected && !ended && agent !== null;
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!pollPrompt) { setPrompt(null); setRestored(null); onSuggestionRef.current?.(paneId, null); onRestoredRef.current?.(paneId, null); return; }
     if (!visible) return;
     let cancelled = false;
     let timer = 0;
+    let revision = 0;
+    let reading = false;
+    let requested = false;
+    const socket = promptSession?.socket;
+    const pushes = (): boolean => socket ? socket.promptPushes(paneId) : promptPushes;
+    const sent = sentKeyRef.current;
+    const current = (): boolean => !cancelled && document.visibilityState !== "hidden" && shownPane.current === paneId;
+    const showPrompt = (next: { prompt: InteractivePrompt | null; suggestion: string | null; restored: string | null }): void => {
+      // Keep one object per on-screen occurrence; a null state ends that occurrence.
+      setPrompt((before) => before?.id === next.prompt?.id ? before : next.prompt);
+      if (sentKeyRef.current !== sent) return;
+      onSuggestionRef.current?.(paneId, next.suggestion);
+      setRestored(next.restored);
+      onRestoredRef.current?.(paneId, next.restored);
+    };
     const readPrompt = async (): Promise<void> => {
-      // the same prompt keeps its object: the composer and the card only change with it
-      const sent = sentKeyRef.current;
+      window.clearTimeout(timer);
+      if (!current()) return;
+      if (reading) { requested = true; return; }
+      requested = false;
+      reading = true;
+      const started = revision;
+      const epoch = promptSession?.epoch;
       try {
         const next = await fetchPanePromptState(paneId);
-        if (!cancelled) {
-          setPrompt((current) => current?.id === next.prompt?.id ? current : next.prompt);
-          if (sentKeyRef.current === sent) {
-            onSuggestionRef.current?.(paneId, next.suggestion);
-            setRestored(next.restored);
-            onRestoredRef.current?.(paneId, next.restored);
-          }
+        if (current() && revision === started && promptSession?.epoch === epoch) showPrompt(next);
+      } catch {
+        if (current() && revision === started && promptSession?.epoch === epoch && !pushes()) showPrompt({ prompt: null, suggestion: null, restored: null });
+      } finally {
+        reading = false;
+        if (current()) {
+          if (requested) void readPrompt();
+          else if (!pushes()) timer = window.setTimeout(() => void readPrompt(), PROMPT_POLL_MS);
         }
       }
-      catch { if (!cancelled) { setPrompt(null); setRestored(null); onSuggestionRef.current?.(paneId, null); onRestoredRef.current?.(paneId, null); } }
-      finally { if (!cancelled) timer = window.setTimeout(() => void readPrompt(), PROMPT_POLL_MS); }
     };
-    void readPrompt();
-    return () => { cancelled = true; window.clearTimeout(timer); };
-  }, [pollPrompt, paneId, promptPollKey, promptRefreshKey, fetchPanePromptState, visible]);
+    const applyPush = (message: Extract<ServerMessage, { type: "prompt-push" }>): void => {
+      if (!current() || message.pane_id !== paneId || !pushes()) return;
+      revision++;
+      window.clearTimeout(timer);
+      showPrompt(message);
+    };
+    onPromptUpdate?.(applyPush);
+    const offMessage = socket?.on((message) => {
+      if (!current()) return;
+      if (message.type === "snapshot") {
+        // Reconcile on every connection, including an old/no-feature bridge after reconnect.
+        revision++;
+        void readPrompt();
+      }
+    });
+    const offDisconnect = socket?.onDisconnect(() => {
+      revision++;
+      requested = false;
+      window.clearTimeout(timer);
+    });
+    // Synchronous fence: hide/show may be batched without a React visibility commit.
+    const visibilityChanged = (): void => {
+      revision++;
+      window.clearTimeout(timer);
+      if (current()) void readPrompt();
+    };
+    document.addEventListener("visibilitychange", visibilityChanged);
+    void readPrompt(); // REST bootstrap and explicit answer/send reconciliation remain authoritative.
+    return () => {
+      cancelled = true;
+      revision++;
+      window.clearTimeout(timer);
+      offMessage?.(); offDisconnect?.();
+      onPromptUpdate?.(null);
+      document.removeEventListener("visibilitychange", visibilityChanged);
+    };
+  }, [pollPrompt, paneId, machineId, promptSession, promptPollKey, promptRefreshKey, sentKey, fetchPanePromptState, visible, promptPushes, onPromptUpdate]);
 
   useEffect(() => {
     onPrompt?.(paneId, prompt);
@@ -1331,6 +1560,16 @@ export const ChatView = memo(function ChatView({ paneId, active = true, visible:
   useEffect(() => () => stopRestore.current?.(), []);
   const minimap = useMemo(() => minimapTurns(shownTurns), [shownTurns]);
   const rowKeys = useMemo(() => timelineRows.map((row) => row.key), [timelineRows]);
+  // the conversation's current list: the newest todo call any turn recorded (an agent's list stands
+  // until it clears or rewrites it), drawn once in the pinned panel instead of in the turn that wrote it
+  const currentTodos = useMemo(() => {
+    for (let index = turns.length - 1; index >= 0; index--) {
+      const list = turnTodos(turns[index]!.parts);
+      if (list !== null) return list;
+    }
+    return null;
+  }, [turns]);
+  const [todosOpen, setTodosOpen] = useState(true);
   // a tick takes the reader to its turn: reading there, follow left off
   const jumpToTurn = useCallback((index: number) => {
     pagingAway.current = true; stickToBottom.current = false; setAway(true);
@@ -1340,7 +1579,7 @@ export const ChatView = memo(function ChatView({ paneId, active = true, visible:
     const { turn } = row;
     const live = isLiveWorkTurn(turn, index === shownTurns.length - 1, workStatus, finishedBeforeSend);
     return <RenderBoundary resetKey={turnRevision(turn, true)} fallback={() => <p className="chat-inline-state chat-inline-error">{t("This message can't be shown here. The terminal has it.")}</p>}>
-      <Turn paneId={paneId} turn={turn} live={live} waiting={isWaitingWorkTurn(live, agentStatus)} showThinking={settings.showThinking} skills={skillMatcher} />
+      <Turn paneId={paneId} turn={turn} live={live} waiting={isWaitingWorkTurn(live, agentStatus)} showThinking={settings.showThinking} skills={skillMatcher} userSkills={skillMatcher} />
     </RenderBoundary>;
   }, [shownTurns.length, workStatus, finishedBeforeSend, t, paneId, agentStatus, settings.showThinking, skillMatcher]);
   const header = <>
@@ -1383,6 +1622,7 @@ export const ChatView = memo(function ChatView({ paneId, active = true, visible:
   return <ChatPaneContext.Provider value={paneId}><ChatHistoryContext.Provider value={historyId ?? ""}><ImageViewerContext.Provider value={openViewer}>
     <div className="chat-frame">
     <div className="chat-frame-body">
+    <div className="chat-frame-scroll">
     {state.source === "conversation" ? ChatTimeline === null
       // its chunk is still loading: no turn is read until it arrives, so this is the loading state
       ? <div className="chat-view chat-view-virtual" role="log" aria-live="polite" aria-label={t("conversation of {pane}", { pane: paneId })}>
@@ -1414,6 +1654,9 @@ export const ChatView = memo(function ChatView({ paneId, active = true, visible:
     </div>}
     {state.source === "conversation" && <ChatMinimap turns={minimap} rowKeys={rowKeys} scroller={scroller} onJump={jumpToTurn} />}
     {jump}
+    </div>
+    {/* the agent's own list: the chat's last row, just above the input card */}
+    {state.source === "conversation" && currentTodos !== null && <TodoPanel items={currentTodos} open={todosOpen} onToggle={setTodosOpen} />}
     </div>
     </div>
   {/* The prompt card is not part of the transcript: it is drawn on the composer's column, over the

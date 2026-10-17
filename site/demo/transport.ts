@@ -38,6 +38,10 @@ function redrawHistory(paneId: string): void {
   for (const socket of sockets) socket.renderHistory(paneId);
 }
 const PROMPT_ANSWER_TURN_MS = 2600;
+const ompModels = [
+  { provider: "demo", id: "chat-fast", selector: "demo/chat-fast", name: "Demo fast chat" },
+  { provider: "demo", id: "chat-deep", selector: "demo/chat-deep", name: "Demo deep chat" },
+];
 const CHAT_ANSWER_MS = 2400;
 /** the recording's gaps, capped so the replay stays brisk */
 const MAX_FRAME_GAP_MS = 500;
@@ -318,6 +322,11 @@ function submitToChat(paneId: string, text: string): void {
   const key = keyOfPane.get(paneId);
   const chat = key ? chats.get(key) : undefined;
   if (!chat) return;
+  const selector = text.startsWith("/switch ") ? text.slice(8) : null;
+  if (agentOf(paneId) === "omp" && selector !== null && ompModels.some((model) => model.selector === selector)) {
+    chat.metadata = { ...chat.metadata, model: selector, reasoning_effort: chat.metadata?.reasoning_effort ?? null };
+    return;
+  }
   chat.turns.push({ role: "user", ts: now(), parts: [{ kind: "text", text }] });
   conversationChanged(paneId);
   const agent = agentOf(paneId);
@@ -480,6 +489,7 @@ async function route(url: URL, method: string, init: RequestInit | undefined, in
   if (path === "/api/machines") return json({ machines });
   if (path === "/api/session") return json({ snapshot: snapshot() });
   if (path === "/api/agents") return json(agentsFixture);
+  if (path === "/api/omp/models") return method === "GET" ? json({ models: ompModels }) : error("method_not_allowed", "use GET", 400);
   if (path === "/api/integrations") return json({ integrations: integrationsFixture } satisfies IntegrationsResponse);
   if (path === "/api/updates") return json({ managed: false, auto_update: false, phase: "idle", current_revision: null, latest_revision: null, current_version: __APP_VERSION__, latest_version: null, available: false, checked_at: null, blocked_reason: null, error: null }, 200, { "cache-control": "no-store" });
   if (path === "/api/updates/notes") return json({ revision: null, releases: [], omitted: 0 }, 200, { "cache-control": "no-store" });
@@ -493,6 +503,27 @@ async function route(url: URL, method: string, init: RequestInit | undefined, in
   if (path === "/api/portal/start" || path === "/api/portal/stop") return error("portal_unsupported", "The demo opens no public address.", 409);
   if (path === "/api/access") return json({ port: 7317, tailscale: { state: "running", dns_name: "workstation.example.ts.net", serving_url: "https://workstation.example.ts.net", serve_command: null, serve_url: null } });
   if (path === "/api/usage") return json(usageReport(), 200, { "cache-control": "no-store" });
+  if (path === "/api/usage/login") {
+    if (method === "GET") {
+      if (url.searchParams.has("provider")) return json({ accounts: url.searchParams.get("provider") === "cursor" ? ["cursor@example.test"] : [] });
+      return json({ providers: [
+        { id: "claude", cli: "claude", installed: true, local: true, separate_home: true },
+        { id: "codex", cli: "codex", installed: true, local: true, separate_home: true },
+        { id: "cursor", cli: "Cursor CLI (agent)", installed: true, local: true, separate_home: false },
+        { id: "copilot", cli: "GitHub CLI (gh)", installed: true, local: true, separate_home: false },
+        { id: "grok", cli: "grok", installed: false, local: true, separate_home: false },
+        { id: "antigravity", cli: "Antigravity CLI (agy)", installed: true, local: false, separate_home: false },
+        { id: "opencode", cli: "opencode", installed: true, local: true, separate_home: false },
+      ] });
+    }
+    return error("demo", "This demo cannot run a local CLI. Sign in on an installed server.", 409);
+  }
+  // Public demo never saves management credentials or starts a real OAuth login.
+  if (path === "/api/cliproxy") {
+    if (method === "GET") return json({ configured: false, url: "http://localhost:8317", ok: false, problem: null });
+    return error("demo", "Connect CLIProxyAPI from an installed server, not the public demo.", 409);
+  }
+  if (path === "/api/cliproxy/login" || path === "/api/cliproxy/callback") return error("demo", "Sign in from an installed server, not the public demo.", 409);
   if (path === "/api/push" || path.startsWith("/api/push/")) return error("push_unavailable", "the demo sends no alerts", 404);
   if (path === "/api/machines/settings") return json({ auto_update_bridges: true });
   if (path.startsWith("/api/machines/")) return error("demo", "remote PCs need a real machine", 404);

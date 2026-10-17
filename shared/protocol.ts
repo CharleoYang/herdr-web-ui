@@ -37,6 +37,15 @@ export type HerdrTab = TabInfo;
  */
 export type HerdrPane = PaneInfo & { background_tasks?: number; background_wait?: true; plan?: PlanSummary };
 
+export interface OmpModelChoice {
+  provider: string;
+  id: string;
+  selector: string;
+  name: string;
+}
+
+export interface OmpModelsResponse { models: OmpModelChoice[] }
+
 export type { Machine, MachineEvent, PaneTarget, SetupJob, SetupRequest, SetupAction, BridgeIdentity, BridgeHealth } from "./machines.ts";
 
 /** Machine API (same token gate; mutations require X-Herdr-Machine: 1 + same origin)
@@ -103,6 +112,8 @@ export type { Machine, MachineEvent, PaneTarget, SetupJob, SetupRequest, SetupAc
  *  GET    /api/plugin/action?plugin_id=&log_id= -> PluginActionResult (plugin.log.list: where the
  *         run a POST answered `running` for stands now; `log_id` is that answer's. 404
  *         plugin_log_not_found once herdr's log no longer holds it)
+ *  GET    /api/omp/models                -> OmpModelsResponse (chat models from this PC's
+ *         `omp models --json`, cached for 60 seconds; selection uses terminal submit)
  *  GET    /api/pane/read?pane_id=&source=&format=&lines=  -> { read: PaneReadResult }
  *  GET    /api/pane/scroll?pane_id=      -> { scroll: PaneScrollInfo | null } (where the
  *         viewport sits: its top row in the history is max_offset_from_bottom - offset_from_bottom)
@@ -325,6 +336,22 @@ export interface UsageReport {
   readonly providers: readonly ProviderUsage[];
 }
 
+/** CLIProxyAPI management configuration: the management key never leaves the server. */
+export interface CLIProxyStatus {
+  readonly configured: boolean;
+  readonly url: string;
+  readonly ok: boolean;
+  readonly problem: string | null;
+}
+export type CLIProxyProvider = "claude" | "codex";
+export interface CLIProxyLogin {
+  readonly url: string;
+  readonly state: string;
+}
+export interface CLIProxyLoginStatus {
+  readonly status: "wait" | "ok" | "error";
+}
+
 /** How a request got in, when it did. */
 export type AccessVia = "local" | "tailscale" | "device" | "token" | "open";
 /** Why a request did not. */
@@ -337,6 +364,8 @@ export interface HealthAuth {
   readonly required: boolean;
   readonly authenticated: boolean;
   readonly via?: AccessVia;
+  /** with `via: "token"`: the token came in an `Authorization` header (a proxy sends it), so signing out of this browser would change nothing */
+  readonly bearer?: true;
   readonly role?: DeviceRole;
   readonly reason?: AccessRefusal;
 }
@@ -999,6 +1028,12 @@ export interface SlashCommand {
   source: "builtin" | "user" | "project" | "skill" | "plugin";
   /** `$`: typed as `$name` (Codex skills); otherwise `/name` */
   trigger?: "$";
+  /**
+   * where a skill comes from, for every agent: `user` is the person's own (the agent's own
+   * directory or ~/.agents/skills), `project` the checkout's, `bundled` ships with the agent,
+   * `plugin` comes with one of its plugins
+   */
+  origin?: "user" | "project" | "bundled" | "plugin";
 }
 
 /**
@@ -1079,8 +1114,8 @@ export interface PushPayload {
  *    | pty-ack {pane_id, stream_id, offset} | secret {id, pane_id, prompt, secret}
  *    | watch {pane_id, cols, rows} | unwatch {pane_id} | conversation-watch {pane_id, enabled}
  *  Server -> client frames: snapshot | pty-data | pty-exit | pane-geometry | role-ack
- *    | pane-status | pane-exited | session-changed | conversation-changed | secret-result
- *    | watch-data | watch-end | error
+ *    | pane-status | pane-exited | session-changed | conversation-changed | conversation-delta
+ *    | prompt-push | secret-result | watch-data | watch-end | error
  *
  *  attach {flow_control:"ack"} opts into per-subscription output credit.
  *  pty-data.flow carries a stream_id and cumulative UTF-8 payload offset;
@@ -1181,7 +1216,30 @@ export type ClientMessage =
   | { type: "ping"; id: number };
 
 /** What a server supports beyond the base protocol, listed in its first snapshot; older bridges list nothing. */
-export type ServerFeature = "submit" | "pending-input" | "pending-hold" | "secret-input" | "input-ready" | "take-over" | "watch" | "conversation-watch" | "ping";
+export type ServerFeature =
+  | "submit"
+  | "pending-input"
+  | "pending-hold"
+  | "secret-input"
+  | "input-ready"
+  | "take-over"
+  | "watch"
+  | "conversation-watch"
+  | "ping"
+  | "conversation-delta"
+  | "prompt-push";
+
+/** Complete newest-page replacement from the existing conversation reader; never a turn patch. */
+export interface ConversationPageDelta {
+  /** Previous delta signature on this connection/pane; null means no comparable previous frame. */
+  base_signature: string | null;
+  history_id?: string;
+  source: ConversationResponse["source"];
+  /** Page-start cursor of this complete page; absent or null means none, and is not inherited. */
+  cursor?: string | null;
+  /** All turns in the newest page, in reader order; replace that page atomically. */
+  turns: ConversationTurn[];
+}
 
 export type ServerMessage =
   | { type: "snapshot"; snapshot: SessionSnapshot; features?: ServerFeature[] }
@@ -1212,6 +1270,10 @@ export type ServerMessage =
   | { type: "pane-status"; pane_id: string; agent_status: AgentStatus; /** a pane's running background tasks (OmO's, or a Claude Code pane's subagents and commands), when the frame is about them: it changes no status */ background_tasks?: number; /** every frame says it: absent, the pane does not wait on its turn's background work */ background_wait?: true; /** a pane's plan, when the frame is about it (null: it keeps none now); it changes no status */ plan?: PlanSummary | null }
   /** Native transcript invalidation for an interested attached pane; signature is opaque, not a REST ETag. Refetch the existing conversation endpoint. */
   | { type: "conversation-changed"; pane_id: string; signature: string }
+  /** Newest-page replacement for a snapshot that lists "conversation-delta". Not a turn patch, and not a substitute for conversation-changed. */
+  | { type: "conversation-delta"; pane_id: string; signature: string; delta: ConversationPageDelta }
+  /** Prompt menu for a snapshot that lists "prompt-push". Same body as GET /api/pane/prompt, plus pane_id. null prompt means the menu is gone. */
+  | { type: "prompt-push"; pane_id: string; prompt: InteractivePrompt | null; suggestion: string | null; restored: string | null }
   /** a pane's process exited (pushed even when nobody is attached to it) */
   | { type: "pane-exited"; pane_id: string }
   /** session structure changed (pane created/closed): refetch /api/session */

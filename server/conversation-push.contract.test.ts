@@ -4,13 +4,21 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ClientMessage, ConversationResponse, ServerMessage } from "../shared/protocol.ts";
 import { ConversationMonitor } from "./conversation-monitor.ts";
+import * as conversationReader from "./conversation.ts";
 import { forgetTranscriptState } from "./conversation.ts";
+import { CompletionTracker } from "./completion.ts";
 import { createServer } from "./index.ts";
 import { herdrRpc, sessionSnapshot, workspaceClose, workspaceCreate } from "./herdr/client.ts";
+import * as herdrClient from "./herdr/client.ts";
+import { HerdrSocket } from "../src/lib/ws.ts";
+import { DeviceStore } from "./devices.ts";
+import { MachineManager } from "./machines.ts";
 
 type TestBridge = { port: number; stop: () => void };
 type ConversationChanged = Extract<ServerMessage, { type: "conversation-changed" }>;
-
+type ConversationDelta = Extract<ServerMessage, { type: "conversation-delta" }>;
+type PromptPush = Extract<ServerMessage, { type: "prompt-push" }>;
+type PromptState = Omit<PromptPush, "type" | "pane_id">;
 // These integration tests exercise real native-file stat ticks and asynchronous herdr/WS
 // lifecycles. Platform timers cannot be faked; all waits name a condition and a deadline.
 async function until(check: () => boolean | Promise<boolean>, label: string): Promise<void> {
@@ -25,13 +33,18 @@ class TranscriptSocket {
   readonly frames: ServerMessage[] = [];
   readonly ws: WebSocket;
 
-  constructor(bridge: TestBridge) {
-    this.ws = new WebSocket(`ws://127.0.0.1:${bridge.port}/ws`);
+  constructor(bridge: TestBridge, path = "/ws", cookie?: string, private readonly label = "socket") {
+    const RuntimeSocket = WebSocket as unknown as new (url: string, options: { headers: { cookie: string } }) => WebSocket;
+    const url = `ws://127.0.0.1:${bridge.port}${path}`;
+    this.ws = cookie ? new RuntimeSocket(url, { headers: { cookie } }) : new WebSocket(url);
     this.ws.addEventListener("message", (event) => this.frames.push(JSON.parse(String(event.data)) as ServerMessage));
   }
 
   async open(): Promise<void> {
-    await until(() => this.frames.some((frame) => frame.type === "snapshot"), "socket snapshot");
+    await until(() => {
+      if (this.ws.readyState === WebSocket.CLOSED) throw new Error(`${this.label}: upgrade refused or socket closed before authenticated snapshot`);
+      return this.frames.some((frame) => frame.type === "snapshot");
+    }, `${this.label}: authenticated snapshot`);
   }
 
   send(message: ClientMessage): void { this.ws.send(JSON.stringify(message)); }
@@ -40,13 +53,22 @@ class TranscriptSocket {
     let found: ServerMessage | undefined;
     await until(() => {
       found = this.frames.find((frame, index) => index >= after && predicate(frame));
+      if (!found && this.label !== "socket") {
+        const failure = this.frames.slice(after).find((frame) => frame.type === "error");
+        if (failure?.type === "error") throw new Error(`${this.label}: ${failure.code}: ${failure.message}`);
+        if (this.ws.readyState === WebSocket.CLOSED) throw new Error(`${this.label}: socket closed awaiting frame`);
+      }
       return found !== undefined;
-    }, "expected websocket frame");
+    }, `${this.label}: expected websocket frame`);
     return found!;
   }
 
   async changed(paneId: string, after = 0): Promise<ConversationChanged> {
     return await this.waitFor((frame) => frame.type === "conversation-changed" && frame.pane_id === paneId, after) as ConversationChanged;
+  }
+
+  async delta(paneId: string, after = 0): Promise<ConversationDelta> {
+    return await this.waitFor((frame) => frame.type === "conversation-delta" && frame.pane_id === paneId, after) as ConversationDelta;
   }
 }
 
@@ -456,6 +478,510 @@ describe("native conversation invalidation", () => {
     b.ws.close();
   }, 45_000);
 
+  it("sends complete reader pages after invalidation with connection-local bases and lifecycle resets", async () => {
+    writeFileSync(path, transcript("delta initial"));
+    await report();
+    const first = await connect();
+    const second = await connect();
+    const terminal = await connect();
+    const unattached = await connect();
+    const snapshot = first.frames.find((frame) => frame.type === "snapshot");
+    expect(snapshot?.type === "snapshot" && snapshot.features).toContain("conversation-delta");
+    expect(snapshot?.type === "snapshot" && snapshot.features).toContain("prompt-push");
+    attach(first);
+    watch(first);
+    const initial = await first.delta(paneId);
+    expect(initial.delta.base_signature).toBeNull();
+    attach(second);
+    watch(second);
+    await barrier(second);
+    attach(terminal);
+    await terminal.waitFor((frame) => frame.type === "input-ready");
+    watch(unattached);
+    await unattached.waitFor((frame) => frame.type === "error" && frame.code === "not_attached");
+    let afterFirst = first.frames.length;
+    let afterSecond = second.frames.length;
+    appendFileSync(path, `${JSON.stringify({ type: "message", message: { role: "assistant", content: [{ type: "text", text: "delta newest complete answer" }] } })}\n`);
+    const newest = await first.delta(paneId, afterFirst);
+    const other = await second.delta(paneId, afterSecond);
+    const page = await read();
+    expect(newest.delta).toEqual({ base_signature: initial.signature, source: page.source, history_id: page.history_id, cursor: page.cursor, turns: page.turns });
+    expect(other.delta).toEqual({ ...newest.delta, base_signature: null });
+    const changedIndex = first.frames.findIndex((frame) => frame.type === "conversation-changed" && frame.signature === newest.signature);
+    expect(changedIndex).toBeGreaterThanOrEqual(afterFirst);
+    expect(changedIndex).toBeLessThan(first.frames.indexOf(newest));
+    expect(terminal.frames.some((frame) => frame.type === "conversation-delta")).toBe(false);
+    expect(unattached.frames.some((frame) => frame.type === "conversation-delta")).toBe(false);
+
+    watch(first, false);
+    await barrier(first);
+    watch(first);
+    await barrier(first);
+    afterFirst = first.frames.length;
+    afterSecond = second.frames.length;
+    appendFileSync(path, `${JSON.stringify({ type: "model_change", modelId: "reset-interest" })}\n`);
+    const reset = await first.delta(paneId, afterFirst);
+    const continued = await second.delta(paneId, afterSecond);
+    expect(reset.delta.base_signature).toBeNull();
+    expect(continued.delta.base_signature).toBe(other.signature);
+
+    first.send({ type: "detach", pane_id: paneId });
+    await barrier(first);
+    afterFirst = first.frames.length;
+    attach(first);
+    await first.waitFor((frame) => frame.type === "pane-geometry", afterFirst);
+    watch(first);
+    await barrier(first);
+    afterFirst = first.frames.length;
+    // A native reader-confirmed empty page is a replacement, not a failed read.
+    writeFileSync(path, `${JSON.stringify({ type: "session", version: 3, id: "empty-session", cwd: root })}\n`);
+    const empty = await first.delta(paneId, afterFirst);
+    const emptyPage = await read();
+    expect(emptyPage.turns).toEqual([]);
+    expect(empty.delta).toEqual({ base_signature: null, source: emptyPage.source, history_id: emptyPage.history_id, cursor: emptyPage.cursor, turns: [] });
+    const response = await fetch(`http://127.0.0.1:${bridge.port}/api/pane/conversation?pane_id=${encodeURIComponent(paneId)}`);
+    const etag = response.headers.get("etag")!;
+    expect(etag).toMatch(/^W\//);
+    const unchanged = await fetch(`http://127.0.0.1:${bridge.port}/api/pane/conversation?pane_id=${encodeURIComponent(paneId)}`, { headers: { "if-none-match": etag } });
+    expect(unchanged.status).toBe(304);
+
+    const monitor = monitors.get(paneId)!;
+    for (const socket of [first, second, terminal, unattached]) socket.ws.close();
+    await until(() => monitor.size === 0, "delta fanout subscriptions released");
+    const reconnected = await connect();
+    attach(reconnected);
+    watch(reconnected);
+    expect((await reconnected.delta(paneId)).delta.base_signature).toBeNull();
+    reconnected.ws.close();
+    await until(() => monitor.size === 0, "reconnected subscription released");
+  }, 45_000);
+
+  it("serializes pane reads and rejects superseded observations and pre/post-read identity changes", async () => {
+    writeFileSync(path, transcript("race initial"));
+    await report();
+    const socket = await connect();
+    attach(socket);
+    watch(socket);
+    const initial = await socket.delta(paneId);
+    const actualRead = conversationReader.paneConversation;
+    const entered = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    let reads = 0;
+    const delayed = spyOn(conversationReader, "paneConversation").mockImplementation(async (...args) => {
+      const page = await actualRead(...args);
+      if (++reads === 1) { entered.resolve(); await release.promise; }
+      return page;
+    });
+    try {
+      const after = socket.frames.length;
+      appendFileSync(path, `${JSON.stringify({ type: "model_change", modelId: "race first" })}\n`);
+      const stale = await socket.changed(paneId, after);
+      await entered.promise;
+      const beforeNew = socket.frames.length;
+      appendFileSync(path, `${JSON.stringify({ type: "message", message: { role: "assistant", content: [{ type: "text", text: "race authoritative newest" }] } })}\n`);
+      const latest = await socket.changed(paneId, beforeNew);
+      expect(reads).toBe(1);
+      release.resolve();
+      const accepted = await socket.delta(paneId, after);
+      expect(accepted.signature).toBe(latest.signature);
+      expect(accepted.delta.base_signature).toBe(initial.signature);
+      expect(socket.frames.some((frame) => frame.type === "conversation-delta" && frame.signature === stale.signature)).toBe(false);
+      delayed.mockRestore();
+      const authoritative = await read();
+      expect(accepted.delta.turns).toEqual(authoritative.turns);
+
+      // Change the inode after the actual read, before the monitor's next stat tick.
+      // The read-side identity check, rather than only newer-notification detection, must reject it.
+      let replaced = false;
+      const replacementRead = spyOn(conversationReader, "paneConversation").mockImplementation(async (...args) => {
+        const page = await actualRead(...args);
+        if (!replaced) {
+          replaced = true;
+          writeFileSync(`${path}.race`, transcript("post-read replacement"));
+          renameSync(`${path}.race`, path);
+        }
+        return page;
+      });
+      try {
+        const beforeReplace = socket.frames.length;
+        appendFileSync(path, `${JSON.stringify({ type: "model_change", modelId: "replace during read" })}\n`);
+        const obsolete = await socket.changed(paneId, beforeReplace);
+        const replacementDelta = await socket.delta(paneId, beforeReplace);
+        expect(replacementDelta.signature).not.toBe(obsolete.signature);
+        expect(replacementDelta.delta.base_signature).toBe(accepted.signature);
+        expect(socket.frames.some((frame) => frame.type === "conversation-delta" && frame.signature === obsolete.signature)).toBe(false);
+        expect(replacementDelta.delta.turns).toEqual((await read()).turns);
+      } finally { replacementRead.mockRestore(); }
+    } finally {
+      release.resolve();
+      delayed.mockRestore();
+      socket.ws.close();
+      await until(() => monitors.get(paneId)!.size === 0, "race subscription released");
+    }
+  }, 45_000);
+
+  it("counts the complete UTF-8 envelope inclusively and never advances bases on oversize or failed reads", async () => {
+    writeFileSync(path, transcript("size initial"));
+    await report();
+    const socket = await connect();
+    attach(socket);
+    watch(socket);
+    let previous = await socket.delta(paneId);
+    const actualRead = conversationReader.paneConversation;
+    let size = 262144;
+    let mode: "size" | "error" | "native" = "size";
+    let reads = 0;
+    const monitor = monitors.get(paneId)!;
+    const actualMatch = monitor.matches.bind(monitor);
+    const verified: string[] = [];
+    const matching = spyOn(monitor, "matches").mockImplementation(async (id, signature) => {
+      const stable = await actualMatch(id, signature);
+      if (stable) verified.push(signature);
+      return stable;
+    });
+    const sized = spyOn(conversationReader, "paneConversation").mockImplementation(async (...args) => {
+      reads++;
+      if (mode === "error") throw new Error("native read failed");
+      const page = await actualRead(...args);
+      if (mode === "native") return page;
+      // A reader fixture isolates the byte gate, including JSON escaping and multibyte text.
+      const text = { kind: "text" as const, text: "😀\"\\\n" };
+      const turns = [{ role: "assistant" as const, ts: null, parts: [text] }];
+      const envelope: ConversationDelta = { type: "conversation-delta", pane_id: paneId, signature: "x".repeat(22), delta: { base_signature: previous.signature, source: page.source, history_id: page.history_id, cursor: page.cursor, turns } };
+      text.text += "x".repeat(size - Buffer.byteLength(JSON.stringify(envelope)));
+      return { ...page, turns };
+    });
+    try {
+      let after = socket.frames.length;
+      appendFileSync(path, `${JSON.stringify({ type: "model_change", modelId: "exact-limit" })}\n`);
+      const exact = await socket.delta(paneId, after);
+      expect(Buffer.byteLength(JSON.stringify(exact))).toBe(262144);
+      expect(exact.delta.turns[0]!.parts[0]).toMatchObject({ kind: "text", text: expect.stringContaining("😀\"\\\n") });
+      previous = exact;
+      size = 262145;
+      after = socket.frames.length;
+      const beforeOversize = reads;
+      appendFileSync(path, `${JSON.stringify({ type: "model_change", modelId: "over-limit" })}\n`);
+      const oversized = await socket.changed(paneId, after);
+      await until(() => reads > beforeOversize, "oversized reader page attempted");
+      await until(() => verified.filter((signature) => signature === oversized.signature).length === 2, "oversized complete page passed both identity gates");
+      mode = "error";
+      const beforeError = reads;
+      appendFileSync(path, `${JSON.stringify({ type: "model_change", modelId: "read-error" })}\n`);
+      const failed = await socket.changed(paneId, socket.frames.indexOf(oversized) + 1);
+      await until(() => reads > beforeError, "reader failure attempted");
+      mode = "native";
+      appendFileSync(path, `${JSON.stringify({ type: "message", message: { role: "assistant", content: [{ type: "text", text: "after failure native answer" }] } })}\n`);
+      const recovered = await socket.delta(paneId, after);
+      expect(recovered.delta.base_signature).toBe(exact.signature);
+      expect(recovered.delta.turns).toEqual((await read()).turns);
+      for (const signature of [oversized.signature, failed.signature]) {
+        expect(socket.frames.some((frame) => frame.type === "conversation-delta" && frame.signature === signature)).toBe(false);
+      }
+    } finally {
+      sized.mockRestore();
+      matching.mockRestore();
+      socket.ws.close();
+      await until(() => monitors.get(paneId)!.size === 0, "size subscription released");
+    }
+  }, 45_000);
+
+  it("pushes authoritative idle-screen menus, changes and disappearance without transcript writes, deduplicating repeats", async () => {
+    const reader = await connect();
+    const terminal = await connect();
+    let screen = "No menu on this valid idle screen.";
+    let observations = 0;
+    const actualRead = herdrClient.paneRead;
+    const screens = spyOn(herdrClient, "paneRead").mockImplementation(async (...args) => {
+      const result = await actualRead(...args);
+      if (args[0].paneId !== paneId || args[0].source !== "detection") return result;
+      observations++;
+      return { ...result, text: screen };
+    });
+    const menu = (question: string) => `
+╭─ Ask ───────────────────╮
+│ ${question}             │
+├─────────────────────────┤
+│❯ ○ Jetson Orin          │
+│  ○ RK3588               │
+│  ○ Other (type your own) │
+├─────────────────────────┤
+│ Enter select · n note · ↑/↓ move · Esc cancel
+╰─────────────────────────╯`;
+    const promptFrames = () => reader.frames.filter((frame) => frame.type === "prompt-push");
+    const oracle = async () => {
+      const response = await fetch(`http://127.0.0.1:${bridge.port}/api/pane/prompt?pane_id=${encodeURIComponent(paneId)}`);
+      expect(response.status).toBe(200);
+      return await response.json() as PromptState;
+    };
+    try {
+      attach(terminal);
+      await terminal.waitFor((frame) => frame.type === "input-ready");
+      attach(reader); watch(reader);
+      const initial = await reader.waitFor((frame) => frame.type === "prompt-push");
+      expect(initial).toEqual({ type: "prompt-push", pane_id: paneId, prompt: null, suggestion: null, restored: null });
+      let after = reader.frames.length;
+      screen = menu("Which target?");
+      const appeared = await reader.waitFor((frame) => frame.type === "prompt-push" && frame.prompt !== null, after);
+      expect(appeared).toEqual({ type: "prompt-push", pane_id: paneId, ...await oracle() });
+      if (appeared.type !== "prompt-push") throw new Error("expected prompt frame");
+      expect(appeared.prompt).toMatchObject({ kind: "question", question: "Which target?" });
+      const count = promptFrames().length;
+      const beforeRepeat = observations;
+      await until(() => observations >= beforeRepeat + 2, "same menu observed twice");
+      await barrier(reader);
+      expect(promptFrames().length).toBe(count);
+      after = reader.frames.length;
+      screen = menu("Which board?");
+      const changed = await reader.waitFor((frame) => frame.type === "prompt-push" && frame.prompt?.question === "Which board?", after);
+      expect(changed).toEqual({ type: "prompt-push", pane_id: paneId, ...await oracle() });
+      after = reader.frames.length;
+      screen = "No menu on this valid idle screen.";
+      const disappeared = await reader.waitFor((frame) => frame.type === "prompt-push" && frame.prompt === null, after);
+      expect(disappeared).toEqual({ type: "prompt-push", pane_id: paneId, ...await oracle() });
+      expect(terminal.frames.some((frame) => frame.type === "prompt-push")).toBe(false);
+      watch(reader, false); await barrier(reader);
+      const released = reader.frames.length;
+      watch(reader);
+      const rejoined = await reader.waitFor((frame) => frame.type === "prompt-push", released);
+      expect(rejoined).toEqual(disappeared); // Fresh interest must receive even unchanged initial null.
+    } finally {
+      watch(reader, false); await barrier(reader);
+      reader.ws.close(); terminal.ws.close();
+      screens.mockRestore();
+    }
+  }, 30_000);
+
+  it("matches local and real machine-relay REST plan policy without treating observe as a watch credential", async () => {
+    const state = join(root, "plan-policy");
+    const deviceStore = new DeviceStore(state);
+    const device = deviceStore.pair(deviceStore.startPairing().code, "Watch plan", "watch")!;
+    deviceStore.match(device.token);
+    const cookie = `herdr_web_device=${device.token}`;
+    const config = join(root, ".claude");
+    const sessionId = "01a0c7a1-56d9-7e20-9f08-f7a2d973bcff";
+    const project = root.replace(/[^a-zA-Z0-9]/g, "-");
+    mkdirSync(join(config, "projects", project), { recursive: true });
+    mkdirSync(join(config, "plans"), { recursive: true });
+    const transcript = join(config, "projects", project, `${sessionId}.jsonl`);
+    const planFile = join(config, "plans", "private-plan.md");
+    writeFileSync(transcript, `${JSON.stringify({ type: "user", slug: "private-plan" })}\n`);
+    const fileMarker = `T04_PRIVATE_PLAN_${sessionId}`;
+    writeFileSync(planFile, `# Private plan\n1. Secret step absent from the screen. ${fileMarker}\n4. Visible last step.\n`);
+    const nativeScreen = join(state, "plan-screen.txt");
+    writeFileSync(nativeScreen, `Ready to code?
+
+Here is Claude's plan:
+4. Visible last step.
+
+Claude has written up a plan and is ready to execute. Would you like to proceed?
+
+❯ 1. Yes, auto-accept edits
+  2. Yes, manually approve edits
+  3. Tell Claude what to change
+     shift+tab to approve with this feedback
+`);
+    const executable = join(root, "bin", "claude");
+    writeFileSync(executable, `#!/bin/sh\nprintf '\\033[2J\\033[H'\ncat '${nativeScreen}'\nsleep 600\n`);
+    chmodSync(executable, 0o755);
+    const owned = await workspaceCreate({ cwd: root, label: "herdr-web-ui-test-plan-policy" });
+    const planPane = owned.root_pane.pane_id;
+    const actualEndpoint = MachineManager.prototype.endpoint;
+    let upstream: TestBridge | undefined;
+    let connection: TestBridge | undefined;
+    let restoreEndpoint: (() => void) | undefined;
+    const clients: TranscriptSocket[] = [];
+    try {
+      await herdrRpc("pane.send_text", { pane_id: planPane, text: `HOME='${root}' CLAUDE_CONFIG_DIR='${config}' '${executable}'\n` });
+      await until(async () => (await sessionSnapshot()).panes.find((pane) => pane.pane_id === planPane)?.agent === "claude", "owned native Claude fixture detected");
+      await herdrRpc("pane.report_agent_session", { pane_id: planPane, source: "herdr:claude", agent: "claude", seq: ++reportSeq, agent_session_id: sessionId, session_start_source: "startup" });
+      await herdrRpc("pane.report_agent", { pane_id: planPane, source: "herdr:claude", agent: "claude", state: "blocked", seq: ++reportSeq });
+      await until(async () => (await herdrClient.paneRead({ paneId: planPane, source: "detection" })).text.includes("shift+tab to approve with this feedback"), "native plan screen painted");
+      upstream = createServer({ port: 0, hostname: "127.0.0.1", token: "plan-policy-upstream", stateDir: join(state, "upstream"), machines: false, terminalAttach: false });
+      const upstreamPort = upstream.port;
+      const endpoint = spyOn(MachineManager.prototype, "endpoint").mockImplementation(function (this: MachineManager, id) {
+        return id === "plan-policy-pc" ? { url: `http://127.0.0.1:${upstreamPort}`, token: "plan-policy-upstream" } : actualEndpoint.call(this, id);
+      });
+      restoreEndpoint = () => endpoint.mockRestore();
+      connection = createServer({ port: 0, hostname: "127.0.0.1", token: "plan-policy-owner", stateDir: state, terminalAttach: false });
+      // Snapshot starts discovery but deliberately does not await transcript resolution. These
+      // owner-only bootstrap sockets never attach or enable conversation interest. Prove each
+      // real bridge's reader is enriched before any policy's first-interest assertion.
+      for (const [target, token, name] of [
+        [connection, "plan-policy-owner", "connection"],
+        [upstream, "plan-policy-upstream", "private-upstream"],
+      ] as const) {
+        const ownerCookie = `herdr_web_token=${token}`;
+        const bootstrap = new TranscriptSocket(target, "/ws", ownerCookie, `${name}/setup`);
+        clients.push(bootstrap);
+        await bootstrap.open();
+        let last: unknown = null;
+        try {
+          await until(async () => {
+            const response = await fetch(`http://127.0.0.1:${target.port}/api/pane/prompt?pane_id=${encodeURIComponent(planPane)}&plan=1`, { headers: { cookie: ownerCookie } });
+            if (!response.ok) throw new Error(`${name}/setup: owner HTTP ${response.status}`);
+            const oracle = await response.json() as PromptState;
+            last = oracle;
+            return oracle.prompt?.kind === "plan" && oracle.prompt.plan_file === planFile
+              && oracle.prompt.body?.includes(fileMarker) === true;
+          }, `${name}/setup: full-owner file enrichment`);
+        } catch (error) {
+          throw new Error(`${name}/setup: enrichment unavailable; last owner HTTP=${JSON.stringify(last)}`, { cause: error });
+        }
+      }
+      for (const remote of [false, true]) {
+        for (const policy of ["owner", "observe-owner", "watch", "reduced-owner"] as const) {
+          const restricted = policy === "watch" || policy === "reduced-owner";
+          const search = new URLSearchParams();
+          if (remote) search.set("machine_id", "plan-policy-pc");
+          // A watch credential's plan=1 must not elevate it. plan=0 only narrows an owner.
+          search.set("plan", policy === "reduced-owner" ? "0" : "1");
+          const label = `${remote ? "relay" : "local"}/${policy}/policy`;
+          // Both HTTP and WS use the same source identity. Never send the owner token with watch.
+          const credential = policy === "watch" ? cookie : "herdr_web_token=plan-policy-owner";
+          const client = new TranscriptSocket(connection, `/ws?${search}`, credential, label);
+          clients.push(client);
+          try {
+            await client.open();
+            const authenticated = client.frames.find((frame) => frame.type === "snapshot");
+            expect(authenticated).toMatchObject({ type: "snapshot", features: expect.arrayContaining(["prompt-push", "conversation-watch"]) });
+            if (authenticated?.type !== "snapshot") throw new Error(`${label}: missing authenticated snapshot`);
+            expect(authenticated.snapshot.panes.some((pane) => pane.pane_id === planPane && pane.agent === "claude")).toBe(true);
+            if (policy === "observe-owner") await barrier(client, "observe");
+            if (policy === "watch") {
+              client.send({ type: "role", mode: "interact" });
+              await client.waitFor((frame) => frame.type === "role-ack" && frame.mode === "observe");
+            }
+            client.send({ type: "attach", pane_id: planPane, cols: 80, rows: 24, keep_size: true });
+            await client.waitFor((frame) => frame.type === "input-ready" && frame.pane_id === planPane);
+            client.send({ type: "conversation-watch", pane_id: planPane, enabled: true });
+            await barrier(client, policy === "watch" || policy === "observe-owner" ? "observe" : "interact");
+            const pushed = await client.waitFor((frame) => frame.type === "prompt-push" && frame.pane_id === planPane) as PromptPush;
+            expect(pushed.prompt?.kind).toBe("plan");
+            const route = remote ? "/api/machines/plan-policy-pc/pane/prompt" : "/api/pane/prompt";
+            const url = new URL(`http://127.0.0.1:${connection.port}${route}`);
+            url.searchParams.set("pane_id", planPane);
+            url.searchParams.set("plan", policy === "reduced-owner" ? "0" : "1");
+            const response = await fetch(url, { headers: { cookie: credential } });
+            expect(response.status).toBe(200);
+            const oracle = await response.json() as PromptState;
+            expect(oracle.prompt?.kind).toBe("plan");
+            expect(pushed).toEqual({ type: "prompt-push", pane_id: planPane, ...oracle });
+            if (restricted) {
+              expect(pushed.prompt).not.toHaveProperty("plan_file");
+              expect(pushed.prompt?.body).toContain("Visible last step.");
+              expect(JSON.stringify(pushed)).not.toContain("Secret step");
+              expect(JSON.stringify(pushed)).not.toContain(planFile);
+              expect(JSON.stringify(pushed)).not.toContain(fileMarker);
+            } else {
+              expect(pushed.prompt?.plan_file).toBe(planFile);
+              expect(pushed.prompt?.body).toContain("Secret step absent from the screen.");
+              expect(pushed.prompt?.body).toContain(fileMarker);
+            }
+            client.ws.close();
+          } catch (error) {
+            throw new Error(`${label}: first-interest REST/push policy assertion failed`, { cause: error });
+          }
+        }
+      }
+    } finally {
+      for (const client of clients) client.ws.close();
+      connection?.stop(); upstream?.stop();
+      restoreEndpoint?.();
+      await workspaceClose(owned.workspace.workspace_id);
+    }
+  }, 45_000);
+
+  it("discards a slow prompt read across unwatch/reattach, serializes its successor and never pushes failure as null", async () => {
+    const socket = await connect();
+    attach(socket);
+    await socket.waitFor((frame) => frame.type === "input-ready");
+    const actualRead = herdrClient.paneRead;
+    const gate = Promise.withResolvers<void>();
+    const successor = Promise.withResolvers<void>();
+    let started = 0;
+    let settled = 0;
+    let active = 0;
+    let maximum = 0;
+    let fail = false;
+    const reads = spyOn(herdrClient, "paneRead").mockImplementation(async (...args) => {
+      if (args[0].paneId !== paneId || args[0].source !== "detection") return actualRead(...args);
+      const number = ++started;
+      maximum = Math.max(maximum, ++active);
+      try {
+        if (number === 1) await gate.promise;
+        if (number === 2) await successor.promise;
+        if (fail) throw new Error("authoritative screen temporarily unavailable");
+        return { ...await actualRead(...args), text: "No menu on this valid idle screen." };
+      } finally { active--; settled++; }
+    });
+    try {
+      watch(socket);
+      await until(() => started === 1, "first prompt read in flight");
+      // Real-clock integration: global fake time also replaces collector/WS readiness.
+      // fixed wait: a pending read must remain alone across the real bridge observation interval.
+      await new Promise<void>((resolve) => setTimeout(resolve, 2_100));
+      expect(started).toBe(1);
+      watch(socket, false);
+      socket.send({ type: "detach", pane_id: paneId });
+      await barrier(socket);
+      attach(socket); watch(socket); await barrier(socket);
+      expect(started).toBe(1);
+      gate.resolve();
+      await until(() => started === 2, "successor prompt read in flight");
+      await barrier(socket);
+      expect(socket.frames.some((frame) => frame.type === "prompt-push")).toBe(false);
+      successor.resolve();
+      await socket.waitFor((frame) => frame.type === "prompt-push");
+      expect(maximum).toBe(1);
+      watch(socket, false); await barrier(socket);
+      fail = true;
+      const after = socket.frames.length;
+      const beforeFailure = settled;
+      watch(socket);
+      await until(() => settled > beforeFailure, "failed prompt read settled");
+      await barrier(socket);
+      expect(socket.frames.slice(after).some((frame) => frame.type === "prompt-push")).toBe(false);
+      fail = false;
+      await socket.waitFor((frame) => frame.type === "prompt-push" && frame.prompt === null, after);
+      watch(socket, false); await barrier(socket);
+      const beforeRelease = started;
+      // A new terminal-only connection and its attach must not restart prompt observation.
+      const terminal = await connect(); attach(terminal);
+      await terminal.waitFor((frame) => frame.type === "input-ready");
+      await barrier(terminal);
+      expect(started).toBe(beforeRelease);
+      terminal.ws.close();
+    } finally {
+      gate.resolve();
+      successor.resolve();
+      watch(socket, false); await barrier(socket);
+      socket.ws.close();
+      reads.mockRestore();
+    }
+  }, 30_000);
+
+  it("does not send optional pushes on a connection that has not advertised them", async () => {
+    const snapshotFailure = spyOn(CompletionTracker.prototype, "readSnapshot").mockRejectedValue(new Error("snapshot unavailable"));
+    const socket = new TranscriptSocket(bridge);
+    sockets.push(socket);
+    try {
+      await socket.waitFor((frame) => frame.type === "error" && frame.code === "snapshot_failed");
+    } finally { snapshotFailure.mockRestore(); }
+    expect(socket.frames.some((frame) => frame.type === "snapshot")).toBe(false);
+    attach(socket);
+    watch(socket);
+    const after = socket.frames.length;
+    appendFileSync(path, `${JSON.stringify({ type: "model_change", modelId: "undeclared-push" })}\n`);
+    const changed = await socket.changed(paneId, after);
+    expect(changed.signature).toEqual(expect.any(String));
+    expect(Object.keys(changed).sort()).toEqual(["pane_id", "signature", "type"]);
+    expect(socket.frames.some((frame) => frame.type === "conversation-delta" || frame.type === "prompt-push")).toBe(false);
+    watch(socket, false);
+    socket.ws.close();
+  }, 30_000);
+
+
   it("releases native interest when the owned pane ends and refuses a stale enable", async () => {
     const socket = await connect();
     attach(socket);
@@ -475,4 +1001,66 @@ describe("native conversation invalidation", () => {
     expect(monitor.size).toBe(0);
     socket.ws.close();
   }, 25_000);
+});
+
+it("routes prompt frames only through advertised current-connection visible chat interest, retaining legacy fallback gates", () => {
+  class PromptSocket extends EventTarget {
+    static readonly OPEN = 1;
+    static readonly CONNECTING = 0;
+    static last: PromptSocket;
+    readyState = 0;
+    constructor(_url: string) { super(); PromptSocket.last = this; }
+    send(_data: string): void {}
+    close(): void { this.readyState = 3; }
+    open(): void { this.readyState = 1; this.dispatchEvent(new Event("open")); }
+    receive(message: unknown): void { this.dispatchEvent(new MessageEvent("message", { data: JSON.stringify(message) })); }
+    disconnect(): void { this.readyState = 3; this.dispatchEvent(Object.assign(new Event("close"), { code: 1006 })); }
+  }
+  const descriptors = new Map(["WebSocket", "window", "document"].map((key) => [key, Object.getOwnPropertyDescriptor(globalThis, key)]));
+  const page = Object.assign(new EventTarget(), { visibilityState: "visible" });
+  Object.defineProperty(globalThis, "WebSocket", { configurable: true, writable: true, value: PromptSocket });
+  Object.defineProperty(globalThis, "window", { configurable: true, writable: true, value: globalThis });
+  Object.defineProperty(globalThis, "document", { configurable: true, writable: true, value: page });
+  const client = new HerdrSocket("ws://prompt-fixture/ws");
+  const received: ServerMessage[] = [];
+  client.on((message) => { if (message.type === "prompt-push") received.push(message); });
+  const state: ServerMessage = { type: "prompt-push", pane_id: "w1:p1", prompt: null, suggestion: "next suggestion", restored: null };
+  const snapshot = (features: string[]) => ({ type: "snapshot", snapshot: { panes: [], workspaces: [], agents: [], layouts: [] }, features });
+  try {
+    client.connect();
+    const first = PromptSocket.last; first.open();
+    client.attach("w1:p1", 80, 24, true); client.watchConversation("w1:p1", true);
+    first.receive(state); // Unknown snapshot must not disable REST polling or deliver prompt frames.
+    expect(client.promptPushes("w1:p1")).toBe(false);
+    first.receive(snapshot(["conversation-watch"])); first.receive(state);
+    expect(client.promptPushes("w1:p1")).toBe(false);
+    expect(received).toEqual([]);
+    first.receive(snapshot(["conversation-watch", "prompt-push"]));
+    expect(client.promptPushes("w1:p1")).toBe(true);
+    first.receive({ ...state, pane_id: "w1:p2" });
+    first.receive(state);
+    page.visibilityState = "hidden"; first.receive({ ...state, suggestion: "hidden" });
+    page.visibilityState = "visible";
+    client.watchConversation("w1:p1", false); first.receive({ ...state, suggestion: "unwatched" });
+    expect(client.promptPushes("w1:p1")).toBe(false);
+    client.watchConversation("w1:p1", true);
+    client.detach("w1:p1"); first.receive({ ...state, suggestion: "detached" });
+    expect(client.promptPushes("w1:p1")).toBe(false);
+    client.attach("w1:p1", 80, 24, true);
+    first.disconnect(); client.connect();
+    const fresh = PromptSocket.last; fresh.open();
+    first.receive({ ...state, suggestion: "stale socket" }); fresh.receive(state);
+    expect(client.promptPushes("w1:p1")).toBe(false);
+    fresh.receive(snapshot(["conversation-watch"])); fresh.receive(state);
+    expect(client.promptPushes("w1:p1")).toBe(false);
+    fresh.receive(snapshot(["conversation-watch", "prompt-push"]));
+    const reconnected = { ...state, suggestion: "reconnected" }; fresh.receive(reconnected);
+    expect(received).toEqual([state, reconnected]);
+  } finally {
+    client.close();
+    for (const [key, descriptor] of descriptors) {
+      if (descriptor) Object.defineProperty(globalThis, key, descriptor);
+      else Reflect.deleteProperty(globalThis, key);
+    }
+  }
 });

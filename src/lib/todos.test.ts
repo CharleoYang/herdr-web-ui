@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { parseTodoAnswer, todoCallSummary } from "./todos.ts";
+import { parseTodoAnswer, parseTodoInput, todoCallSummary, turnTodos } from "./todos.ts";
 
 const call = (name: string, input: unknown, output = "") => ({ kind: "tool" as const, name, summary: name, input: JSON.stringify(input), output });
 
@@ -47,9 +47,42 @@ describe("parseTodoAnswer", () => {
 describe("todoCallSummary", () => {
   it("says what a call did in one line", () => {
     expect(todoCallSummary(call("todo", { op: "init", list: [{ phase: "A", items: ["x", "y"] }] }))).toBe("plan · 2 items");
+    expect(todoCallSummary(call("todo", { op: "init", items: ["x", "y"] }))).toBe("plan · 2 items");
     expect(todoCallSummary(call("todo", { op: "done", phase: "Contract" }))).toBe("done · Contract");
     expect(todoCallSummary(call("todo_write", { ops: [{ op: "start", task: "Fix" }, { op: "append", phase: "B", items: ["z"] }] }))).toBe("start · Fix, add · 1 to B");
     expect(todoCallSummary(call("TodoWrite", { todos: [{ content: "a", status: "completed" }, { content: "b", status: "pending" }] }))).toBe("1/2 done");
     expect(todoCallSummary(call("Bash", { command: "ls" }))).toBeNull();
+  });
+});
+
+describe("parseTodoInput", () => {
+  it("extracts todo items from Claude TodoWrite and Codex update_plan inputs", () => {
+    expect(parseTodoInput(call("TodoWrite", { todos: [{ content: "task1", status: "completed" }] }))).toEqual([
+      { label: "task1", phase: null, status: "completed" },
+    ]);
+    expect(parseTodoInput(call("update_plan", { plan: [{ step: "step1", status: "in_progress" }] }))).toEqual([
+      { label: "step1", phase: null, status: "in_progress" },
+    ]);
+  });
+
+  it("extracts items from omp flat init", () => {
+    expect(parseTodoInput(call("todo", { op: "init", items: ["A", "B"] }))).toEqual([
+      { label: "A", phase: null, status: "pending" },
+      { label: "B", phase: null, status: "pending" },
+    ]);
+  });
+});
+
+describe("turnTodos", () => {
+  it("prefers output when available, falling back to input", () => {
+    const withOutput = [call("todo", { op: "done" }, OMP_ANSWER)];
+    expect(turnTodos(withOutput)).toHaveLength(5);
+    const withoutOutput = [call("todo", { op: "init", items: ["A"] }, "")];
+    expect(turnTodos(withoutOutput)).toEqual([{ label: "A", phase: null, status: "pending" }]);
+  });
+
+  it("lets the latest clear replace an earlier list", () => {
+    expect(turnTodos([call("todo", { op: "init", items: ["A"] }), call("todo", { op: "clear" }, "Todo list cleared.")])).toEqual([]);
+    expect(turnTodos([call("TodoWrite", { todos: [{ content: "A", status: "pending" }] }), call("TodoWrite", { todos: [] })])).toEqual([]);
   });
 });

@@ -876,6 +876,32 @@
   overflow-wrap: anywhere;
 }
 
+/* Historical questions grow with the transcript, not a nested tool-JSON scroller. */
+.chat-ask-questions {
+  margin: 0;
+  padding-left: var(--space-5);
+  color: var(--text);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.chat-ask-question + .chat-ask-question { margin-top: var(--space-4); }
+.chat-ask-question p { margin: 0; }
+.chat-ask-header, .chat-ask-meta { color: var(--text-dim); font-size: var(--fs-xs); }
+.chat-ask-text, .chat-ask-label { font-weight: var(--fw-semibold); }
+.chat-ask-options { margin: var(--space-2) 0 0; padding-left: var(--space-5); }
+.chat-ask-options > li + li { margin-top: var(--space-2); }
+.chat-ask-preview {
+  margin: var(--space-1) 0 0;
+  padding: var(--space-2);
+  border: var(--hairline) solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-panel);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 .chat-tool-io pre,
 .chat-tool-io p { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
 /* blocks stacked in a call's detail; a file link inside an output's text is not one */
@@ -1430,6 +1456,192 @@
 .chat-goal-text { white-space: pre-wrap; }
 .chat-goal-reason, .chat-goal-spent { color: var(--text-dim); }
 
+
+/* Agent todo list (omp, claude, codex): one card on the turn, matching OMP's TUI look */
+.chat-todo {
+  min-width: 0;
+  max-width: 100%;
+  margin-bottom: var(--space-2);
+  border: var(--hairline) solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-elevated);
+  font-size: var(--fs-xs);
+}
+
+/* the pinned panel (ChatView.tsx TodoPanel): the chat's last row, just above the input card — one
+   row there, the whole list above it while it is open. It takes a row of its own, so the transcript
+   above it shrinks instead of being covered, and a long list scrolls inside itself. */
+.chat-todo-pinned {
+  flex: 0 0 auto;
+  width: min(calc(100% - 2 * var(--space-4)), var(--chat-w));
+  /* a phone's input card rises into the row above it (--composer-over): keep clear of the glass */
+  margin: 0 auto calc(var(--space-2) + var(--composer-over, 0px));
+}
+
+.chat-todo-pinned[open] .chat-todo-detail {
+  max-height: min(40dvh, 20rem);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.chat-todo > summary {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2);
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+}
+
+.chat-todo > summary::-webkit-details-marker { display: none; }
+
+.chat-todo-mark {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+.chat-todo-mark svg {
+  width: 14px;
+  height: 14px;
+  color: var(--accent);
+}
+
+.chat-todo.is-done .chat-todo-mark svg {
+  color: var(--status-done);
+}
+
+.chat-todo.is-blocked .chat-todo-mark svg {
+  color: var(--status-blocked);
+}
+
+.chat-todo-label {
+  font-weight: var(--fw-semibold);
+  color: var(--text-strong);
+}
+
+.chat-todo-progress {
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+  font-size: var(--fs-2xs);
+}
+
+.chat-todo-active-task {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text);
+  font-size: var(--fs-xs);
+}
+
+.chat-todo[open] .chat-todo-active-task {
+  visibility: hidden;
+}
+
+/* the pinned panel is the chat's last row on any width: an open list drops the running step's row
+   space instead of holding it invisible, so the count keeps one line on a phone */
+.chat-todo-pinned[open] .chat-todo-active-task {
+  display: none;
+}
+
+.chat-todo[open] .chat-skill-caret {
+  transform: rotate(180deg);
+}
+
+.chat-todo-pinned > summary > .chat-skill-caret {
+  transform: rotate(180deg);
+}
+
+.chat-todo-pinned[open] > summary > .chat-skill-caret {
+  transform: none;
+}
+
+.chat-todo-detail {
+  padding: 0 var(--space-2) var(--space-2);
+  overflow-wrap: anywhere;
+}
+
+.chat-todo-phase {
+  margin: var(--space-2) 0 var(--space-1);
+  color: var(--text-dim);
+  font-size: var(--fs-2xs);
+  font-weight: var(--fw-medium);
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-caps);
+}
+
+.chat-todo-tree {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+}
+
+.chat-todo-item {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  padding: 2px 0;
+  color: var(--text);
+}
+
+.chat-todo-branch {
+  color: var(--text-dim);
+  font-family: monospace;
+  user-select: none;
+  flex-shrink: 0;
+}
+
+.chat-todo-status-icon {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+
+.chat-todo-status-icon svg {
+  width: 12px;
+  height: 12px;
+}
+
+.chat-todo-item.is-completed {
+  color: var(--text-dim);
+}
+.chat-todo-item.is-completed .chat-todo-status-icon svg {
+  color: var(--status-done);
+}
+
+.chat-todo-item.is-in_progress {
+  color: var(--text-strong);
+  font-weight: var(--fw-medium);
+}
+.chat-todo-item.is-in_progress .chat-todo-status-icon svg {
+  color: var(--status-working);
+}
+
+.chat-todo-item.is-blocked .chat-todo-status-icon svg {
+  color: var(--status-blocked);
+}
+
+.chat-todo-item.is-dropped {
+  color: var(--text-dim);
+  text-decoration: line-through;
+}
+
+.chat-todo-item-label {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.chat-todo-item-note {
+  margin-left: var(--space-1);
+  color: var(--text-dim);
+}
+
 /* OmO's background tasks reporting back: one card in the transcript's column, a row per task
    whose status is written and colored as in the background-task list, its result on request */
 .chat-task-results {
@@ -1490,6 +1702,14 @@
 }
 .chat-task-result-note { margin: var(--space-2) 0 0; color: var(--text-dim); font-size: var(--fs-xs); }
 
+/* Teammate deliveries share task-card chrome, but idle is not a success verdict. */
+.chat-teammate-message { border: var(--hairline) solid var(--border); }
+.chat-teammate-preview { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chat-teammate-messages { min-width: 0; }
+.chat-teammate-raw { margin-top: var(--space-3); color: var(--text-dim); font-size: var(--fs-xs); }
+.chat-teammate-raw > summary { cursor: pointer; }
+.chat-teammate-raw > pre { white-space: pre-wrap; overflow-wrap: anywhere; }
+
 /* a task call's tasks: what each is for and the agent it runs as, the prompt under it */
 .chat-task-calls {
   display: flex;
@@ -1528,3 +1748,4 @@
 .chat-abandoned { margin: var(--space-2) 0; }
 .chat-abandoned > summary { font-style: italic; }
 .chat-abandoned-note { margin: var(--space-2) 0 0; color: var(--text-dim); }
+

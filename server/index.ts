@@ -8,7 +8,7 @@ import type { ServerWebSocket } from "bun";
 import type { AgentKind, AgentRenameRequest, AgentStatus, ClientMessage, ClientRole, DirectoryCreated, HealthAuth, HerdrPane, IntegrationsResponse, PaneDirection, PanePlan, PaneResized, PaneSplit, PaneSwapped, PaneZoomed, PendingMessage, PlanSummary, PluginActionsResponse, ReadFormat, ReadSource, ServerFeature, ServerMessage, SessionSnapshot, TabMoved } from "../shared/protocol.ts";
 import { alertStatus, paneTitle } from "../shared/notify-policy.ts";
 import { DEFAULT_PORT } from "../shared/protocol.ts";
-import { DEVICE_COOKIE, authClient, handleAuthRequest, isAuthenticated, parseCookies, presentedToken, presentedTokenHeld, recordPresentedTokenFailure, requiresAuth, unauthorizedJson } from "./auth.ts";
+import { DEVICE_COOKIE, authClient, bearerMatches, handleAuthRequest, isAuthenticated, parseCookies, presentedToken, presentedTokenHeld, recordPresentedTokenFailure, requiresAuth, unauthorizedJson } from "./auth.ts";
 import { cameThroughProxy, decideAccess, isLoopbackAddress, isLoopbackBind, isServeOwnerRequest, lanExposed } from "./access.ts";
 import { DeviceStore, handleDeviceRequest, type DeviceMatch } from "./devices.ts";
 import { handlePreferencesRequest, PreferenceStore } from "./preferences.ts";
@@ -16,11 +16,12 @@ import { remoteAccess, TailnetIdentitySource } from "./tailscale.ts";
 import { paneCommands } from "./commands.ts";
 import { paneFiles } from "./files.ts";
 import { badRequest, conflictResponse, errorResponse, isCount, isJsonObject, jsonResponse } from "./http.ts";
-import { serveStatic } from "./static.ts";
+import { requestOrigin, serveStatic } from "./static.ts";
+import { listOmpModels } from "./omp-models.ts";
 import { compressResponse } from "./compress.ts";
 import { isMouseReport, sameAttachment } from "./input-guard.ts";
 import { startStatusCollector } from "./collector.ts";
-import { claudePanePid, claudePaneSession, conversationImage, ConversationUnavailable, forgetPaneTranscriptState, HistoryChanged, paneConversation, paneRunsOmo, toolOutput } from "./conversation.ts";
+import { claudePanePid, claudePaneSession, conversationImage, ConversationUnavailable, forgetPaneTranscriptState, HistoryChanged, paneConversation, paneProcessRoots, toolOutput } from "./conversation.ts";
 import { OPENCODE_TOOL_REF } from "./opencode.ts";
 import { DevinHistoryChanged } from "./devin.ts";
 import { ConversationMonitor } from "./conversation-monitor.ts";
@@ -38,7 +39,7 @@ import { launchedAgents } from "./launched-agents.ts";
 import { SHELL_AGENTS, isShellAgentKind, shellAgentExecutable, startShellAgent } from "./shell-agent.ts";
 import { createDirectory, listDirectories } from "./directories.ts";
 import { claudeSessionTempDir } from "./claude-store.ts";
-import { fileResponse, locateFile, locateFileInFolder, crossSiteFileRead } from "./file-view.ts";
+import { fileResponse, findFile, crossSiteFileRead } from "./file-view.ts";
 import { repoDiffResponse } from "./repo-diff.ts";
 import {
   agentManifests,
@@ -88,7 +89,7 @@ import {
   worktreeRemove,
 } from "./herdr/client.ts";
 import { type AlertTiming, createPushService, defaultStateDir, handlePushRequest } from "./push.ts";
-import { CLAUDE_CLEAR_INPUT_KEYS, claudeClearableDraft, claudeHeldIsGrey, claudeInputBoxContent, claudeInputDraft, hermesInputDraft, shownInputBox, claudeInputEmpty, viewportShowsLive, codexQuestionsCollapsed, handlePromptRequest, isClaudeHeld, heldCandidate, modelListWaits, noteSubmitted, parseInteractivePrompt, promptWaitEnded, claudeRestoredDraft, lastChatSubmitted } from "./prompt.ts";
+import { CLAUDE_CLEAR_INPUT_KEYS, claudeClearableDraft, claudeHeldIsGrey, claudeInputBoxContent, claudeInputDraft, hermesInputDraft, shownInputBox, claudeInputEmpty, viewportShowsLive, codexQuestionsCollapsed, handlePromptRequest, isClaudeHeld, heldCandidate, modelListWaits, noteSubmitted, parseInteractivePrompt, promptWaitEnded, claudeRestoredDraft, lastChatSubmitted, readPromptState } from "./prompt.ts";
 import { secretPrompt, validSecret } from "../shared/secret-prompt.ts";
 import { PasteImageError, readImageBody, savePaneImage } from "./paste.ts";
 import { PtySession } from "./pty/session.ts";
@@ -108,6 +109,9 @@ import { handleHerdrUpdateRequest, HerdrUpdater } from "./herdr-update.ts";
 import { handlePortalRequest, PortalService } from "./portal.ts";
 import { handleTelemetryRequest, Telemetry } from "./telemetry.ts";
 import { handleUsageRequest, UsageService } from "./usage.ts";
+import { CLIProxyService } from "./cliproxy.ts";
+import { CLIProxyRoutes } from "./cliproxy-routes.ts";
+import { UsageLoginService } from "./usage-login.ts";
 import { handleVoiceRequest, VoiceService } from "./voice.ts";
 
 import { BRIDGE_PROTOCOL } from "../shared/machines.ts";
@@ -124,6 +128,8 @@ const MAX_REPLAY_BYTES = 128 * 1024;
 const PLUGIN_PLATFORM = process.platform === "win32" ? "windows" : process.platform === "darwin" ? "macos" : "linux";
 /** How long POST /api/plugin/action waits for the command herdr started to end before it answers `running`. */
 const PLUGIN_ACTION_WAIT_MS = 5_000;
+/** a focus or reconnect re-reads the panes for the daily active message at most this often */
+const VISIT_READ_MS = 10 * 60_000;
 const livePaneIds = async (timeoutMs?: number): Promise<string[]> => (await sessionSnapshot(undefined, timeoutMs)).panes.map((pane) => pane.pane_id);
 /**
  * herdr's refusal of an attach while a read of the same terminal is in progress; it asks
@@ -224,7 +230,7 @@ const RESTORED_CLEAR_GAP_MS = 200;
 const RESTORED_CLEAR_SETTLE_MS = 300;
 /** what a send must still have of its deadline before the copy is cleared: the clear, the box read again, then the send */
 const RESTORED_CLEAR_RESERVE_MS = 2_000;
-const SERVER_FEATURES: ServerFeature[] = ["submit", "pending-input", "pending-hold", "secret-input", "input-ready", "take-over", "watch", "conversation-watch", "ping"];
+const SERVER_FEATURES: ServerFeature[] = ["submit", "pending-input", "pending-hold", "secret-input", "input-ready", "take-over", "watch", "conversation-watch", "ping", "conversation-delta", "prompt-push"];
 
 /** the sides herdr's pane.swap and pane.resize take; anything else is refused before the RPC, which would answer invalid_request */
 const isPaneDirection = (value: unknown): value is PaneDirection => value === "left" || value === "right" || value === "up" || value === "down";
@@ -338,12 +344,16 @@ async function agentLaunch(paneId: string, agent: AgentPayload): Promise<{ agent
 interface SocketData {
   deviceId?: string;
   readOnly?: boolean;
+  /** Prompt file access is independent of terminal observe/interact mode. */
+  promptScreenOnly?: boolean;
   revoked?: boolean;
   unwatchDevice?: () => void;
   relay?: MachineRelay;
   /** A fresh claim per attach lifetime; deleting it invalidates queued terminal keys. */
   attached: Map<string, { keepSize: boolean }>;
-  conversationInterests: Set<string>;
+  conversationInterests: Map<string, { signature: string | null }>;
+  /** Features in the snapshot actually sent on this connection, never inferred from REST. */
+  features?: readonly ServerFeature[];
   watches: Map<string, PaneWatch>;
   output: Map<string, OutputWindow>;
   closing: boolean;
@@ -411,6 +421,7 @@ interface PaneAttachment {
 
 function send(client: Client, message: ServerMessage): number {
   if (client.data.closing) return 0;
+  if ((message.type === "conversation-delta" || message.type === "prompt-push") && !client.data.features?.includes(message.type)) return 0;
   try {
     const encoded = JSON.stringify(message);
     // Include JSON escaping in the transport budget, before Bun could drop a
@@ -422,6 +433,7 @@ function send(client: Client, message: ServerMessage): number {
     // -1 means ALREADY queued. Never retry that frame, or terminal bytes repeat.
     const result = client.send(encoded);
     if (result === 0) client.close(OUTPUT_STALLED_CLOSE_CODE, "output delivery failed");
+    if (result !== 0 && message.type === "snapshot") client.data.features = message.features?.slice() ?? [];
     return result;
   } catch {
     /* client vanished mid-send */
@@ -468,6 +480,10 @@ export function createServer(
     telemetry?: Telemetry;
     /** plan limits of the AI subscriptions signed in here; tests pass one without real sign-ins */
     usage?: UsageService;
+    /** Tests supply an isolated proxy service, never a user's configured instance. */
+    cliProxy?: CLIProxyService;
+    /** Tests use a disposable credential home and stand-in CLI binaries. */
+    usageLogin?: UsageLoginService;
     /** voice input's key, provider and models; tests pass one with their own env and fetch */
     voice?: VoiceService;
     machines?: boolean;
@@ -538,15 +554,113 @@ export function createServer(
   // the last input_draft refusal per pane: its named draft (Clear it and send), or none (Send anyway)
   const draftConfirmations = new WeakMap<Client, Map<string, { draft: string | null; identity: PendingIdentity; box?: string | null }>>();
   let stopped = false;
+  const conversationReads = new Map<string, Promise<void>>();
+  const conversationEligible = (client: Client, paneId: string): boolean =>
+    !stopped && !client.data.closing && client.readyState === WebSocket.OPEN && client.data.attached.has(paneId) && client.data.conversationInterests.has(paneId);
   const conversations = new ConversationMonitor((paneId, signature) => {
+    const recipients: { client: Client; claim: { keepSize: boolean } | undefined; interest: { signature: string | null } }[] = [];
     for (const client of clients) {
-      if (!client.data.closing && client.readyState === WebSocket.OPEN && client.data.attached.has(paneId) && client.data.conversationInterests.has(paneId)) {
-        send(client, { type: "conversation-changed", pane_id: paneId, signature });
+      if (!conversationEligible(client, paneId)) continue;
+      if (send(client, { type: "conversation-changed", pane_id: paneId, signature }) === 0) continue;
+      if (client.data.features?.includes("conversation-delta")) {
+        recipients.push({ client, claim: client.data.attached.get(paneId), interest: client.data.conversationInterests.get(paneId)! });
       }
     }
+    if (recipients.length === 0) return;
+    const run = (conversationReads.get(paneId) ?? Promise.resolve()).then(async () => {
+      if (stopped || !await conversations.matches(paneId, signature)) return;
+      // The authoritative REST reader's default page, never a PTY projection or a from/before fragment.
+      const page = await paneConversation(paneId, options.codexHome, {}, options.devinDbPath, options.opencodeDb, options.hermesHome, options.grokHome);
+      if (stopped || !await conversations.matches(paneId, signature)) return;
+      for (const { client, claim, interest } of recipients) {
+        if (!conversationEligible(client, paneId) || client.data.attached.get(paneId) !== claim || client.data.conversationInterests.get(paneId) !== interest) continue;
+        const message: Extract<ServerMessage, { type: "conversation-delta" }> = {
+          type: "conversation-delta", pane_id: paneId, signature,
+          delta: { base_signature: interest.signature, source: page.source, history_id: page.history_id, cursor: page.cursor, turns: page.turns },
+        };
+        if (Buffer.byteLength(JSON.stringify(message), "utf8") > 262144) continue;
+        if (send(client, message) !== 0) interest.signature = signature;
+      }
+    }).catch(() => { /* A read or identity failure leaves only the original invalidation. */ });
+    conversationReads.set(paneId, run);
+    void run.finally(() => { if (conversationReads.get(paneId) === run) conversationReads.delete(paneId); });
   }, options.codexHome, options.devinDbPath, options.opencodeDb, options.hermesHome, options.grokHome);
+  const PROMPT_PUSH_MS = 2_000;
+
+
+  type PromptPush = Extract<ServerMessage, { type: "prompt-push" }>;
+  type PromptRecipient = { client: Client; claim: { keepSize: boolean } | undefined; interest: { signature: string | null } };
+  type PromptObservation = { active: boolean; reading: boolean; timer?: Timer };
+  const promptObservations = new Map<string, PromptObservation>();
+  // Baselines belong to an interest lifetime, never a pane or a disconnected client.
+  const promptSent = new WeakMap<object, string>();
+
+  function promptRecipients(paneId: string, readOnly: boolean): PromptRecipient[] {
+    const recipients: PromptRecipient[] = [];
+    for (const client of clients) {
+      if (!conversationEligible(client, paneId) || !client.data.features?.includes("prompt-push") || (client.data.promptScreenOnly === true) !== readOnly) continue;
+      recipients.push({ client, claim: client.data.attached.get(paneId), interest: client.data.conversationInterests.get(paneId)! });
+    }
+    return recipients;
+  }
+
+  // Menus can change while idle without any transcript/stat/status edge. Browsers stop empty
+  // polling; the bridge still observes the authoritative prompt reader, once per pane/policy.
+  function reconcilePrompts(paneId: string): void {
+    for (const readOnly of [false, true]) {
+      const key = JSON.stringify([paneId, readOnly]);
+      let observation = promptObservations.get(key);
+      const active = !stopped && promptRecipients(paneId, readOnly).length > 0;
+      if (!active) {
+        if (observation) {
+          observation.active = false;
+          clearTimeout(observation.timer);
+          observation.timer = undefined;
+          // Keep an in-flight guard until the reader settles, even across unwatch/rewatch.
+          if (!observation.reading) promptObservations.delete(key);
+        }
+        continue;
+      }
+      if (!observation) {
+        observation = { active: true, reading: false };
+        promptObservations.set(key, observation);
+      }
+      observation.active = true;
+      if (observation.reading || observation.timer !== undefined) continue;
+      const current = observation;
+      const read = async (): Promise<void> => {
+        current.timer = undefined;
+        if (stopped || !current.active) return;
+        const recipients = promptRecipients(paneId, readOnly);
+        if (recipients.length === 0) { reconcilePrompts(paneId); return; }
+        current.reading = true;
+        try {
+          const state = await readPromptState(paneId, {
+            codexHome: options.codexHome, claudeTranscript: (id) => claudeAgents.sessionOf(id)?.path ?? null, readOnly,
+          });
+          const message: PromptPush = { type: "prompt-push", pane_id: paneId, ...state };
+          const signature = JSON.stringify(message);
+          for (const { client, claim, interest } of recipients) {
+            if (!current.active || !conversationEligible(client, paneId) || client.data.attached.get(paneId) !== claim
+              || client.data.conversationInterests.get(paneId) !== interest || (client.data.promptScreenOnly === true) !== readOnly) continue;
+            if (promptSent.get(interest) === signature) continue;
+            if (send(client, message) !== 0) promptSent.set(interest, signature);
+          }
+        } catch { /* Preserve the last state on backend failure; the next observation retries. */ }
+        finally {
+          current.reading = false;
+          if (!stopped && current.active && promptRecipients(paneId, readOnly).length > 0) {
+            current.timer = setTimeout(() => void read(), PROMPT_PUSH_MS);
+            current.timer.unref();
+          } else if (promptObservations.get(key) === current) promptObservations.delete(key);
+        }
+      };
+      void read();
+    }
+  }
 
   function releaseConversation(paneId: string): void {
+    reconcilePrompts(paneId);
     for (const client of clients) {
       if (!client.data.closing && client.readyState === WebSocket.OPEN && client.data.attached.has(paneId) && client.data.conversationInterests.has(paneId)) return;
     }
@@ -566,7 +680,10 @@ export function createServer(
   /** paired devices (server/devices.ts) and the PC's Tailscale login: the two ways in besides the token and this PC itself */
   const devices = new DeviceStore(options.stateDir ?? defaultStateDir());
   const preferences = new PreferenceStore(options.stateDir ?? defaultStateDir());
-  const usage = options.usage ?? new UsageService();
+  const cliProxy = options.cliProxy ?? new CLIProxyService(options.stateDir ?? defaultStateDir());
+  const cliProxyRoutes = new CLIProxyRoutes(cliProxy);
+  const usageLogin = options.usageLogin ?? new UsageLoginService();
+  const usage = options.usage ?? new UsageService(undefined, undefined, (refresh) => cliProxy.report(refresh));
   const voice = options.voice ?? new VoiceService({ stateDir: options.stateDir ?? defaultStateDir(), env: process.env, fetch });
   /** a login named here is taken as it is: a tagged node has none of its own to read (HERDR_WEB_TAILSCALE_OWNER) */
   const namedOwner = options.tailscaleOwner !== undefined ? options.tailscaleOwner : process.env["HERDR_WEB_TAILSCALE_OWNER"]?.trim() || undefined;
@@ -1188,6 +1305,24 @@ export function createServer(
       }),
     };
   };
+  /**
+   * A browser visit for the daily active message: the call is made now so the visit's day is the
+   * trigger's, the panes are read after. Nothing is read while telemetry cannot send; a socket open
+   * passes the snapshot it fetches anyway, and other visits read the panes at most every
+   * VISIT_READ_MS (in between they still count the day, with the kinds already known).
+   */
+  let visitReadAt = -Infinity;
+  function countVisit(snapshot?: ReturnType<typeof clientSnapshot>): void {
+    const telemetry = options.telemetry;
+    if (!telemetry?.counting()) return;
+    let agents: Promise<(string | null)[]> | (string | null)[] = [];
+    if (snapshot || Date.now() - visitReadAt >= VISIT_READ_MS) {
+      visitReadAt = Date.now();
+      agents = (snapshot ?? clientSnapshot()).then((read) => read.panes.map((pane) => pane.agent ?? pane.agent_session?.agent ?? null));
+    }
+    void telemetry.active(agents)
+      .catch((error) => console.error(`telemetry: the visit was not counted (${error instanceof Error ? error.message : String(error)})`));
+  }
   /** A pane's status frame: every one says whether the pane waits on its turn's background work. */
   const paneStatus = (paneId: string, status: AgentStatus, about: { background_tasks?: number; plan?: PlanSummary | null } = {}): ServerMessage =>
     ({ type: "pane-status", pane_id: paneId, agent_status: status, ...about, ...(waits.waiting(paneId) ? { background_wait: true as const } : {}) });
@@ -1794,6 +1929,7 @@ export function createServer(
       push.resync(panes.map((pane) => ({ ...pane, agent_status: alertStatus(settled(pane), waits.waiting(pane.pane_id)) })), newer);
     },
     onPaneEnded: (paneId) => {
+      if (usageLogin.ended(paneId)) usage.invalidate();
       holdPendingPane(paneId, { code: "pane_not_found", message: "The pane ended; its pending messages were not sent" });
       pending.forget(paneId);
       waits.forget(paneId);
@@ -1932,6 +2068,8 @@ export function createServer(
       if (pathname === "/api/pane/read" || pathname === "/api/pane/conversation") bunServer.timeout(request, 60);
       if (pathname === "/ws") {
         if (!sameOrigin(request)) return new Response("invalid origin", { status: 403 });
+        // plan=0 only reduces prompt access; a watch credential can never opt back in.
+        const promptScreenOnly = readOnly || url.searchParams.get("plan") === "0";
         const deviceId = access.level === "full" ? access.device?.id : undefined;
         const machineId = url.searchParams.get("machine_id");
         if (machineId && machineId !== "local") {
@@ -1939,15 +2077,15 @@ export function createServer(
           if (!machines?.endpoint(machineId)) return jsonResponse({ error: { code: "machine_offline", message: "This PC is disconnected" } }, 503);
           let relay: MachineRelay | undefined;
           try {
-            relay = new MachineRelay(machines, machineId, readOnly);
+            relay = new MachineRelay(machines, machineId, readOnly, promptScreenOnly);
             await relay.ready;
-            const upgraded = bunServer.upgrade(request, { data: { attached: new Map<string, { keepSize: boolean }>(), watches: new Map<string, PaneWatch>(), conversationInterests: new Set<string>(), mode: readOnly ? "observe" : "interact", output: new Map(), closing: false, roles: 0, relay, deviceId, readOnly } });
+            const upgraded = bunServer.upgrade(request, { data: { attached: new Map<string, { keepSize: boolean }>(), watches: new Map<string, PaneWatch>(), conversationInterests: new Map<string, { signature: string | null }>(), mode: readOnly ? "observe" : "interact", output: new Map(), closing: false, roles: 0, relay, deviceId, readOnly, promptScreenOnly } });
             if (upgraded) return undefined as unknown as Response;
             relay.close();
           } catch { relay?.close(); return new Response("remote websocket unavailable", { status: 502 }); }
           return new Response("websocket upgrade required", { status: 426 });
         }
-        const upgraded = bunServer.upgrade(request, { data: { attached: new Map<string, { keepSize: boolean }>(), watches: new Map<string, PaneWatch>(), conversationInterests: new Set<string>(), mode: readOnly ? "observe" : "interact", output: new Map(), closing: false, roles: 0, deviceId, readOnly } });
+        const upgraded = bunServer.upgrade(request, { data: { attached: new Map<string, { keepSize: boolean }>(), watches: new Map<string, PaneWatch>(), conversationInterests: new Map<string, { signature: string | null }>(), mode: readOnly ? "observe" : "interact", output: new Map(), closing: false, roles: 0, deviceId, readOnly, promptScreenOnly } });
         if (upgraded) return undefined as unknown as Response;
         return new Response("websocket upgrade required", { status: 426 });
       }
@@ -1976,6 +2114,8 @@ export function createServer(
       if (pathname === "/api/preferences") return handlePreferencesRequest(request, preferences);
 
       if (pathname === "/api/usage") return handleUsageRequest(request, url, usage);
+      if (pathname === "/api/usage/login") { bunServer.timeout(request, 30); return usageLogin.handle(request); }
+      if (pathname === "/api/cliproxy" || pathname.startsWith("/api/cliproxy/")) { bunServer.timeout(request, 60); return cliProxyRoutes.handle(request); }
       // a long clip can keep the provider silent past Bun's 10 s idle limit before the first line
       if (pathname === "/api/voice" || pathname.startsWith("/api/voice/")) { bunServer.timeout(request, 120); return handleVoiceRequest(request, pathname, voice); }
 
@@ -1994,7 +2134,7 @@ export function createServer(
 
       if (pathname === "/api/health") {
         const auth: HealthAuth = access.level === "full"
-          ? { required: false, authenticated: true, via: access.via, role: access.role }
+          ? { required: false, authenticated: true, via: access.via, role: access.role, ...(access.via === "token" && bearerMatches(request, token) ? { bearer: true as const } : {}) }
           : { required: true, authenticated, ...(authenticated ? {} : { reason: access.reason }) };
         // this server is open to the network with no token and nothing paired, told to a client
         // that got in and to nobody else: naming it to an anonymous caller would be
@@ -2063,12 +2203,7 @@ export function createServer(
           try { cwd = (await paneContext(paneId)).cwd; } catch { /* an absolute path still opens */ }
         }
         const path = url.searchParams.get("path") ?? "";
-        let found = locateFile(path, cwd);
-        // a Claude Code pane names the files it keeps outside the project (`scratchpad/…`) relative to its session's temp folder
-        if (found === null && paneId && cwd !== null && !isAbsolute(path.trim()) && !path.trim().startsWith("~")) {
-          const folder = await claudeTempFolder(paneId);
-          if (folder !== null) found = locateFileInFolder(path, folder);
-        }
+        const found = await findFile(path, cwd, () => paneId ? claudeTempFolder(paneId) : Promise.resolve(null));
         if (found === null) return jsonResponse({ error: { code: "not_found", message: "no readable file at that path" } }, 404);
         // several files end in that name: the viewer lists them to choose from
         if ("candidates" in found) return jsonResponse({ error: { code: "ambiguous_path", message: "several files have that name", candidates: found.candidates } }, 409);
@@ -2487,14 +2622,23 @@ export function createServer(
         try {
           const context = await paneContext(paneId);
           if (pathname === "/api/pane/commands") {
-            // herdr names an omo pane `pi` while omo waits: pi's commands and templates are not omo's
-            const agent = context.agent === "pi" && await paneRunsOmo(paneId) ? "omo" : context.agent;
-            return jsonResponse({ commands: paneCommands(agent, context.cwd) });
+            const roots = await paneProcessRoots(paneId, context.agent);
+            const agent = roots.omo ? "omo" : context.agent;
+            return jsonResponse({ commands: paneCommands(agent, context.cwd, undefined, { ...roots.omo, environ: roots.environ }) });
           }
           const limitRaw = url.searchParams.get("limit");
           const limit = limitRaw === null ? 20 : Number(limitRaw);
           if (!Number.isInteger(limit) || limit < 1) return badRequest("invalid_limit", "limit must be a positive integer");
           return jsonResponse({ files: await paneFiles(context.cwd, url.searchParams.get("q") ?? "", Math.min(limit, 100)) });
+        } catch (error) {
+          return errorResponse(error);
+        }
+      }
+
+      if (pathname === "/api/omp/models") {
+        if (request.method !== "GET") return badRequest("method_not_allowed", "use GET");
+        try {
+          return jsonResponse({ models: await listOmpModels() });
         } catch (error) {
           return errorResponse(error);
         }
@@ -2863,7 +3007,7 @@ export function createServer(
       }
 
       // static client - public even when the API is gated, so the login UI can load
-      return serveStatic(pathname, request.headers.get("accept-encoding"));
+      return serveStatic(pathname, request.headers.get("accept-encoding"), requestOrigin(request));
       })());
     },
 
@@ -2893,8 +3037,11 @@ export function createServer(
         }
         if (client.data.relay) { client.data.relay.bind(client as ServerWebSocket<unknown>); return; }
         clients.add(client);
+        const snapshot = clientSnapshot();
+        countVisit(snapshot);
         try {
           send(client, { type: "snapshot", snapshot: await clientSnapshot(), features: SERVER_FEATURES });
+          for (const paneId of client.data.conversationInterests.keys()) reconcilePrompts(paneId);
         } catch (error) {
           const code = error instanceof HerdrError ? error.code : "snapshot_failed";
           send(client, { type: "error", code, message: error instanceof Error ? error.message : String(error) });
@@ -2905,8 +3052,10 @@ export function createServer(
         if (stopped || client.data.closing) return;
         // read here for a relayed connection too: alerts for every PC go out from this server
         const presence = presenceOf(raw);
-        if (presence === true) present.add(client);
-        else if (presence === false) present.delete(client);
+        if (presence === true) {
+          present.add(client);
+          if (!client.data.relay) countVisit();
+        } else if (presence === false) present.delete(client);
         if (client.data.relay) { client.data.relay.message(raw); return; }
         if (presence !== null) return;
         let message: ClientMessage;
@@ -3060,8 +3209,9 @@ export function createServer(
                   send(client, { type: "error", code: "not_attached", message: "conversation interest requires an attached pane", pane_id: message.pane_id });
                   break;
                 }
-                client.data.conversationInterests.add(message.pane_id);
+                if (!client.data.conversationInterests.has(message.pane_id)) client.data.conversationInterests.set(message.pane_id, { signature: null });
                 conversations.watch(message.pane_id);
+                reconcilePrompts(message.pane_id);
               } else {
                 client.data.conversationInterests.delete(message.pane_id);
                 releaseConversation(message.pane_id);
@@ -3617,6 +3767,11 @@ export function createServer(
       stopped = true;
       settlePortalStartup({ ok: false, error: new Error("Server stopped before Portal startup cleanup completed") });
       conversations.stop();
+      for (const observation of promptObservations.values()) {
+        observation.active = false;
+        clearTimeout(observation.timer);
+      }
+      promptObservations.clear();
       clearInterval(outputTimer);
       collector.stop();
       omo.stop();

@@ -35,6 +35,16 @@ export function phaseRows(list: unknown[]): ChecklistRow[] {
   }
   return rows;
 }
+export function itemsRows(items: unknown[]): ChecklistRow[] {
+  const rows: ChecklistRow[] = [];
+  for (const item of items) {
+    if (typeof item === "string" && item.trim().length > 0) {
+      rows.push({ label: item.trim(), done: false });
+    }
+  }
+  return rows;
+}
+
 
 export function todoRows(todos: unknown[]): ChecklistRow[] {
   const rows: ChecklistRow[] = [];

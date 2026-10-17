@@ -856,6 +856,111 @@ it("reconnects at once when the page wakes instead of waiting out the backoff, a
   client.close();
 });
 
+it("backs off repeated short-lived opens, even when each receives a snapshot and terminal readiness", () => {
+  jest.useFakeTimers();
+  const { client, socket } = liveClient([]);
+  try {
+    let current = socket;
+    for (const delay of [250, 500, 1000, 2000, 4000, 5000, 5000]) {
+      current.disconnect();
+      expect(client.state).toBe("waiting");
+      jest.advanceTimersByTime(delay - 1);
+      expect(FakeSocket.last).toBe(current);
+      jest.advanceTimersByTime(1);
+      const next = FakeSocket.last;
+      expect(next).not.toBe(current);
+      next.open();
+      next.receive(snapshot(["input-ready"]));
+      next.receive({ type: "input-ready", pane_id: "w1:p1" });
+      expect(client.canInput("w1:p1")).toBe(true);
+      expect(next.sent.filter((frame) => frame.type === "attach")).toHaveLength(1);
+      current = next;
+    }
+  } finally {
+    client.close();
+    jest.useRealTimers();
+  }
+});
+
+it("starts the retry delay over only after an open connection has stayed up for 10s", () => {
+  jest.useFakeTimers();
+  const { client, socket } = liveClient([]);
+  try {
+    socket.disconnect();
+    jest.advanceTimersByTime(250);
+    const short = FakeSocket.last;
+    short.open();
+    jest.advanceTimersByTime(9_999);
+    short.disconnect();
+    jest.advanceTimersByTime(499);
+    expect(FakeSocket.last).toBe(short);
+    jest.advanceTimersByTime(1);
+    const stable = FakeSocket.last;
+    expect(stable).not.toBe(short);
+    stable.open();
+    jest.advanceTimersByTime(10_000);
+    stable.disconnect();
+    jest.advanceTimersByTime(249);
+    expect(FakeSocket.last).toBe(stable);
+    jest.advanceTimersByTime(1);
+    expect(FakeSocket.last).not.toBe(stable);
+  } finally {
+    client.close();
+    jest.useRealTimers();
+  }
+});
+
+it("ignores a late open from an abandoned attempt instead of replaying on the replacement", () => {
+  jest.useFakeTimers();
+  const client = new HerdrSocket("ws://test/ws");
+  try {
+    client.attach("w1:p1", 100, 30);
+    client.connect();
+    const abandoned = FakeSocket.last;
+    jest.advanceTimersByTime(8_000);
+    jest.advanceTimersByTime(250);
+    const replacement = FakeSocket.last;
+    expect(replacement).not.toBe(abandoned);
+    replacement.open();
+    const sent = [...replacement.sent];
+    abandoned.open();
+    expect(replacement.sent).toEqual(sent);
+    expect(client.state).toBe("open");
+    replacement.disconnect();
+    jest.advanceTimersByTime(499);
+    expect(FakeSocket.last).toBe(replacement);
+    jest.advanceTimersByTime(1);
+    expect(FakeSocket.last).not.toBe(replacement);
+  } finally {
+    client.close();
+    jest.useRealTimers();
+  }
+});
+
+it("still bypasses a flapping connection's backoff on wake and resets its next retry", () => {
+  jest.useFakeTimers();
+  const { client, socket } = liveClient([]);
+  try {
+    socket.disconnect();
+    jest.advanceTimersByTime(250);
+    const second = FakeSocket.last;
+    second.open();
+    second.disconnect();
+    client.wake();
+    const woken = FakeSocket.last;
+    expect(woken).not.toBe(second);
+    woken.open();
+    woken.disconnect();
+    jest.advanceTimersByTime(249);
+    expect(FakeSocket.last).toBe(woken);
+    jest.advanceTimersByTime(1);
+    expect(FakeSocket.last).not.toBe(woken);
+  } finally {
+    client.close();
+    jest.useRealTimers();
+  }
+});
+
 it("does not wake a connection whose output stopped, nor one that was closed", () => {
   const client = new HerdrSocket("ws://test/ws");
   client.connect();
@@ -1005,9 +1110,9 @@ it("lets a slow handshake connect: each attempt given up doubles the next deadli
     expect(second.readyState).toBe(FakeSocket.CONNECTING);
     second.open();
     expect(client.connected).toBe(true);
-    // an attempt that opened starts the deadline over at 8s
+    // Opening starts the connect deadline over at 8s, not the backoff: this open was brief.
     second.disconnect();
-    jest.advanceTimersByTime(250);
+    jest.advanceTimersByTime(500);
     const third = FakeSocket.last;
     expect(third).not.toBe(second);
     jest.advanceTimersByTime(8_000);
@@ -1682,4 +1787,90 @@ it("ends the connection when the page is left, and connects again only when it i
     client.close();
     jest.useRealTimers();
   }
+});
+
+it("ignores unadvertised deltas before snapshot and on an old watch-only bridge while preserving invalidations", () => {
+  const client = new HerdrSocket("ws://test/ws");
+  const received: unknown[] = [];
+  client.on((message) => { if (message.type === "conversation-delta" || message.type === "conversation-changed") received.push(message); });
+  client.connect();
+  const socket = FakeSocket.last; socket.open();
+  client.attach("w1:p1", 80, 24, true); client.watchConversation("w1:p1", true);
+  const delta = { type: "conversation-delta", pane_id: "w1:p1", signature: "a", delta: { base_signature: null, source: "omp-transcript", turns: [] } };
+  try {
+    socket.receive(delta);
+    socket.receive(snapshot(["conversation-watch"]));
+    socket.receive(delta);
+    const changed = { type: "conversation-changed", pane_id: "w1:p1", signature: "a" };
+    socket.receive(changed);
+    expect(received).toEqual([changed]);
+    expect(client.conversationPushes()).toBe(false);
+  } finally { client.close(); }
+});
+
+it("delivers complete-page frames only for an advertised, attached, interested pane", () => {
+  const client = new HerdrSocket("ws://test/ws");
+  const received: unknown[] = [];
+  client.on((message) => { if (message.type === "conversation-delta") received.push(message); });
+  client.connect();
+  const socket = FakeSocket.last; socket.open(); socket.receive(snapshot(["conversation-watch", "conversation-delta"]));
+  const delta = { type: "conversation-delta", pane_id: "w1:p1", signature: "a", delta: { base_signature: null, source: "omp-transcript", turns: [] } };
+  try {
+    expect(client.conversationPushes()).toBe(true);
+    socket.receive(delta); // neither attached nor interested
+    client.attach("w1:p1", 80, 24, true);
+    socket.receive(delta); // attached alone is insufficient
+    client.watchConversation("w1:p1", true);
+    socket.receive({ ...delta, pane_id: "w1:p2" });
+    socket.receive(delta);
+    client.detach("w1:p1"); socket.receive({ ...delta, signature: "detached" });
+    client.attach("w1:p1", 80, 24, true);
+    client.watchConversation("w1:p1", false); socket.receive({ ...delta, signature: "unwatched" });
+    expect(received).toEqual([delta]);
+  } finally { client.close(); }
+});
+
+it("never forwards a stale connection's page or inherits its delta feature across reconnects", () => {
+  const client = new HerdrSocket("ws://test/ws");
+  const received: unknown[] = [];
+  client.on((message) => { if (message.type === "conversation-delta") received.push(message); });
+  client.connect();
+  const old = FakeSocket.last; old.open(); old.receive(snapshot(["conversation-watch", "conversation-delta"]));
+  client.attach("w1:p1", 80, 24, true); client.watchConversation("w1:p1", true);
+  const delta = { type: "conversation-delta", pane_id: "w1:p1", signature: "a", delta: { base_signature: null, source: "omp-transcript", turns: [] } };
+  try {
+    old.disconnect(); client.connect();
+    const fresh = FakeSocket.last; fresh.open();
+    old.receive(delta); fresh.receive(delta);
+    expect(client.conversationPushes()).toBe(false);
+    fresh.receive(snapshot(["conversation-watch"])); fresh.receive(delta);
+    expect(received).toEqual([]);
+    fresh.receive(snapshot(["conversation-watch", "conversation-delta"]));
+    const current = { ...delta, signature: "current" }; fresh.receive(current);
+    old.receive({ ...delta, signature: "late" });
+    expect(received).toEqual([current]);
+  } finally { client.close(); }
+});
+
+it("delivers prompt frames only for an advertised, attached, interested pane", () => {
+  const client = new HerdrSocket("ws://test/ws");
+  const received: unknown[] = [];
+  client.on((message) => { if (message.type === "prompt-push") received.push(message); });
+  client.connect();
+  const socket = FakeSocket.last; socket.open();
+  const frame = { type: "prompt-push", pane_id: "w1:p1", prompt: null, suggestion: null, restored: null };
+  try {
+    socket.receive(frame);
+    socket.receive(snapshot(["conversation-watch"]));
+    expect(client.promptPushes()).toBe(false);
+    client.attach("w1:p1", 80, 24, true); client.watchConversation("w1:p1", true);
+    socket.receive(frame);
+    socket.receive(snapshot(["conversation-watch", "prompt-push"]));
+    expect(client.promptPushes()).toBe(true);
+    socket.receive(frame);
+    socket.receive({ ...frame, pane_id: "w1:p2" });
+    client.watchConversation("w1:p1", false);
+    socket.receive({ ...frame, restored: "late" });
+    expect(received).toEqual([frame]);
+  } finally { client.close(); }
 });

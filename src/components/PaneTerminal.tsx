@@ -8,6 +8,7 @@ import "./PaneTerminal.css";
 
 import { HerdrSocket, type SubmitDelivery, type SubmitResult } from "../lib/ws.ts";
 import { MachineSession } from "../lib/machineSession.ts";
+import type { ConversationUpdate } from "../lib/conversationRefresh.ts";
 import { useMachineSessions } from "../lib/machineSessionContext.tsx";
 import { ViewportIntentGate } from "../lib/viewportIntent.ts";
 import { PaneCachedContext, PanePresentedContext, PaneFollowContext, PaneShownContext, PaneSubmitContext } from "../lib/paneSubmitContext.ts";
@@ -52,7 +53,7 @@ import { isAppShortcut } from "../lib/shortcuts.ts";
 import { plainPageDirection } from "../lib/pageScroll.ts";
 import { keyboardHoldsGrid, keyboardUp } from "../lib/keyboard.ts";
 import { OpenFileContext } from "../lib/filePaths.ts";
-import { fileUriPath, hyperlinkFilter, isWebLink, terminalFileLinkProvider } from "../lib/terminalFileLinks.ts";
+import { fileUriPath, hyperlinkFilter, isWebLink, openWebLink, terminalFileLinkProvider } from "../lib/terminalFileLinks.ts";
 import { adjustTerminalGlyphs } from "../lib/terminalGlyphs.ts";
 import { terminalLabel } from "../lib/terminalLabel.ts";
 import { useMediaQuery } from "../lib/useMediaQuery.ts";
@@ -75,6 +76,8 @@ const inUse = (): boolean => document.visibilityState === "visible" && document.
 export interface PaneTerminalProps {
   /** The pane this terminal attaches to; null renders the placeholder. */
   paneId: string | null;
+  /** A restored pane keeps its ID but gets a new terminal after herdr restarts. */
+  terminalId?: string | null;
   /** null while the PC identity loads, before the first attach's fixed-grid frame arrives. */
   mirrored?: boolean | null;
   /**
@@ -137,6 +140,7 @@ const heldRowNotes = new Map<string, { owner: string; id: string; text: string }
 
 export function PaneTerminal({
   paneId,
+  terminalId = null,
   mirrored = false,
   restoreError = null,
   agent = null,
@@ -389,6 +393,15 @@ export function PaneTerminal({
   const onConversationWatch = useCallback((pane: string, enabled: boolean) => {
     socketRef.current?.watchConversation(pane, enabled);
   }, []);
+  /** Deliver each frame synchronously, never as React state that could coalesce or replay it. */
+  const chatUpdateRef = useRef<((update: ConversationUpdate) => void) | null>(null);
+  const onConversationUpdate = useCallback((listener: ((update: ConversationUpdate) => void) | null) => {
+    chatUpdateRef.current = listener;
+  }, []);
+  const promptUpdateRef = useRef<((message: Extract<ServerMessage, { type: "prompt-push" }>) => void) | null>(null);
+  const onPromptUpdate = useCallback((listener: ((message: Extract<ServerMessage, { type: "prompt-push" }>) => void) | null) => {
+    promptUpdateRef.current = listener;
+  }, []);
   /** A scrollback stand-in's listener; a ref, so terminal output never re-renders the pane. */
   const chatOutputRef = useRef<(() => void) | null>(null);
   const onTerminalOutput = useCallback((listener: (() => void) | null) => {
@@ -546,12 +559,16 @@ export function PaneTerminal({
       // a chosen family follows in the font effect below, once its faces have loaded
       fontFamily: TERMINAL_FONT_STACK,
       theme: terminalTheme(theme, palette),
+      // a program's own colors suit one background (Claude Code's question titles are #ffffff, near
+      // 1:1 on a light palette): xterm moves a foreground under 4.5:1 toward black or white. Dim text
+      // needs half that, and box, block and powerline glyphs keep their color.
+      minimumContrastRatio: 4.5,
       linkHandler: {
         activate: (event, uri) => {
           if (!linkPressed(event)) return;
           const path = fileUriPath(uri);
           if (path !== null) openFileRef.current?.(path);
-          else if (isWebLink(uri)) window.open(uri, "_blank", "noopener,noreferrer");
+          else if (isWebLink(uri)) openWebLink(uri);
         },
         allowNonHttpProtocols: true,
       },
@@ -579,7 +596,7 @@ export function PaneTerminal({
     term.loadAddon(fit);
     matchHerdrWidths(term);
     // the same policy as the linkHandler above: an http(s) address or nothing (S10)
-    term.loadAddon(new WebLinksAddon((_event, uri) => { if (isWebLink(uri)) window.open(uri, "_blank", "noopener,noreferrer"); }));
+    term.loadAddon(new WebLinksAddon((_event, uri) => { if (isWebLink(uri)) openWebLink(uri); }));
     term.registerLinkProvider(terminalFileLinkProvider(() => term.buffer.active, (path, event) => { if (linkPressed(event)) openFileRef.current?.(path); }));
     term.open(host);
     let compositionEndTimer: number | null = null;
@@ -1079,12 +1096,23 @@ export function PaneTerminal({
     socketRef.current = socket;
     let outputGeneration = 0;
     let deferredAttach = false;
+    let conversationDisconnected = false;
     const off = session.on((message, sent) => {
       onServerMessageRef.current?.(message);
       pendingScopeRef.current = session.scope;
       pendingEpochRef.current = session.epoch;
       // Every pane-addressed frame, errors included, belongs only to that pane's renderer.
       if ("pane_id" in message && message.pane_id !== undefined && message.pane_id !== paneRef.current) return;
+      if (message.type === "snapshot" && conversationDisconnected) {
+        conversationDisconnected = false;
+        chatUpdateRef.current?.("reconnect");
+      }
+      if (message.type === "conversation-delta" && chatViewRef.current && !releasedRef.current && document.visibilityState !== "hidden") {
+        chatUpdateRef.current?.(message);
+      }
+      if (message.type === "prompt-push" && chatViewRef.current && !releasedRef.current && document.visibilityState !== "hidden") {
+        promptUpdateRef.current?.(message);
+      }
       // the PC's shared connection came back after an overload close (another pane's mount, or an
       // explicit pick, reconnected it): its replayed attach serves this pane again
       if (message.type === "snapshot" && stalledRef.current) {
@@ -1255,6 +1283,8 @@ export function PaneTerminal({
       setConversationPushes(socket.conversationPushes());
     });
     const offDisconnect = session.onDisconnect(() => {
+      conversationDisconnected = true;
+      chatUpdateRef.current?.("disconnect");
       clearModifiers();
       pendingScopeRef.current = session.scope;
       pendingEpochRef.current = session.epoch;
@@ -2117,7 +2147,8 @@ export function PaneTerminal({
     if (sizesPty() && inUse()) socketRef.current?.resize(pane, term.cols, term.rows, true);
   }, [follow]);
 
-  // Reset synchronously on pane changes: old composition timers must never see the new pane.
+  // Reset on a pane or terminal replacement: a herdr restart can keep the pane ID.
+  // Old composition timers must never see the new terminal.
   useLayoutEffect(() => {
     const socket = socketRef.current;
     const term = termRef.current;
@@ -2163,6 +2194,11 @@ export function PaneTerminal({
     // A fresh background pane must not acquire size ownership even with the release setting off.
     // This also covers a replacement pane: no prior release or input ownership is inherited.
     setReleased(false);
+    // A restored terminal in a cached tab waits until that tab is presented again.
+    if (cachedRef.current) {
+      setReleased(true);
+      return leavePane;
+    }
     if (deferAttachRef.current(paneId)) return leavePane;
     // under the keyboard (a pane picked while typing) the fit waits for it to go, and the attach adopts
     // the pane's size meanwhile
@@ -2184,7 +2220,7 @@ export function PaneTerminal({
     // grid sent the keys straight to the pane, and showed a phone's IME text mid-screen
     if (activeRef.current && !chatViewRef.current && !autoSelected && !coarseRef.current && !modalOpen() && !findOpenRef.current) term.focus();
     return leavePane;
-  }, [paneId]);
+  }, [paneId, terminalId]);
 
   // the message the tab kept its pane for has gone (or was held): out of use, it lets go now
   useEffect(() => { releaseRef.current(); }, [pending]);
@@ -2851,6 +2887,9 @@ export function PaneTerminal({
             refreshKey={chatRefresh}
             invalidationKey={chatInvalidation}
             onConversationWatch={onConversationWatch}
+            onConversationUpdate={onConversationUpdate}
+            onPromptUpdate={onPromptUpdate}
+            promptPushes={socketRef.current?.promptPushes() === true && !released}
             conversationPushes={conversationPushes && !released}
             onTerminalOutput={onTerminalOutput}
             sentKey={chatSent}
@@ -2992,6 +3031,14 @@ export function PaneTerminal({
             </div>
           ) : null}
           onSend={composerSend}
+          onSwitchModel={agent === "omp" ? (selector) => {
+            if (agentStatus === "working" || agentStatus === "blocked" || heldRef.current || answering !== null) return t("Wait until the agent is idle to switch models");
+            const sent = sendTerminalLine(`/switch ${selector}`);
+            return sent === false ? false : sent.then((answer) => {
+              if (answer === true) setChatRefresh((current) => current + 1);
+              return answer;
+            });
+          } : undefined}
           onAbort={abortTurn}
           onUploadImage={uploadImage}
         />

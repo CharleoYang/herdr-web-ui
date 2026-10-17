@@ -47,7 +47,7 @@ export async function checkTerminalInput(browser: Browser, origin: string, pane:
         sent.push(frame);
         acknowledge = () => socket.send(JSON.stringify({ type: "submit-result", id: frame.id, pane_id: frame.pane_id, ok: true }));
         refuse = () => socket.send(JSON.stringify({ type: "submit-result", id: frame.id, pane_id: frame.pane_id, ok: false, code: "agent_blocked", message: "" }));
-      } else if (frame.type === "input") sent.push(frame);
+      } else if (frame.type === "input" && !String(frame.text).startsWith("\x1b[?")) sent.push(frame);
       else if (frame.type === "ping" && holdPings) heldPings.push(String(raw));
       else {
         if (frame.type === "resize") resizes.push(frame);
@@ -216,6 +216,8 @@ export async function checkTerminalInput(browser: Browser, origin: string, pane:
     // one read: a note that goes between a count and a textContent would wait out the timeout
     const noteText = () => note.evaluateAll((elements) => elements[0]?.textContent ?? null);
     const sendButton = page.getByRole("button", { name: "Send to the terminal", exact: true });
+    await page.locator(".conn-live").waitFor();
+    await until(async () => await sendButton.isEnabled());
     // A real composition (Chrome's IME path, as Gboard composes every word): the Send keeps focus,
     // so the tap itself must finish the word, and it sends the committed line at once.
     await line.fill("real 한");

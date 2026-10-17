@@ -13,16 +13,21 @@ import {
   type ReactNode,
 } from "react";
 import { flushSync } from "react-dom";
-import { ArrowUp, FileText, Folder, FolderGit2, GitBranch, LoaderCircle, Minimize2, Plus, Square, TriangleAlert, X } from "lucide-react";
+import { ArrowUp, FileText, Folder, FolderGit2, GitBranch, LoaderCircle, Minimize2, Package, Plus, Puzzle, Square, TriangleAlert, UserRound, X, type LucideIcon } from "lucide-react";
 
 import "./Composer.css";
 
 import type { AgentStatus, ConversationMetadata, PlanSummary, SlashCommand } from "../../shared/protocol.ts";
+import { skillSyntax } from "../../shared/skill-syntax.ts";
 import { useMachineApi, useMachineId } from "../lib/machineContext.tsx";
 import { composerDrafts } from "../lib/composerDraft.ts";
 import { paneStorageId } from "../../shared/machines.ts";
 import {
   agentDisplayLabel,
+  briefDescription,
+  COMMAND_GROUPS,
+  commandGroup,
+  commandsForTrigger,
   composerModelDraw,
   composerSendShown,
   composerStatusCompact,
@@ -35,6 +40,7 @@ import {
   insertLeadingMention,
   MAX_COMPOSER_CHARS,
   rankSlashCommands,
+  slashCommandReplacement,
   submitNote,
   terminalOnlyCommand,
 } from "../lib/compose.ts";
@@ -54,6 +60,7 @@ import { AgentMark } from "./AgentMark.tsx";
 import { BackgroundTasks } from "./BackgroundTasks.tsx";
 import { MicButton, VoiceRecordingPill, useDictation } from "./VoiceInput.tsx";
 import { cachedPaneCommands } from "../lib/paneCommandCache.ts";
+import { ModelSwitch } from "./ModelSwitch.tsx";
 import { useT } from "../lib/i18n.ts";
 import { modalOpen } from "../lib/focus.ts";
 
@@ -93,6 +100,8 @@ export interface ComposerProps {
    * note offers to send again with `clearDraft`, which clears that draft from the terminal first, or,
    * where it named none, with `sendAnyway`; a promise settles to any of them */
   onSend: (text: string, clearDraft?: string, sendAnyway?: boolean) => boolean | string | DraftRefusal | Promise<boolean | string | DraftRefusal>;
+  /** omp only: open the model list and apply `/switch` to this session */
+  onSwitchModel?: (selector: string) => boolean | string | Promise<boolean | string>;
   onAbort: () => void;
   onUploadImage: (file: File) => Promise<string>;
 }
@@ -116,7 +125,6 @@ const RESIZE_SLACK = { mouse: 3, touch: 10 } as const;
 const DOUBLE_TAP_MS = 350;
 /** How long a Send tapped mid-composition waits for the keyboard to commit the word (as in TerminalInput). */
 const COMMIT_WAIT_MS = 300;
-const COMMAND_SOURCES = ["builtin", "user", "project", "skill", "plugin"] as const;
 export const SOURCE_LABEL: Record<SlashCommand["source"], string> = {
   builtin: "Built in",
   user: "User",
@@ -124,6 +132,8 @@ export const SOURCE_LABEL: Record<SlashCommand["source"], string> = {
   skill: "Skills",
   plugin: "Plugins",
 };
+/** Where a skill comes from, as a row's icon: yours in the accent (Composer.css), the rest dimmed like any icon. */
+const ORIGIN_ICON: Record<NonNullable<SlashCommand["origin"]>, LucideIcon> = { user: UserRound, project: FolderGit2, bundled: Package, plugin: Puzzle };
 
 let attachmentSequence = 0;
 
@@ -256,6 +266,7 @@ export function Composer({
   branch = null,
   worktreeRepo = null,
   onSend,
+  onSwitchModel,
   onAbort,
   onUploadImage,
 }: ComposerProps) {
@@ -266,6 +277,8 @@ export function Composer({
   const { fetchPaneCommands, fetchPaneFiles } = useMachineApi();
   const { settings } = useSettings();
   const mobile = useMediaQuery("(max-width: 640px), (pointer: coarse)");
+  const [modelOpen, setModelOpen] = useState(false);
+  const [switching, setSwitching] = useState(false);
   const usageEnabled = settings.showUsage && !mobile && machineId === "local" && providerForAgent(agent) !== null;
   const { report: usageReport } = useUsage(usageEnabled);
   const usage = usageEnabled && usageReport !== null ? composerUsage(usageReport.providers, agent, settings.usageOrder, settings.usageHidden) : undefined;
@@ -325,8 +338,8 @@ export function Composer({
   attachmentsRef.current = attachments;
   textRef.current = text;
   caretRef.current = caret;
-  // Codex names its skills with `$`: only there does a `$` open a menu
-  const trigger = useMemo(() => activeTrigger(text, caret, { skills: agent === "codex" }), [agent, caret, text]);
+  const syntax = skillSyntax(agent);
+  const trigger = useMemo(() => activeTrigger(text, caret, { skills: syntax.skillTriggers.includes("$"), namespaced: syntax.namespaced }), [syntax, caret, text]);
   /** a command the agent runs but the chat cannot finish, while it is what the box holds */
   const terminalOnly = useMemo(() => terminalOnlyCommand(agent, text), [agent, text]);
   const uploading = attachments.some((attachment) => attachment.state === "uploading");
@@ -364,7 +377,7 @@ export function Composer({
 
   useEffect(() => {
     let live = true;
-    void cachedPaneCommands(paneId, machineId, fetchPaneCommands)
+    void cachedPaneCommands(paneId, machineId, agent, fetchPaneCommands)
       .then((next) => {
         if (live) setCommands(next);
       })
@@ -374,7 +387,7 @@ export function Composer({
     return () => {
       live = false;
     };
-  }, [paneId]);
+  }, [paneId, agent]);
 
   useEffect(() => {
     const request = ++fileRequest.current;
@@ -610,22 +623,16 @@ export function Composer({
 
   const filteredCommands = useMemo(
     () => (trigger?.kind === "slash"
-      ? rankSlashCommands(commands.filter((command) => {
-        const prefix = command.trigger ?? "/";
-        if (trigger.start === 0) return prefix === (trigger.prefix ?? "/");
-        // Claude honours a skill mention as permission to invoke it; Codex names skills with `$`.
-        // pi expands /skill:name only at message start, and builtins are whole-message commands.
-        return command.source === "skill" && (agent === "claude" ? prefix === "/" : agent === "codex" && prefix === "$");
-      }), trigger.query, slashUsage, trigger.start > 0 && text[trigger.start - 1] !== "\n")
+      ? rankSlashCommands(commandsForTrigger(commands, agent, trigger), trigger.query, slashUsage, trigger.start > 0 && text[trigger.start - 1] !== "\n")
       : []),
     [agent, commands, slashUsage, text, trigger],
   );
   // a typed query lists the matches in rank order, whatever their source (a plugin command whose
   // word starts with it must not sit under a built-in that only has its letters scattered);
-  // the source then rides on each row. Only the bare `/` lists by group.
+  // the source then rides on each row. Only a bare `/` or `$` lists by group.
   const groupedBySource = trigger?.kind === "slash" && trigger.query === "";
   const orderedCommands = useMemo(
-    () => groupedBySource ? COMMAND_SOURCES.flatMap((source) => filteredCommands.filter((command) => command.source === source)) : filteredCommands,
+    () => groupedBySource ? COMMAND_GROUPS.flatMap((group) => filteredCommands.filter((command) => commandGroup(command) === group)) : filteredCommands,
     [filteredCommands, groupedBySource],
   );
   const choices: readonly (SlashCommand | string)[] = trigger?.kind === "slash" ? orderedCommands : files;
@@ -760,7 +767,7 @@ export function Composer({
 
   const selectCompletion = useCallback(
     (choice: SlashCommand | string, currentTrigger: ActiveTrigger) => {
-      const replacement = currentTrigger.kind === "slash" ? `${(choice as SlashCommand).trigger ?? "/"}${(choice as SlashCommand).name} ` : `@${choice as string} `;
+      const replacement = currentTrigger.kind === "slash" ? slashCommandReplacement(choice as SlashCommand, agent, currentTrigger) : `@${choice as string} `;
       const completed = applyCompletion(text, currentTrigger, replacement);
       setTextAndCaret(completed.text, completed.caret);
       setMenuDismissed(true);
@@ -777,7 +784,7 @@ export function Composer({
         });
       }
     },
-    [setTextAndCaret, text],
+    [agent, setTextAndCaret, text],
   );
 
   const pumpUploads = useCallback(() => {
@@ -1069,8 +1076,13 @@ export function Composer({
   const statusCompact = composerStatusCompact(cardWidth);
   const sendShown = sending || composerSendShown({ working: isWorking, text });
   const hint = composerStatusHint({ uploading, connected, text, noRoom: roomless !== undefined });
-  const model = metadata?.model ? modelLabel(metadata.model) : null;
-  const modelShown = Boolean(metadata?.model || metadata?.reasoning_effort);
+  const rawModel = metadata?.model ?? null;
+  const labeled = rawModel ? modelLabel(rawModel) : null;
+  // OMP records a `provider/id` selector: the pill names the id alone and keeps the selector in its title
+  const model = agent === "omp" && rawModel && labeled && !labeled.named && rawModel.includes("/")
+    ? { text: rawModel.slice(rawModel.lastIndexOf("/") + 1), named: false }
+    : labeled;
+  const modelShown = Boolean(metadata?.model || metadata?.reasoning_effort || onSwitchModel);
   const usageDetail = usageWindows.map((window) => {
     const reset = formatResetIn(window.resets_at, Date.now());
     return `${windowLabel(window)} ${meterText(window, settings.usageCount)}${reset ? ` · ${t("Resets in {time}", { time: reset })}` : ""}`;
@@ -1098,10 +1110,21 @@ export function Composer({
 
   return (
     <div className={`composer${notices ? " has-notices" : ""}`} role="group" aria-label={t("Message composer")} data-dictating={dictation.voice.state !== "idle" ? "" : undefined}>
+      {modelOpen && onSwitchModel && <ModelSwitch current={metadata?.model ?? null} busy={switching || !connected || isWorking || agentStatus === "blocked" || answerHint != null} onClose={() => setModelOpen(false)} onPick={(selector) => {
+        if (switching || !connected || isWorking || agentStatus === "blocked" || answerHint != null) return;
+        setSwitching(true);
+        void Promise.resolve().then(() => onSwitchModel(selector)).then((answer) => {
+          if (!mounted.current) return;
+          if (answer === true) setModelOpen(false);
+          else if (typeof answer === "string") setNote(answer);
+        }).catch((error: unknown) => {
+          if (mounted.current) setNote(error instanceof Error ? error.message : String(error));
+        }).finally(() => { if (mounted.current) setSwitching(false); });
+      }} />}
       {greeting}
       {notices}
-      {/* no Tab key on a phone: the suggestion is a chip there that fills the box */}
-      {offered !== null && text === "" && (
+      {/* no Tab key on a phone: the suggestion can be a chip there that fills the box, when Settings asks for it */}
+      {settings.suggestionChip && offered !== null && text === "" && (
         <div className="composer-quick composer-suggestion-row">
           <button type="button" className="composer-quick-reply composer-suggestion" title={t("Use the suggestion")} onClick={() => setTextAndCaret(offered, offered.length)}>
             <span aria-hidden="true">↹ </span>{offered}
@@ -1170,8 +1193,31 @@ export function Composer({
           <div id={menuId} className="menu composer-menu" role="listbox" aria-label={t(trigger.kind === "slash" ? "Slash commands" : "Files")}>
             {trigger.kind === "slash" ? (
               (() => {
+                // a row says what a command does in one sentence (the full text is the row's
+                // tooltip), and a skill's icon says where it comes from: yours, this project's,
+                // one that came with the agent, or one of its plugins'
+                const groupLabel = (group: ReturnType<typeof commandGroup>): string => {
+                  switch (group) {
+                    case "skill-user": return t("Your skills");
+                    case "skill-project": return t("Project skills");
+                    case "skill-bundled": return t("Built-in skills");
+                    case "skill-plugin": return t("Plugin skills");
+                    default: return t(SOURCE_LABEL[group]);
+                  }
+                };
+                const ownerLabel = (origin: NonNullable<SlashCommand["origin"]>): string => {
+                  switch (origin) {
+                    case "user": return t("Your skill");
+                    case "project": return t("Project skill");
+                    case "bundled": return t("Built-in skill");
+                    case "plugin": return t("Plugin skill");
+                  }
+                };
                 const row = (command: SlashCommand, withSource: boolean) => {
                   const index = orderedCommands.indexOf(command);
+                  const description = briefDescription(command.description);
+                  const owner = command.origin === undefined ? null : ownerLabel(command.origin);
+                  const Owner = command.origin === undefined ? null : ORIGIN_ICON[command.origin];
                   return (
                     <button
                       id={`${menuId}-${index}`}
@@ -1180,22 +1226,26 @@ export function Composer({
                       className="menu-item"
                       role="option"
                       aria-selected={index === selectedIndex}
+                      data-origin={command.origin}
+                      title={command.description.trim() !== "" ? command.description : undefined}
                       onMouseDown={(event) => event.preventDefault()}
                       onClick={() => selectCompletion(command, trigger)}
                     >
-                      <span className="menu-item-main">{command.trigger ?? "/"}{command.name}</span>
-                      <span className="menu-item-hint">{withSource ? `${t(SOURCE_LABEL[command.source])}${command.description ? " · " : ""}` : ""}{command.description}</span>
+                      {Owner !== null && <Owner aria-hidden="true" />}
+                      <span className="menu-item-main">{syntax.skillTriggers.includes(trigger.prefix ?? "/") ? trigger.prefix ?? command.trigger ?? "/" : command.trigger ?? "/"}{command.name}</span>
+                      {owner !== null && <span className="visually-hidden">{owner}</span>}
+                      <span className="menu-item-hint">{withSource && owner === null ? `${t(SOURCE_LABEL[command.source])}${description ? " · " : ""}` : ""}{description}</span>
                     </button>
                   );
                 };
                 if (!groupedBySource) return <div className="composer-menu-group">{orderedCommands.map((command) => row(command, true))}</div>;
-                return COMMAND_SOURCES.map((source) => {
-                  const group = filteredCommands.filter((command) => command.source === source);
-                  if (group.length === 0) return null;
+                return COMMAND_GROUPS.map((group) => {
+                  const rows = orderedCommands.filter((command) => commandGroup(command) === group);
+                  if (rows.length === 0) return null;
                   return (
-                    <div className="composer-menu-group" key={source}>
-                      <div className="menu-heading">{t(SOURCE_LABEL[source])}</div>
-                      {group.map((command) => row(command, false))}
+                    <div className="composer-menu-group" key={group}>
+                      <div className="menu-heading">{groupLabel(group)}</div>
+                      {rows.map((command) => row(command, false))}
                     </div>
                   );
                 });
@@ -1323,14 +1373,15 @@ export function Composer({
             <span className="composer-agent-label visually-hidden">{agentLabel}</span>
             <span className="composer-status-separator visually-hidden" aria-hidden="true">·</span>
             <strong className="visually-hidden">{t(composerStatusWord(shownStatus))}</strong>
-            {/* the mark, the model, the level and the context ring as one quiet pill. It only shows: no role,
-                no focus, nothing to press but the ring inside it. A pane that names no model draws no pill
-                (.is-bare): the mark, a level if it has one, and the ring stand in the row as they are */}
-            <span className={`composer-pill${metadata?.model ? "" : " is-bare"}`}>
+            {/* the mark, the model, the level and the context ring as one quiet pill. OMP's model is
+                the one thing to press in it: it opens the session-only switcher. Every other agent's
+                model label only shows. A pane that names no model draws no pill (.is-bare): the mark,
+                a level if it has one, and the ring stand in the row as they are */}
+            <span className={`composer-pill${metadata?.model || onSwitchModel ? "" : " is-bare"}`}>
               {agent && <AgentMark agent={agent} size={14} />}
-              {modelShown && <span className="composer-model-info" aria-label={t("Model and reasoning")}>
-                {/* a name only for an id modelLabel can name for certain; any other id is drawn as received, in the identifier face */}
-                <span className={`composer-model${model ? model.named ? "" : " is-id" : " is-none"}`} title={metadata?.model ?? t("Model not available")}>{model?.text ?? t("Model —")}</span>
+              {modelShown && <span className="composer-model-info" aria-label={onSwitchModel ? undefined : t("Model and reasoning")}>
+                {/* A known id is named; an unknown provider/id shows its id, with the full selector in the title. */}
+                {onSwitchModel ? <button type="button" className={`composer-model composer-model-button${model ? model.named ? "" : " is-id" : ""}`} disabled={!connected || agentStatus === "working" || agentStatus === "blocked" || answerHint != null || switching} aria-label={t("Switch model")} title={agentStatus === "working" || agentStatus === "blocked" || answerHint != null ? t("Wait until the agent is idle to switch models") : metadata?.model ?? t("Switch model")} onClick={() => setModelOpen(true)}>{model?.text ?? t("Switch model")}</button> : <span className={`composer-model${model ? model.named ? "" : " is-id" : " is-none"}`} title={metadata?.model ?? t("Model not available")}>{model?.text ?? t("Model —")}</span>}
                 {/* behind a name the id as received is still read; a touch cannot reach the title */}
                 {model?.named && <span className="composer-model-id visually-hidden">{metadata?.model}</span>}
                 {/* no level recorded: nothing is drawn for it, no dot and no dash; the sentence is still read */}

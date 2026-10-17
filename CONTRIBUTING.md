@@ -79,6 +79,52 @@ bun run test:ui            # builds, then browser regression on `herdr-web-ui-te
 `bun run test:ssh`. Tests and screenshots use panes and state they create themselves, never your
 running terminals: see [development](docs/development.md#checks).
 
+### Focused terminal smoke
+
+Run the terminal keyboard checks without the full integration/browser suites:
+
+```bash
+bun run smoke:terminal
+bun run smoke:terminal arrows backspace
+bun run smoke:terminal ctrl-enter pane-shortcuts
+```
+
+With no arguments, all four cases run. Arguments select cases by the names shown above;
+an unknown name fails before the fixture starts. Install dependencies with `bun install` first.
+This command needs Bun, Node and herdr as described in **Set up**, plus Chrome/Chromium:
+set `CHROME_PATH`, use `/opt/google/chrome/chrome` on Linux, or install the matching browser with
+`bun node_modules/playwright-core/cli.js install chromium`. `HERDR_WEB_HERDR_BIN` can select herdr.
+
+`smoke:terminal` builds `dist/`, then uses `check run` to allocate a disposable herdr session,
+config and state. Its fixture creates two workspaces with real PTYs, a loopback bridge on an
+ephemeral port, and a headless browser. It never attaches to your existing panes or workspaces.
+Do not set `HERDR_TEST_LIVE=1`; live mode and direct unisolated fixture use are refused.
+If `dist/` is already current, skip rebuilding with
+`bun run check run bun scripts/terminal-smoke.ts arrows` (the same case arguments apply).
+
+A passing command exits 0. A failed check or prerequisite exits nonzero; unknown cases and
+the fixture's unsafe-environment guard exit 2 in the child command. `check run` reports child
+failures instead of treating them as passes. On success or a thrown check, the fixture closes
+its browser, stops its bridge, closes its workspaces/panes and removes its temporary root;
+the wrapper stops its disposable herdr and removes its config/state. `CHECK_DIR`, when explicitly
+set, retains the wrapper directory for inspection, not a running daemon. The printed check-report
+path contains the result and command logs; a terminal smoke PASS is not a full-CI PASS.
+
+### Focused pending-input smoke
+
+Run `bun run smoke:pending-input` for the real foreground-agent queue/reconnect scene,
+without the full browser journey. It uses the same consumer module as `ui-regression.ts`
+and the guarded isolated terminal fixture. It retains Queue, Send now, Stop, uncertain
+reload and discard checks; the reconnect oracle observes both legacy input and submit,
+the current socket/pane, bridge acceptance and the owned raw PTY recorder. Constructed
+early, duplicate, missing, wrong-route/text and rejected-ack controls must fail.
+
+Set `CHECK_BROWSER_EVIDENCE_DIR` to retain raw phase/socket/pane frames, PTY bytes,
+DOM and a screenshot. With an already-current build, use
+`bun run check run bun scripts/pending-input-smoke.ts`. A focused PASS is not full CI.
+A diagnostic failure still closes the owned workspace and temporary root, then reports
+the original error.
+
 ## What a change needs
 
 - **HTTP or WebSocket contract:** change both sides through `shared/protocol.ts` and cover it with a

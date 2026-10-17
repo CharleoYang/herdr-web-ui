@@ -29,6 +29,8 @@ const SUBMIT_TIMEOUT_MS = 90_000;
  */
 const CONNECT_TIMEOUT_MS = 8_000;
 const CONNECT_TIMEOUT_MAX_MS = 30_000;
+/** A completed handshake alone is not recovery: short-lived opens must keep the retry backoff. */
+const STABLE_CONNECTION_MS = 10_000;
 /**
  * Liveness (feature "ping"): a socket can read OPEN while its TCP path is gone (a phone moved from
  * Wi-Fi to cellular, a NAT entry expired while it slept) and no close event comes for minutes. The
@@ -114,6 +116,8 @@ export class HerdrSocket {
    * after letting go of it) asks again; only the chat taking its interest back removes it. */
   private readonly conversationWanted = new Set<string>();
   private retries = 0;
+  /** When this connection opened; a brief open must not restart a flapping connection's retries. */
+  private openedAt: number | null = null;
   private reconnectTimer: number | null = null;
   /** the deadline of the attempt still in CONNECTING */
   private connectTimer: number | null = null;
@@ -272,14 +276,13 @@ export class HerdrSocket {
     }, Math.min(CONNECT_TIMEOUT_MAX_MS, CONNECT_TIMEOUT_MS * 2 ** this.connectTimeouts));
 
     socket.addEventListener("open", () => {
-      if (this.socket === socket) {
-        this.clearConnectTimer();
-        this.connectTimeouts = 0;
-        this.connectionState = "open";
-        this.lastFrameAt = Date.now();
-        this.watchIdle(socket);
-      }
-      this.retries = 0;
+      if (this.socket !== socket) return;
+      this.clearConnectTimer();
+      this.connectTimeouts = 0;
+      this.connectionState = "open";
+      this.openedAt = Date.now();
+      this.lastFrameAt = this.openedAt;
+      this.watchIdle(socket);
       // always send the role, never only when non-default: a user can flip the role
       // while disconnected (setMode stores it without sending), so without this frame
       // the reconnect would leave the server on the stale role and no ack would ever
@@ -307,6 +310,13 @@ export class HerdrSocket {
         /* ignore malformed frame */
         return;
       }
+      // Complete pages are opt-in on THIS connection and only for its attached, watching pane.
+      // Do not let a frame left over from a detached chat establish a new page baseline.
+      if (message.type === "conversation-delta" && (!this.conversationPushes()
+        || !this.attached.has(message.pane_id) || !this.conversationWanted.has(message.pane_id))) return;
+      if (message.type === "prompt-push" && (!this.promptPushes()
+        || !this.attached.has(message.pane_id) || !this.conversationWanted.has(message.pane_id)
+        || (typeof document !== "undefined" && document.visibilityState === "hidden"))) return;
       // ended before the handlers run, so the input checks they make already read true; the pong
       // goes on to them, so a view that read input as refused during the probe reads it again
       if (message.type === "pong" && this.probeIds.has(message.id)) {
@@ -410,6 +420,8 @@ export class HerdrSocket {
 
   /** Drops the current connection: its submits settle as disconnected and the disconnect handlers run. */
   private endConnection(): void {
+    if (this.openedAt !== null && Date.now() - this.openedAt >= STABLE_CONNECTION_MS) this.retries = 0;
+    this.openedAt = null;
     this.socket = null;
     this.clearConnectTimer();
     this.clearLiveness();
@@ -667,9 +679,14 @@ export class HerdrSocket {
     }
   }
 
-  /** Whether this connection's bridge pushes transcript changes to a watching chat. */
+  /** Complete-page pushes permit the 10s REST backstop; older bridges keep the 2s cadence. */
   conversationPushes(): boolean {
-    return this.connected && this.features.has("conversation-watch");
+    return this.connected && this.features.has("conversation-watch") && this.features.has("conversation-delta");
+  }
+  /** Advertised prompt support; a pane additionally requires current attach and chat interest. */
+  promptPushes(paneId?: string): boolean {
+    return this.connected && this.snapshotKnown && this.features.has("conversation-watch") && this.features.has("prompt-push")
+      && (paneId === undefined || (this.attached.has(paneId) && this.conversationWanted.has(paneId)));
   }
 
   /** Capture connection AND subscription before xterm's asynchronous write. Never queue ACKs. */

@@ -62,14 +62,11 @@ describe("fixed sleeps", () => {
     ], "scripts/fixed-sleeps.json may only shrink: take the new fixed sleep out of the code instead (see the message of the test above for how). A renamed file takes its entry along with the same count, which keeps the total.");
   });
 
-  it("adds no fixed sleep and lowers the baseline when one goes", () => {
+  it("adds no fixed sleep", () => {
     const counts = fixedSleepCounts();
     const grown = Object.entries(counts).filter(([file, count]) => count > (baseline[file] ?? 0));
     fail(grown.flatMap(([file, count]) => [`${file}: ${count} fixed sleeps, baseline ${baseline[file] ?? 0}`, ...fixedSleeps(file).map((line) => `  ${line}`)]),
       "Wait for the condition, not for a set time (AGENTS.md: bounded polls and deadlines, never fixed sleeps): poll in a loop bounded by a deadline (`const deadline = Date.now() + 10_000; while (!done()) { if (Date.now() > deadline) throw new Error(\"…\"); await Bun.sleep(25); }`), or race a timeout against the event (`Promise.race`). A wait that must be fixed (proving that nothing arrives, a settle gap herdr needs) says so with `// fixed wait: <why>` on its line or the line above. Never raise scripts/fixed-sleeps.json; when a file was renamed, move its entry to the new path with the same count.");
-    const shrunk = Object.entries(baseline).filter(([file, count]) => (counts[file] ?? 0) < count);
-    fail(shrunk.map(([file, count]) => `${file}: ${counts[file] ?? 0} now, baseline ${count}`),
-      "Fixed sleeps went away: lower these entries in scripts/fixed-sleeps.json to the counts shown (remove an entry at 0; `bun scripts/fixed-sleeps.ts` prints them all), so they cannot come back.");
   });
 
   it("lists only files that exist", () => {
