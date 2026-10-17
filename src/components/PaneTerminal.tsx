@@ -52,7 +52,7 @@ import { isAppShortcut } from "../lib/shortcuts.ts";
 import { plainPageDirection } from "../lib/pageScroll.ts";
 import { keyboardHoldsGrid, keyboardUp } from "../lib/keyboard.ts";
 import { OpenFileContext } from "../lib/filePaths.ts";
-import { fileUriPath, hyperlinkFilter, isWebLink, terminalFileLinkProvider } from "../lib/terminalFileLinks.ts";
+import { fileUriPath, hyperlinkFilter, isWebLink, openWebLink, terminalFileLinkProvider } from "../lib/terminalFileLinks.ts";
 import { adjustTerminalGlyphs } from "../lib/terminalGlyphs.ts";
 import { terminalLabel } from "../lib/terminalLabel.ts";
 import { useMediaQuery } from "../lib/useMediaQuery.ts";
@@ -75,6 +75,8 @@ const inUse = (): boolean => document.visibilityState === "visible" && document.
 export interface PaneTerminalProps {
   /** The pane this terminal attaches to; null renders the placeholder. */
   paneId: string | null;
+  /** A restored pane keeps its ID but gets a new terminal after herdr restarts. */
+  terminalId?: string | null;
   /** null while the PC identity loads, before the first attach's fixed-grid frame arrives. */
   mirrored?: boolean | null;
   /**
@@ -135,8 +137,37 @@ export interface PaneTerminalProps {
 /** The last refused Send now note per pane, kept across that pane's mounts (see queueError). */
 const heldRowNotes = new Map<string, { owner: string; id: string; text: string }>();
 
+/** xterm's ANSI palette for Monokai in dark. settings.ts `terminalTheme()` names the surface, the
+ *  ink, the cursor and the selection (the --term-* tokens of styles.css); the sixteen ANSI colors
+ *  are what a TUI draws its own output with, so the grid reads as a Monokai terminal instead of
+ *  xterm's defaults. Monokai in light keeps xterm's derived colors: paper reads them. */
+const MONOKAI_DARK_ANSI = {
+  black: "#272822",
+  red: "#f92672",
+  green: "#a6e22e",
+  yellow: "#e6db74",
+  blue: "#66d9ef",
+  magenta: "#ae81ff",
+  cyan: "#66d9ef",
+  white: "#f8f8f2",
+  brightBlack: "#75715e",
+  brightRed: "#f92672",
+  brightGreen: "#a6e22e",
+  brightYellow: "#e6db74",
+  brightBlue: "#66d9ef",
+  brightMagenta: "#ae81ff",
+  brightCyan: "#66d9ef",
+  brightWhite: "#ffffff",
+};
+
+/** The xterm theme: the palette's four tokens, with Monokai dark's own ANSI colors over them. */
+function getTermTheme(theme: ResolvedTheme, palette: Palette) {
+  const base = terminalTheme(theme, palette);
+  return palette === "monokai" && theme === "dark" ? { ...base, ...MONOKAI_DARK_ANSI } : base;
+}
 export function PaneTerminal({
   paneId,
+  terminalId = null,
   mirrored = false,
   restoreError = null,
   agent = null,
@@ -546,12 +577,16 @@ export function PaneTerminal({
       // a chosen family follows in the font effect below, once its faces have loaded
       fontFamily: TERMINAL_FONT_STACK,
       theme: terminalTheme(theme, palette),
+      // a program's own colors suit one background (Claude Code's question titles are #ffffff, near
+      // 1:1 on a light palette): xterm moves a foreground under 4.5:1 toward black or white. Dim text
+      // needs half that, and box, block and powerline glyphs keep their color.
+      minimumContrastRatio: 4.5,
       linkHandler: {
         activate: (event, uri) => {
           if (!linkPressed(event)) return;
           const path = fileUriPath(uri);
           if (path !== null) openFileRef.current?.(path);
-          else if (isWebLink(uri)) window.open(uri, "_blank", "noopener,noreferrer");
+          else if (isWebLink(uri)) openWebLink(uri);
         },
         allowNonHttpProtocols: true,
       },
@@ -579,7 +614,7 @@ export function PaneTerminal({
     term.loadAddon(fit);
     matchHerdrWidths(term);
     // the same policy as the linkHandler above: an http(s) address or nothing (S10)
-    term.loadAddon(new WebLinksAddon((_event, uri) => { if (isWebLink(uri)) window.open(uri, "_blank", "noopener,noreferrer"); }));
+    term.loadAddon(new WebLinksAddon((_event, uri) => { if (isWebLink(uri)) openWebLink(uri); }));
     term.registerLinkProvider(terminalFileLinkProvider(() => term.buffer.active, (path, event) => { if (linkPressed(event)) openFileRef.current?.(path); }));
     term.open(host);
     let compositionEndTimer: number | null = null;
@@ -1988,7 +2023,7 @@ export function PaneTerminal({
   // the theme follows the settings without a remount
   useEffect(() => {
     const term = termRef.current;
-    if (term) term.options.theme = terminalTheme(theme, palette);
+    if (term) term.options.theme = getTermTheme(theme, palette);
   }, [theme, palette]);
 
   // the font follows too, and a font change moves the grid. xterm measures the cell (and the DOM
@@ -2117,7 +2152,8 @@ export function PaneTerminal({
     if (sizesPty() && inUse()) socketRef.current?.resize(pane, term.cols, term.rows, true);
   }, [follow]);
 
-  // Reset synchronously on pane changes: old composition timers must never see the new pane.
+  // Reset on a pane or terminal replacement: a herdr restart can keep the pane ID.
+  // Old composition timers must never see the new terminal.
   useLayoutEffect(() => {
     const socket = socketRef.current;
     const term = termRef.current;
@@ -2163,6 +2199,11 @@ export function PaneTerminal({
     // A fresh background pane must not acquire size ownership even with the release setting off.
     // This also covers a replacement pane: no prior release or input ownership is inherited.
     setReleased(false);
+    // A restored terminal in a cached tab waits until that tab is presented again.
+    if (cachedRef.current) {
+      setReleased(true);
+      return leavePane;
+    }
     if (deferAttachRef.current(paneId)) return leavePane;
     // under the keyboard (a pane picked while typing) the fit waits for it to go, and the attach adopts
     // the pane's size meanwhile
@@ -2184,7 +2225,7 @@ export function PaneTerminal({
     // grid sent the keys straight to the pane, and showed a phone's IME text mid-screen
     if (activeRef.current && !chatViewRef.current && !autoSelected && !coarseRef.current && !modalOpen() && !findOpenRef.current) term.focus();
     return leavePane;
-  }, [paneId]);
+  }, [paneId, terminalId]);
 
   // the message the tab kept its pane for has gone (or was held): out of use, it lets go now
   useEffect(() => { releaseRef.current(); }, [pending]);

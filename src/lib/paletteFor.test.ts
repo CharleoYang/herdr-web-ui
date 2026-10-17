@@ -19,7 +19,7 @@ describe("paletteFor", () => {
     const settings = sanitizeSettings({ theme: "system", palette: "charcoal" });
     expect(settings.paletteLight).toBe("charcoal");
     expect(settings.paletteDark).toBe("charcoal");
-    expect(DEFAULT_SETTINGS.paletteLight).toBe("amber");
+    expect(DEFAULT_SETTINGS.paletteLight).toBe("monokai");
   });
 
   test("a stored pair survives and an unknown one falls back", () => {
@@ -28,10 +28,10 @@ describe("paletteFor", () => {
     expect(settings.paletteDark).toBe("charcoal");
   });
 
-  test("a removed palette in the pair loads as amber", () => {
+  test("a removed palette in the pair loads as monokai", () => {
     const settings = sanitizeSettings({ theme: "system", palette: "report", paletteLight: "lilac", paletteDark: "forest" });
-    expect(settings.palette).toBe("amber");
-    expect(settings.paletteLight).toBe("amber");
-    expect(settings.paletteDark).toBe("amber");
+    expect(settings.palette).toBe("monokai");
+    expect(settings.paletteLight).toBe("monokai");
+    expect(settings.paletteDark).toBe("monokai");
   });
 });

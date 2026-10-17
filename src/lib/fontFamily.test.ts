@@ -10,23 +10,24 @@ describe("terminal font stack", () => {
   });
 
   it("puts the typed list after the icon font and in front of the text fonts, never in place of them", () => {
-    const stack = terminalFontStack('D2Coding, "Cascadia Mono"');
+    const stack = terminalFontStack('Consolas, "Cascadia Mono"');
     // the bundled icon font never sizes a cell, so it stays first and its icons draw over any font
-    expect(stack.startsWith('"Symbols Nerd Font Mono", D2Coding, "Cascadia Mono", "JetBrains Mono"')).toBe(true);
-    // a missing font falls through to today's order, and Malgun Gothic stays the last resort
-    expect(stack.replace('D2Coding, "Cascadia Mono", ', "")).toBe(TERMINAL_FONT_STACK);
-    expect(stack.endsWith('monospace, "Malgun Gothic"')).toBe(true);
+    expect(stack.startsWith('"Symbols Nerd Font Mono", Consolas, "Cascadia Mono", ui-monospace')).toBe(true);
+    // a missing font falls through to today's order, and Hiragino Sans GB stays the last resort
+    expect(stack.replace('Consolas, "Cascadia Mono", ', "")).toBe(TERMINAL_FONT_STACK);
+    expect(stack.endsWith('"Hiragino Sans GB"')).toBe(true);
   });
 
   it("takes none of the faces the app bundles for its own text: xterm would size its cells from one", () => {
-    const sheets = ["../fonts/fonts.css", "../fonts/pretendard/pretendardvariable-dynamic-subset.css"].map((file) => readFileSync(new URL(file, import.meta.url), "utf8")).join("\n");
+    const sheets = ["../fonts/fonts.css"].map((file) => readFileSync(new URL(file, import.meta.url), "utf8")).join("\n");
     const bundled = new Set([...sheets.matchAll(/font-family:\s*["']([^"']+)["']/g)].map((match) => match[1]!));
-    expect([...bundled].sort()).toEqual(["JetBrains Mono Web", "Pretendard Variable"]);
+    expect([...bundled].sort()).toEqual(["JetBrains Mono Web"]);
     const named = TERMINAL_FONT_STACK.split(",").map((name) => name.trim().replace(/["']/g, ""));
     for (const family of bundled) expect(named).not.toContain(family);
-    // the chat's and the chrome's code face does take it, after the icon font
+    // the chat's and the chrome's code face opens with the bundled face, keeps the system monospace
+    // stack behind it, and ends on the Chinese fallbacks this checkout asks for
     const mono = /--font-mono:\s*([^;]+);/.exec(readFileSync(new URL("../styles.css", import.meta.url), "utf8"))![1]!;
-    expect(mono.startsWith('"Symbols Nerd Font Mono", "JetBrains Mono Web", ')).toBe(true);
+    expect(mono).toBe('"Symbols Nerd Font Mono", "JetBrains Mono Web", ui-monospace, "SF Mono", Menlo, Monaco, "PingFang SC", "Hiragino Sans GB", monospace');
   });
 
   it("never lets an unsanitized list through", () => {

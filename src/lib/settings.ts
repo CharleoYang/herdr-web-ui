@@ -29,10 +29,10 @@ export type AgentMarks = "color" | "mono";
 export type UsageCount = "used" | "left";
 /** the limit a plan meter shows: the plan's week, or its short session (5 hours on Claude and Codex) */
 export type UsageGlance = "week" | "session";
-/** amber: the herdr look (the default); charcoal: neutral Ghostty-style dark;
- *  catppuccin: Catppuccin Mocha in dark, Latte in light. A record naming a palette that was removed
- *  (report, lilac, forest) loads as amber. */
-export type Palette = "amber" | "charcoal" | "catppuccin";
+/** monokai: the OMP look this checkout defaults to; amber: the herdr look;
+ *  charcoal: neutral Ghostty-style dark; catppuccin: Catppuccin Mocha in dark, Latte in light.
+ *  A record naming a palette that was removed (report, lilac, forest) loads as monokai. */
+export type Palette = "amber" | "charcoal" | "catppuccin" | "monokai";
 /** the chat lane's widest: the transcript, the composer column and the held list share it (--chat-w in src/styles.css).
  *  narrow: 820px; default: follows the pane, up to 60rem (chatLaneWidth); wide: 72rem; full: the pane, less the gutters */
 export type ChatWidth = "narrow" | "default" | "wide" | "full";
@@ -107,6 +107,9 @@ export interface Settings {
   enterSends: boolean;
   /** true: a message sent while the agent works goes by itself when the turn ends; false: it waits for Send now */
   autoSendQueued: boolean;
+  /** on a touch screen, a chip above the message box offers the prompt the agent suggests next.
+   * Not `showSuggestionChip`: that key was on by default until 0.4.9 and is still stored on phones */
+  suggestionChip: boolean;
   /** show the agent's folded reasoning blocks in the chat view */
   showThinking: boolean;
   /** request a screen wake lock while a pane is open in this visible tab */
@@ -190,6 +193,7 @@ export function telemetrySettingsSnapshot(settings: Settings): TelemetrySettings
     chatWidth: settings.chatWidth,
     enterSends: settings.enterSends,
     autoSendQueued: settings.autoSendQueued,
+    suggestionChip: settings.suggestionChip,
     showThinking: settings.showThinking,
     keepScreenOn: settings.keepScreenOn,
     language: settings.language,
@@ -231,7 +235,7 @@ export const SETTING_SCOPE = {
   theme: "shared", palette: "shared", language: "shared", sidebarRows: "shared", agentOrder: "shared",
   agentMarks: "shared", autoSendQueued: "shared", showThinking: "shared", quickReplies: "shared",
   showQuickReplies: "shared", showUsage: "shared", usageCount: "shared",
-  usageGlance: "shared", usageOrder: "shared", usageHidden: "shared", defaultView: "device",
+  usageGlance: "shared", usageOrder: "shared", usageHidden: "shared", defaultView: "device", suggestionChip: "device",
   terminalInputMode: "device", keyBarExtras: "device", keyBarItems: "device", shortcutOverrides: "device", density: "device",
   terminalFontSize: "device",
   terminalWheelSpeed: "device", terminalFontFamily: "device", paneClipboard: "device", releasePaneAway: "device",
@@ -255,13 +259,13 @@ export const DEFAULT_SETTINGS: Settings = {
   shortcutOverrides: {},
   theme: "dark",
   density: "comfortable",
-  sidebarRows: "two",
+  sidebarRows: "one",
   agentOrder: "workspace",
   agentMarks: "color",
   statusIndicators: "classic",
-  palette: "amber",
-  paletteLight: "amber",
-  paletteDark: "amber",
+  palette: "monokai",
+  paletteLight: "monokai",
+  paletteDark: "monokai",
   terminalFontSize: 13,
   terminalWheelSpeed: 1,
   terminalFontFamily: "",
@@ -273,6 +277,7 @@ export const DEFAULT_SETTINGS: Settings = {
   chatWidth: "default",
   enterSends: true,
   autoSendQueued: true,
+  suggestionChip: false,
   showThinking: false,
   keepScreenOn: false,
   language: "system",
@@ -443,6 +448,7 @@ export function sanitizeSettings(raw: unknown): Settings {
     chatWidth: CHAT_WIDTHS.includes(record["chatWidth"] as ChatWidth) ? record["chatWidth"] as ChatWidth : DEFAULT_SETTINGS.chatWidth,
     enterSends: typeof record["enterSends"] === "boolean" ? record["enterSends"] : DEFAULT_SETTINGS.enterSends,
     autoSendQueued: typeof record["autoSendQueued"] === "boolean" ? record["autoSendQueued"] : DEFAULT_SETTINGS.autoSendQueued,
+    suggestionChip: typeof record["suggestionChip"] === "boolean" ? record["suggestionChip"] : DEFAULT_SETTINGS.suggestionChip,
     showThinking: typeof record["showThinking"] === "boolean" ? record["showThinking"] : DEFAULT_SETTINGS.showThinking,
     keepScreenOn: typeof record["keepScreenOn"] === "boolean" ? record["keepScreenOn"] : DEFAULT_SETTINGS.keepScreenOn,
     language: LANGUAGE_SETTINGS.includes(record["language"] as LanguageSetting) ? record["language"] as LanguageSetting : DEFAULT_SETTINGS.language,
@@ -512,9 +518,13 @@ const TERMINAL_THEMES: Record<Palette, Record<ResolvedTheme, TerminalColors>> = 
     light: { background: "#eff1f5", foreground: "#4c4f69", cursor: "#dc8a78", selectionBackground: "#d2d4dc" },
     dark: { background: "#1e1e2e", foreground: "#cdd6f4", cursor: "#f5e0dc", selectionBackground: "#3b3d4f" },
   },
+  monokai: {
+    light: { background: "#faf9f5", foreground: "#272822", cursor: "#d46b00", selectionBackground: "#e0dccf" },
+    dark: { background: "#272822", foreground: "#f8f8f2", cursor: "#fd971f", selectionBackground: "#49483e" },
+  },
 };
 
-export function terminalTheme(theme: ResolvedTheme, palette: Palette = "amber"): TerminalColors {
+export function terminalTheme(theme: ResolvedTheme, palette: Palette = "monokai"): TerminalColors {
   return TERMINAL_THEMES[palette][theme];
 }
 
@@ -523,6 +533,7 @@ const THEME_COLOR: Record<Palette, Record<ResolvedTheme, string>> = {
   amber: { dark: "#181613", light: "#faf8f3" },
   charcoal: { dark: "#171717", light: "#fafaf9" },
   catppuccin: { dark: "#181825", light: "#e6e9ef" },
+  monokai: { dark: "#272822", light: "#faf9f5" },
 };
 
 function applyToDocument(settings: Settings, resolved: ResolvedTheme, palette: Palette, language: Language): void {
