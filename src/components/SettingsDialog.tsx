@@ -1,14 +1,18 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode, type RefObject } from "react";
-import { ArrowLeft, Bell, Check, ChevronDown, ChevronRight, ChevronUp, Eye, EyeOff, Gauge, Info, Keyboard, MessageSquare, Mic, Monitor, Palette, Plug, Plus, Search, Smartphone, SquareTerminal, Star, X, type LucideIcon } from "lucide-react";
+import { ArrowLeft, Bell, Check, ChevronRight, Gauge, Info, Keyboard, MessageSquare, Mic, Monitor, Palette, Plug, Plus, Search, Smartphone, SquareTerminal, Star, X, type LucideIcon } from "lucide-react";
 
 import "./SettingsDialog.css";
 
 import type { AppActions } from "../lib/actions.ts";
 import { useInstallPrompt } from "../lib/install.ts";
-import { SHORTCUTS, formatKeys, isMacPlatform, modKeyLabel, setShortcutRecording, shortcutDisplayKeys, shortcutKeys, shortcutConflict, type ShortcutId } from "../lib/shortcuts.ts";
-import { SHORTCUT_KEYS, recordShortcut, shortcutMatchesQuery } from "../lib/shortcutRecorder.ts";
-import { isReservedShortcutKey } from "../lib/shortcutBindings.ts";
-import { CHAT_FONT_MAX, CHAT_FONT_MIN, CHAT_WIDTHS, chatFontSize, DEFAULT_SETTINGS, DIFF_STYLES, MARKDOWN_WIDTHS, QUICK_REPLIES_MAX, QUICK_REPLY_MAX_CHARS, TERMINAL_FONT_MAX, TERMINAL_FONT_MIN, TERMINAL_WHEEL_SPEED_MAX, TERMINAL_WHEEL_SPEED_MIN, DICTATION_LANGUAGES, VOICE_BUTTONS, useSettings, forgetPaneViews, uiFontSize, type DictationLanguage, type Palette as PaletteName, type VoiceButton } from "../lib/settings.ts";
+import { SHORTCUTS, bindingDisplayKeys, formatKeys, isMacPlatform, setShortcutRecording, shortcutDisplayKeys, shortcutKeys, shortcutConflict, type ShortcutId } from "../lib/shortcuts.ts";
+import { MENU_SHORTCUT_KEYS, recordShortcut, shortcutMatchesQuery } from "../lib/shortcutRecorder.ts";
+import { exactChordRisk, isReservedShortcutKey, parseExactChord } from "../lib/shortcutBindings.ts";
+import { WEB_LINK_TARGETS } from "../lib/webPanel.ts";
+import { FILE_OPEN_TARGETS } from "../lib/filePresentation.ts";
+import { CLAUDE_LAUNCH_MODES, CODEX_LAUNCH_MODES, type ClaudeLaunchMode, type CodexLaunchMode } from "../lib/agentLaunchMode.ts";
+import { CHAT_FONT_MAX, CHAT_FONT_MIN, CHAT_WIDTHS, chatFontSize, DEFAULT_SETTINGS, DIFF_STYLES, MARKDOWN_WIDTHS, QUICK_REPLIES_MAX, QUICK_REPLY_MAX_CHARS, TERMINAL_FONT_MAX, TERMINAL_FONT_MIN, TERMINAL_WHEEL_SPEED_MAX, TERMINAL_WHEEL_SPEED_MIN, DICTATION_LANGUAGES, VOICE_BUTTONS, useSettings, forgetPaneViews, uiFontSize, type DictationLanguage, type VoiceButton } from "../lib/settings.ts";
+import { pickTheme, rowFor, THEME_IDS, type Mode, type ThemeId } from "../lib/themes.ts";
 import { LANGUAGE_NAMES, LANGUAGE_SETTINGS, useLocale, useT } from "../lib/i18n.ts";
 import { useFocusTrap } from "../lib/useFocusTrap.ts";
 import { KeyBarSettings } from "./KeyBarSettings.tsx";
@@ -18,16 +22,15 @@ import { FONT_FAMILY_MAX_CHARS, sanitizeFontFamily } from "../lib/fontFamily.ts"
 import { UI_FONT_MAX, UI_FONT_MIN } from "../lib/typography.ts";
 import { canListInstalledFonts, filterFamilies, isMonospaceFamily, queryInstalledFonts } from "../lib/installedFonts.ts";
 import type { UpdatesModel } from "../lib/updates.ts";
+import type { UserError } from "../lib/userError.ts";
 import type { MachineSettings } from "../../shared/machines.ts";
 import { fetchRemoteAccess, fetchVoiceStatus, machineRequest, saveVoiceConfig } from "../lib/api.ts";
 import { isLoopbackHost, phonePlan } from "../lib/phone.ts";
-import type { AgentIntegration, HealthAuth, PluginActions, ProviderUsage, RemoteAccess } from "../../shared/protocol.ts";
+import type { AgentIntegration, HealthAuth, PluginActions, RemoteAccess } from "../../shared/protocol.ts";
 import { useMachineApi, useMachineId } from "../lib/machineContext.tsx";
 import { loadIntegrations, outcomeFor, type IntegrationsResult } from "../lib/integrations.ts";
 import type { VoiceStatus } from "../../shared/voice.ts";
 import { dictationLocale, VOICE_CONFIG_EVENT } from "../lib/voice.ts";
-import { moveInOrder, orderProviders, PROVIDER_MARK, PROVIDER_NAME, usageName, useUsage } from "../lib/usage.ts";
-import { AgentMark } from "./AgentMark.tsx";
 import { DevicesPanel } from "./DevicesPanel.tsx";
 import { ConfirmDialog } from "./ConfirmDialog.tsx";
 import { PhonePanel } from "./PhonePanel.tsx";
@@ -37,6 +40,7 @@ import { PushTestControls } from "./PushTestControls.tsx";
 import { previewAlertSound, unlockAlertSound } from "../lib/alertSound.ts";
 import { HerdrUpdateControls, UpdateControls } from "./UpdateControls.tsx";
 import { TelemetryControls } from "./TelemetryControls.tsx";
+import { UsageSettings } from "./UsageSettings.tsx";
 import { useSheetSwipe } from "../lib/sheets.ts";
 import { useMediaQuery } from "../lib/useMediaQuery.ts";
 import { CrashProbe, RegionCrash } from "./AppCrash.tsx";
@@ -54,6 +58,8 @@ export interface SettingsDialogProps {
   /** the page shown, for the address; null while a phone shows its list of pages */
   onPage?: (page: string | null) => void;
   onClose: () => void;
+  /** Account login runs on this server's PC, even while another PC is selected. */
+  onUsageLogin: (paneId: string) => void;
   actions: AppActions;
   updates: UpdatesModel;
   /** how this browser got in, from the last health check */
@@ -61,6 +67,8 @@ export interface SettingsDialogProps {
   /** the herdr this app's server talks to, from the last health check */
   herdrVersion: string | null;
   onEnableNotifications: () => Promise<boolean>;
+  /** the last change the server refused to save (lib/preferencesSync.ts); null once a save lands */
+  saveError: UserError | null;
   /** a file preview is open beneath: the dialog is drawn above it */
   overPreview?: boolean;
 }
@@ -232,14 +240,52 @@ function shownBy(entry: SettingsLevel | null): { page: SettingsPage | null; keyB
   return page === null && entry.page !== null ? null : { page, keyBar: entry.keyBar && page === "terminal" };
 }
 
-function PaletteSelect({ id, value, onChange }: { id: string; value: PaletteName; onChange: (palette: PaletteName) => void }) {
+/** What each theme is called: the color words are translated, the brand names stay as their projects write them. */
+const THEME_NAMES: Record<ThemeId, string> = {
+  amber: "Amber",
+  charcoal: "Charcoal",
+  codex: "Codex",
+  monokai: "Monokai (OMP)",
+  catppuccin: "Catppuccin",
+  "catppuccin-latte": "Catppuccin Latte",
+  "tokyo-night": "Tokyo Night",
+  "tokyo-night-day": "Tokyo Night Day",
+  gruvbox: "Gruvbox",
+  "gruvbox-light": "Gruvbox Light",
+  "one-dark": "One Dark",
+  "one-light": "One Light",
+  solarized: "Solarized",
+  "solarized-light": "Solarized Light",
+  kanagawa: "Kanagawa",
+  "kanagawa-lotus": "Kanagawa Lotus",
+  "rose-pine": "Rosé Pine",
+  "rose-pine-dawn": "Rosé Pine Dawn",
+  dracula: "Dracula",
+  nord: "Nord",
+  vesper: "Vesper",
+};
+
+/**
+ * Every theme, grouped by the kind of the row `side` draws it with - a both-mode theme by the
+ * side's own kind, a single-kind theme by its only one - the side's own kind first. The other
+ * kind is offered too: a dark theme chosen for light mode draws dark, as it does in herdr.
+ */
+function themeGroups(side: Mode): { kind: Mode; ids: ThemeId[] }[] {
+  const other: Mode = side === "dark" ? "light" : "dark";
+  return [side, other].map((kind) => ({ kind, ids: THEME_IDS.filter((id) => rowFor(id, side).mode === kind) }));
+}
+
+/** The theme of one side. Picking a paired theme also fills the other side with its sibling while that side is still untouched (pickTheme). */
+function ThemeSelect({ side }: { side: Mode }) {
+  const { settings, update } = useSettings();
   const t = useT();
   return (
-    <select id={id} className="select settings-select" value={value} onChange={(event) => onChange(event.target.value as PaletteName)}>
-      <option value="monokai">{t("Monokai (OMP)")}</option>
-      <option value="amber">{t("Amber")}</option>
-      <option value="charcoal">{t("Charcoal")}</option>
-      <option value="catppuccin">{t("Catppuccin")}</option>
+    <select id={`settings-theme-${side}`} className="select settings-select" value={side === "dark" ? settings.darkTheme : settings.lightTheme} onChange={(event) => update(pickTheme(settings, side, event.target.value as ThemeId))}>
+      {themeGroups(side).map(({ kind, ids }) => (
+        <optgroup key={kind} label={kind === "dark" ? t("Dark") : t("Light")}>
+          {ids.map((id) => <option key={id} value={id}>{t(THEME_NAMES[id])}</option>)}
+        </optgroup>
+      ))}
     </select>
   );
 }
@@ -253,20 +299,12 @@ function AppearancePage() {
       <SettingsRow label={t("Theme")} wide>
         <Segmented label={t("Theme")} value={settings.theme} onChange={(theme) => update({ theme })} options={[{ value: "dark", label: t("Dark") }, { value: "light", label: t("Light") }, { value: "system", label: t("System") }]} />
       </SettingsRow>
-      {settings.theme === "system" ? (
-        <>
-          <SettingsRow label={t("Light colors")} description={t("System mode switches between the two palettes")} htmlFor="settings-palette-light">
-            <PaletteSelect id="settings-palette-light" value={settings.paletteLight} onChange={(paletteLight) => update({ paletteLight })} />
-          </SettingsRow>
-          <SettingsRow label={t("Dark colors")} htmlFor="settings-palette-dark">
-            <PaletteSelect id="settings-palette-dark" value={settings.paletteDark} onChange={(paletteDark) => update({ paletteDark })} />
-          </SettingsRow>
-        </>
-      ) : (
-        <SettingsRow label={t("Colors")} htmlFor="settings-palette">
-          <PaletteSelect id="settings-palette" value={settings.palette} onChange={(palette) => update({ palette })} />
-        </SettingsRow>
-      )}
+      <SettingsRow label={t("Dark theme")} description={t("Shown in dark mode")} htmlFor="settings-theme-dark" wide>
+        <ThemeSelect side="dark" />
+      </SettingsRow>
+      <SettingsRow label={t("Light theme")} description={t("Shown in light mode")} htmlFor="settings-theme-light" wide>
+        <ThemeSelect side="light" />
+      </SettingsRow>
       <SettingsRow label={t("Density")}>
         <Segmented label={t("Density")} value={settings.density} onChange={(density) => update({ density })} options={[{ value: "comfortable", label: t("Comfortable") }, { value: "compact", label: t("Compact") }]} />
       </SettingsRow>
@@ -334,6 +372,11 @@ function ChatPage() {
         <SettingsRow label={t("Send queued messages automatically")} description={t("A message sent while the agent works goes by itself when the turn ends. When off, it waits until you press Send now.")}>
           <Toggle label={t("Send queued messages automatically")} checked={settings.autoSendQueued} onChange={(autoSendQueued) => update({ autoSendQueued })} />
         </SettingsRow>
+        {touch && (
+          <SettingsRow label={t("Suggestion chip")} description={t("A chip above the message box puts the prompt Claude Code suggests next into the box. With a keyboard, Tab does it.")}>
+            <Toggle label={t("Suggestion chip")} checked={settings.suggestionChip} onChange={(suggestionChip) => update({ suggestionChip })} />
+          </SettingsRow>
+        )}
       </SettingsGroup>
 
       <SettingsGroup title={t("Quick replies")} section="quick-replies">
@@ -378,6 +421,12 @@ function ChatPage() {
         <SettingsRow label={t("Diff layout")} description={t("A phone shows one column either way.")}>
           <Segmented label={t("Diff layout")} value={settings.diffStyle} onChange={(diffStyle) => update({ diffStyle })} options={DIFF_STYLES.map((diffStyle) => ({ value: diffStyle, label: diffStyle === "split" ? t("Split") : t("Unified") }))} />
         </SettingsRow>
+        <SettingsRow label={t("Open files")} description={t("On a wide window, text and code can open beside the pane. Media, PDFs and folders always open in a popup, and the viewer's header button moves the file open now.")}>
+          <Segmented label={t("Open files")} value={settings.fileOpen} onChange={(fileOpen) => update({ fileOpen })} options={FILE_OPEN_TARGETS.map((fileOpen) => ({ value: fileOpen, label: fileOpen === "panel" ? t("Beside the pane") : t("In a popup") }))} />
+        </SettingsRow>
+        <SettingsRow label={t("Web links")} description={t("Only a page this PC serves, such as a dev server on localhost, opens beside the pane. Shift-click opens it the other way.")}>
+          <Segmented label={t("Web links")} value={settings.webLinks} onChange={(webLinks) => update({ webLinks })} options={WEB_LINK_TARGETS.map((webLinks) => ({ value: webLinks, label: webLinks === "panel" ? t("Beside the pane") : t("In a new tab") }))} />
+        </SettingsRow>
       </SettingsGroup>
     </>
   );
@@ -398,8 +447,9 @@ function TerminalPage({ keyBarButtonRef, onEditKeyBar }: { keyBarButtonRef: RefO
         <Stepper label={t("Wheel scroll speed")} value={settings.terminalWheelSpeed} text={`${settings.terminalWheelSpeed}×`} min={TERMINAL_WHEEL_SPEED_MIN} max={TERMINAL_WHEEL_SPEED_MAX} decreaseLabel={t("Slower wheel scrolling")} increaseLabel={t("Faster wheel scrolling")} onChange={(terminalWheelSpeed) => update({ terminalWheelSpeed })} />
       </SettingsRow>
       <SettingsRow label={t("Terminal input mode")} htmlFor="terminal-input-mode">
-        <select id="terminal-input-mode" className="select settings-select" value={settings.terminalInputMode} onChange={(event) => update({ terminalInputMode: event.target.value as "auto" | "line" | "direct" })}>
-          <option value="auto">{t("Automatic")}</option><option value="line">{t("Input line")}</option><option value="direct">{t("Direct typing")}</option>
+        {/* "auto", the stored default, types straight into the grid on every device: it reads as Direct typing */}
+        <select id="terminal-input-mode" className="select settings-select" value={settings.terminalInputMode === "line" ? "line" : "direct"} onChange={(event) => update({ terminalInputMode: event.target.value as "line" | "direct" })}>
+          <option value="direct">{t("Direct typing")}</option><option value="line">{t("Input line")}</option>
         </select>
       </SettingsRow>
       <SettingsRow label={t("Key bar")} description={t("Keys, order and custom combinations for the terminal.")}>
@@ -558,79 +608,47 @@ function VoicePage() {
 }
 
 /**
- * The accounts the plan meters know, in the strip's order: each row names the account and
- * carries its move up / move down and show / hide controls.
- */
-function UsageAccounts({ providers }: { providers: readonly ProviderUsage[] }) {
-  const { settings, update } = useSettings();
-  const t = useT();
-  const ordered = orderProviders(providers, settings.usageOrder);
-  const keys = ordered.map((usage) => usage.key);
-  const move = (key: string, by: -1 | 1) => update({ usageOrder: moveInOrder(keys, settings.usageOrder, key, by) });
-  return (
-    <SettingsGroup title={t("Accounts")} className="usage-accounts" section="accounts">
-      <ol aria-label={t("Accounts")}>
-        {ordered.map((usage, index) => {
-          const name = usageName(usage);
-          const hidden = settings.usageHidden.includes(usage.key);
-          return (
-            <li key={usage.key} className={`usage-accounts-row${hidden ? " is-hidden" : ""}`}>
-              <AgentMark agent={PROVIDER_MARK[usage.id]} size={16} />
-              <span className="usage-accounts-name">{PROVIDER_NAME[usage.id]}</span>
-              <span className="usage-accounts-account" title={usage.account ?? undefined}>{usage.account}</span>
-              <span className="usage-accounts-actions">
-                <button type="button" className="icon-button" aria-label={t("Move {name} up", { name })} title={t("Move {name} up", { name })} disabled={index === 0} onClick={() => move(usage.key, -1)}><ChevronUp aria-hidden="true" /></button>
-                <button type="button" className="icon-button" aria-label={t("Move {name} down", { name })} title={t("Move {name} down", { name })} disabled={index === ordered.length - 1} onClick={() => move(usage.key, 1)}><ChevronDown aria-hidden="true" /></button>
-                <button
-                  type="button"
-                  className="icon-button usage-accounts-visibility"
-                  role="switch"
-                  aria-checked={!hidden}
-                  aria-label={t("Show {name}", { name })}
-                  title={t("Show {name}", { name })}
-                  onClick={() => update({ usageHidden: hidden ? settings.usageHidden.filter((key) => key !== usage.key) : [...settings.usageHidden, usage.key] })}
-                >
-                  {hidden ? <EyeOff aria-hidden="true" /> : <Eye aria-hidden="true" />}
-                </button>
-              </span>
-            </li>
-          );
-        })}
-      </ol>
-    </SettingsGroup>
-  );
-}
-
-function UsagePage() {
-  const { settings, update } = useSettings();
-  const t = useT();
-  // the accounts to order and hide: the same report the meters show, from the server's cache
-  const usage = useUsage(settings.showUsage);
-  return (
-    <>
-      <SettingsGroup>
-        <SettingsRow label={t("Show plan limits")} description={t("Beside Settings, how much of each plan the AI tools on the server's PC have used. Turning it on sends their sign-ins to each provider's usage endpoint; they are never refreshed here.")}>
-          <Toggle label={t("Show plan limits")} checked={settings.showUsage} onChange={(showUsage) => update({ showUsage })} />
-        </SettingsRow>
-        {settings.showUsage && <>
-          <SettingsRow label={t("Meters show")}>
-            <Segmented label={t("Meters show")} value={settings.usageCount} onChange={(usageCount) => update({ usageCount })} options={[{ value: "used", label: t("Used") }, { value: "left", label: t("Remaining") }]} />
-          </SettingsRow>
-          <SettingsRow label={t("Limit shown")} description={t("The limit each chip shows. Session is the short one, 5 hours on Claude and Codex. A plan without the chosen limit shows the one closest to running out.")} wide>
-            <Segmented label={t("Limit shown")} value={settings.usageGlance} onChange={(usageGlance) => update({ usageGlance })} options={[{ value: "week", label: t("Weekly") }, { value: "session", label: t("Session") }]} />
-          </SettingsRow>
-        </>}
-      </SettingsGroup>
-      {settings.showUsage && usage.report && usage.report.providers.length > 0 && <UsageAccounts providers={usage.report.providers} />}
-    </>
-  );
-}
-
-/**
  * herdr's own integrations (`integration.list`), read only: installing one writes into an agent's
  * hooks or settings, which this app leaves to the user, so a row shows the command to run instead.
  */
 function IntegrationsPage() {
+  return (
+    <>
+      <LaunchModesGroup />
+      <IntegrationsList />
+    </>
+  );
+}
+
+function claudeModeName(mode: ClaudeLaunchMode, t: ReturnType<typeof useT>): string {
+  return mode === "acceptEdits" ? t("Accept edits") : mode === "auto" ? t("Auto") : mode === "plan" ? t("Plan")
+    : mode === "dontAsk" ? t("Don't ask") : mode === "bypassPermissions" ? t("Bypass permissions") : t("Agent default");
+}
+function codexModeName(mode: CodexLaunchMode, t: ReturnType<typeof useT>): string {
+  return mode === "readOnly" ? t("Read only") : mode === "auto" ? t("Auto") : mode === "fullAccess" ? t("Full access") : t("Agent default");
+}
+
+/** The mode the new workspace, tab and worktree dialogs start Claude Code and Codex in (lib/agentLaunchMode.ts). */
+function LaunchModesGroup() {
+  const { settings, update } = useSettings();
+  const t = useT();
+  return (
+    <SettingsGroup title={t("New agents")} section="launch-modes" note={t("Applies to agents started from New workspace, New tab and New worktree. Agent default adds no flag, so the agent's own configuration decides.")}>
+      <SettingsRow label="Claude Code" description={t("Permission mode")} htmlFor="settings-claude-launch-mode">
+        <select id="settings-claude-launch-mode" className="select settings-select" value={settings.claudeLaunchMode} onChange={(event) => update({ claudeLaunchMode: event.target.value as ClaudeLaunchMode })}>
+          {CLAUDE_LAUNCH_MODES.map((mode) => <option key={mode} value={mode}>{claudeModeName(mode, t)}</option>)}
+        </select>
+      </SettingsRow>
+      <SettingsRow label="Codex" description={t("Sandbox and approvals")} htmlFor="settings-codex-launch-mode">
+        <select id="settings-codex-launch-mode" className="select settings-select" value={settings.codexLaunchMode} onChange={(event) => update({ codexLaunchMode: event.target.value as CodexLaunchMode })}>
+          {CODEX_LAUNCH_MODES.map((mode) => <option key={mode} value={mode}>{codexModeName(mode, t)}</option>)}
+        </select>
+      </SettingsRow>
+    </SettingsGroup>
+  );
+}
+
+function IntegrationsList() {
   const t = useT();
   const api = useMachineApi();
   const machineId = useMachineId();
@@ -699,7 +717,18 @@ function ShortcutsPage() {
   const platformIsMac = isMacPlatform();
   const [query, setQuery] = useState("");
   const [recording, setRecording] = useState<{ id: ShortcutId; problem: string | null } | null>(null);
+  // a recorded chord the terminal or the browser also uses waits here for Save anyway or Cancel
+  const [pending, setPending] = useState<{ id: ShortcutId; value: string; risk: "terminal" | "browser" } | null>(null);
+  // Save anyway and Cancel leave with the prompt: focus goes back to the row's Record button
+  const recordButtons = useRef(new Map<ShortcutId, HTMLButtonElement>());
+  const settlePending = (id: ShortcutId): void => {
+    setPending(null);
+    recordButtons.current.get(id)?.focus();
+  };
   const recordingId = recording?.id ?? null;
+  const riskText = (risk: "terminal" | "browser", keys: string): string => risk === "terminal"
+    ? t("{keys} is a terminal key: shells, editors and agents use it. Once saved, it no longer reaches the pane.", { keys })
+    : t("Your browser or operating system may intercept {keys}.", { keys });
   // while a row records, the chord pressed is read here and the app's own dispatcher stands down
   useEffect(() => {
     if (recordingId === null) return;
@@ -711,12 +740,16 @@ function ShortcutsPage() {
       event.stopPropagation();
       if (result.kind === "cancel") return setRecording(null);
       if (result.kind === "invalid") {
-        const problem = result.reason === "chord" ? t("Hold {mod}+Shift and press a key.", { mod: modKeyLabel() }) : result.reason === "key" ? t("That key cannot be a shortcut.") : t("Your browser or operating system keeps that shortcut.");
+        const problem = result.reason === "chord"
+          ? (platformIsMac ? t("Hold ⌘, Ctrl or ⌥, with or without Shift, and press a key.") : t("Hold Ctrl or Alt, with or without Shift, and press a key."))
+          : result.reason === "key" ? t("That key cannot be a shortcut.") : t("Your browser or operating system keeps that shortcut.");
         return setRecording({ id: recordingId, problem });
       }
-      if (shortcutConflict(recordingId, [result.key], settings.shortcutOverrides)) return setRecording({ id: recordingId, problem: t("Already assigned") });
-      update({ shortcutOverrides: { ...settings.shortcutOverrides, [recordingId]: result.key } });
+      const value = result.kind === "key" ? result.key : result.value;
+      if (shortcutConflict(recordingId, [value], settings.shortcutOverrides, platformIsMac)) return setRecording({ id: recordingId, problem: t("Already assigned") });
       setRecording(null);
+      if (result.kind === "exact" && result.risk !== null) return setPending({ id: recordingId, value, risk: result.risk });
+      update({ shortcutOverrides: { ...settings.shortcutOverrides, [recordingId]: value } });
     };
     window.addEventListener("keydown", onKeyDown, true);
     return () => {
@@ -741,22 +774,32 @@ function ShortcutsPage() {
         onChange={(event) => setQuery(event.target.value)}
       />
       {visible.length === 0 && <p className="settings-hint" role="status">{t("No shortcuts match.")}</p>}
-      <SettingsGroup className="settings-shortcuts" section="shortcuts" note={<>{t("Bindings apply to this browser and device; Mod+Shift is fixed.")} {t("Text selection in focused fields stays native; Tab/list keys are UI-local, not global shortcuts.")} {t("The mobile key bar sends terminal keys, not app actions.")}</>}>
+      <SettingsGroup className="settings-shortcuts" section="shortcuts" note={<>{t("Bindings apply to this browser and device. Mod+Shift chords leave the terminal its keys; Record also takes other chords with Ctrl, Alt or (on a Mac) ⌘, exactly as pressed.")} {t("Text selection in focused fields stays native; Tab/list keys are UI-local, not global shortcuts.")} {t("The mobile key bar sends terminal keys, not app actions.")}</>}>
         {visible.map((shortcut) => {
           const displayedKeys = shortcutDisplayKeys(shortcut.id, settings.shortcutOverrides);
           const selectedKey = displayedKeys[displayedKeys.length - 1];
-          const selectedReserved = selectedKey !== undefined && isReservedShortcutKey(selectedKey, platformIsMac);
+          const override = Object.hasOwn(settings.shortcutOverrides, shortcut.id) ? settings.shortcutOverrides[shortcut.id] : null;
+          const exact = override ? parseExactChord(override) : null;
+          const selectedRisk = exact ? exactChordRisk(exact, platformIsMac) : selectedKey !== undefined && isReservedShortcutKey(selectedKey, platformIsMac) ? "browser" : null;
+          const confirming = pending?.id === shortcut.id ? pending : null;
           const defaultKeys = shortcutDisplayKeys(shortcut.id, {});
           const defaultKey = defaultKeys[defaultKeys.length - 1];
           const defaultReserved = defaultKey !== undefined && isReservedShortcutKey(defaultKey, platformIsMac);
           // a binding without a default key is off by default: its Default row reads Off, with no second Off
           const unbound = defaultKeys.length === 0;
+          const rowText = recording?.id === shortcut.id ? (recording.problem ?? t("Press the new shortcut, or Escape to cancel.")) : confirming ? riskText(confirming.risk, compactKeys(bindingDisplayKeys(confirming.value))) : selectedRisk ? riskText(selectedRisk, compactKeys(displayedKeys)) : undefined;
           return (
-            <SettingsRow key={shortcut.id} label={t(shortcut.label)} wide={shortcut.id !== "voice"} description={recording?.id === shortcut.id ? (recording.problem ?? t("Press the new shortcut, or Escape to cancel.")) : selectedReserved ? t("Your browser or operating system may intercept {keys}.", { keys: compactKeys(displayedKeys) }) : undefined}>
+            <SettingsRow key={shortcut.id} label={t(shortcut.label)} wide={shortcut.id !== "voice"} description={rowText === undefined ? undefined : <span role="status">{rowText}</span>}>
               {shortcut.id === "voice" ? <span className="settings-keys">{formatKeys(shortcut.keys).map((key) => <kbd className="kbd" key={key}>{key}</kbd>)}</span> : (
                 <span className="settings-shortcut-control">
-                <button type="button" className="btn settings-shortcut-record" aria-pressed={recording?.id === shortcut.id} aria-label={t("Record shortcut for {name}", { name: t(shortcut.label) })} onClick={() => setRecording(recording?.id === shortcut.id ? null : { id: shortcut.id, problem: null })}>{recording?.id === shortcut.id ? t("Press keys…") : t("Record")}</button>
-                <select className="select settings-select settings-shortcut-select" aria-label={t(shortcut.label)} value={Object.hasOwn(settings.shortcutOverrides, shortcut.id) ? settings.shortcutOverrides[shortcut.id] ?? (unbound ? "default" : "off") : "default"} onChange={(event) => {
+                <button type="button" className="btn settings-shortcut-record" ref={(button) => { if (button) recordButtons.current.set(shortcut.id, button); else recordButtons.current.delete(shortcut.id); }} aria-pressed={recording?.id === shortcut.id} aria-label={t("Record shortcut for {name}", { name: t(shortcut.label) })} onClick={() => { setPending(null); setRecording(recording?.id === shortcut.id ? null : { id: shortcut.id, problem: null }); }}>{recording?.id === shortcut.id ? t("Press keys…") : t("Record")}</button>
+                {confirming ? <>
+                  <button type="button" className="btn settings-shortcut-confirm" onClick={() => {
+                    settlePending(confirming.id);
+                    update({ shortcutOverrides: { ...settings.shortcutOverrides, [confirming.id]: confirming.value } });
+                  }}>{t("Save anyway")}</button>
+                  <button type="button" className="btn" onClick={() => settlePending(confirming.id)}>{t("Cancel")}</button>
+                </> : <select className="select settings-select settings-shortcut-select" aria-label={t(shortcut.label)} value={Object.hasOwn(settings.shortcutOverrides, shortcut.id) ? settings.shortcutOverrides[shortcut.id] ?? (unbound ? "default" : "off") : "default"} onChange={(event) => {
                   const next = { ...settings.shortcutOverrides };
                   if (event.target.value === "default") delete next[shortcut.id];
                   else next[shortcut.id] = event.target.value === "off" ? null : event.target.value;
@@ -764,12 +807,14 @@ function ShortcutsPage() {
                 }}>
                   <option value="default" title={t("Default")} disabled={shortcutConflict(shortcut.id, shortcutKeys(shortcut.id, {}), settings.shortcutOverrides)}>{unbound ? t("Off") : compactKeys(defaultKeys)}{defaultReserved ? ` — ${t("Reserved")}` : ""}</option>
                   {!unbound && <option value="off" title={t("Send keys to terminal")}>{t("Off")}</option>}
-                  {SHORTCUT_KEYS.map((key) => {
+                  {/* a recorded chord the list below does not offer (exact modifiers, Home, End, punctuation) is listed as itself */}
+                  {override && (exact || !MENU_SHORTCUT_KEYS.includes(override)) && <option value={override}>{compactKeys(displayedKeys)}</option>}
+                  {MENU_SHORTCUT_KEYS.map((key) => {
                     const conflict = shortcutConflict(shortcut.id, [key], settings.shortcutOverrides);
                     const reserved = isReservedShortcutKey(key, platformIsMac);
                     return <option key={key} value={key} disabled={conflict}>{compactKeys(["Mod", "Shift", key])}{reserved ? ` — ${t("Reserved")}` : ""}{conflict ? " — " + t("Already assigned") : ""}</option>;
                   })}
-                </select>
+                </select>}
                 </span>
               )}
             </SettingsRow>
@@ -777,7 +822,11 @@ function ShortcutsPage() {
         })}
       </SettingsGroup>
       <div className="settings-actions">
-        <button type="button" className="btn" onClick={() => update({ shortcutOverrides: {} })}>{t("Reset shortcuts")}</button>
+        <button type="button" className="btn" onClick={() => {
+          setPending(null);
+          setRecording(null);
+          update({ shortcutOverrides: {} });
+        }}>{t("Reset shortcuts")}</button>
       </div>
     </>
   );
@@ -798,11 +847,13 @@ function DevicesPage({ auth, onSignOut }: { auth: HealthAuth | null; onSignOut: 
   // where a phone can open this app now, for the pairing QR code: the served address, else this one when it is not loopback
   const pairUrl = plan.kind === "here" || plan.kind === "served" ? plan.url : isLoopbackHost(window.location.hostname) ? null : window.location.origin;
   const [confirmSignOut, setConfirmSignOut] = useState(false);
+  // what keeps the switch from working here, only while it does (lib/wakeLock.ts asks for the same two)
+  const wakeLockProblem = !window.isSecureContext ? t("Needs HTTPS or localhost.") : !("wakeLock" in navigator) ? t("This browser can't keep the screen on.") : null;
   return (
     <>
       <SettingsGroup title={t("Phone")} section="phone">
         <div className="settings-item"><PhonePanel plan={plan} loading={access === undefined} onRefresh={loadAccess} /></div>
-        <SettingsRow label={t("Keep screen on")} description={t("While a terminal or chat pane is open. Requires HTTPS or localhost and a supported browser.")}>
+        <SettingsRow label={t("Keep screen on")} description={<>{t("While a terminal or chat pane is open.")}{wakeLockProblem !== null && <span className="settings-condition">{wakeLockProblem}</span>}</>}>
           <Toggle label={t("Keep screen on")} checked={settings.keepScreenOn} onChange={(keepScreenOn) => update({ keepScreenOn })} />
         </SettingsRow>
         <SettingsRow label={t("Install")} description={installPrompt.installed ? t("Installed") : installPrompt.canInstall ? undefined : installPrompt.help}>
@@ -932,7 +983,22 @@ function SettingsCrash({ onClose, overPreview }: { onClose: () => void; overPrev
   );
 }
 
-function OpenSettingsDialog({ section = null, linkPage = null, linkSection = null, onPage, onClose, actions, updates, auth, herdrVersion, onEnableNotifications, overPreview = false }: SettingsDialogProps) {
+/**
+ * A change the server refused to save, on whichever page is open: the plain sentence (lib/userError.ts),
+ * the server's own words behind Details. It stays until a save lands; the change is sent again
+ * every few seconds meanwhile (lib/preferencesSync.ts).
+ */
+function SaveFailure({ error }: { error: UserError }) {
+  const t = useT();
+  return <div className="settings-save-error" role="alert">
+    {error.detail === null ? <p>{error.message}</p> : <details className="settings-details">
+      <summary>{error.message}<span className="settings-details-toggle">{t("Details")}</span></summary>
+      <code>{error.detail}</code>
+    </details>}
+  </div>;
+}
+
+function OpenSettingsDialog({ section = null, linkPage = null, linkSection = null, onPage, onClose, onUsageLogin, actions, updates, auth, herdrVersion, onEnableNotifications, saveError, overPreview = false }: SettingsDialogProps) {
   const t = useT();
   const narrow = useNarrow();
   // opened by Forward, the dialog shows what that entry of the history showed
@@ -1041,7 +1107,7 @@ function OpenSettingsDialog({ section = null, linkPage = null, linkSection = nul
       case "terminal": return <TerminalPage keyBarButtonRef={keyBarButtonRef} onEditKeyBar={openKeyBar} />;
       case "alerts": return <AlertsPage onEnableNotifications={onEnableNotifications} />;
       case "voice": return <VoicePage />;
-      case "usage": return <UsagePage />;
+      case "usage": return <UsageSettings onLocalLogin={onUsageLogin} />;
       case "shortcuts": return <ShortcutsPage />;
       case "devices": return <DevicesPage auth={auth} onSignOut={actions.lock} />;
       case "remote": return <RemotePcsPage actions={actions} pcSettings={pcSettings} pcSettingsError={pcSettingsError} onPcSettings={(patch) => void updatePcSettings(patch)} />;
@@ -1076,7 +1142,7 @@ function OpenSettingsDialog({ section = null, linkPage = null, linkSection = nul
             </div>
           </nav>
         )}
-        {page !== null && <div key={page} ref={settingsBodyRef} id="settings-panel" className="modal-body settings-body" role="tabpanel" aria-label={label(page)} hidden={keyBarOpen}>{body()}</div>}
+        {page !== null && <div key={page} ref={settingsBodyRef} id="settings-panel" className="modal-body settings-body" role="tabpanel" aria-label={label(page)} hidden={keyBarOpen}>{saveError !== null && <SaveFailure error={saveError} />}{body()}</div>}
         {keyBarOpen && <div className="modal-body settings-key-bar-body"><KeyBarSettings /></div>}
       </section>
     </div>

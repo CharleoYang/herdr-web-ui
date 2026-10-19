@@ -1,0 +1,44 @@
+.chat-btw {
+  flex: 0 0 auto;
+  width: min(calc(100% - 2 * var(--space-4)), var(--chat-w));
+  margin: 0 auto var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-elevated);
+  color: var(--text);
+  font-size: calc(var(--fs-sm) * var(--chat-scale, 1));
+}
+.chat-btw:last-child { margin-bottom: calc(var(--space-2) + var(--composer-over, 0px)); }
+.chat-btw > summary, .chat-btw-topic > summary {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  cursor: pointer;
+  list-style: none;
+}
+.chat-btw summary::-webkit-details-marker { display: none; }
+.chat-btw summary:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.chat-btw summary svg { width: 14px; height: 14px; flex-shrink: 0; }
+.chat-btw > summary > strong { color: var(--accent); font-family: var(--font-mono); }
+.chat-btw-caret { margin-left: auto; }
+.chat-btw:not([open]) > summary > .chat-btw-caret,
+.chat-btw-topic:not([open]) > summary > svg { transform: rotate(-90deg); }
+.chat-btw-body {
+  max-height: min(32dvh, 24rem);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 0 var(--space-3) var(--space-2);
+}
+.chat-btw-note { color: var(--text-dim); margin: 0 0 var(--space-2); }
+.chat-btw-topic { border-top: 1px solid var(--border); }
+.chat-btw-topic > summary { padding-inline: 0; }
+.chat-btw-question-preview { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chat-btw-status { flex-shrink: 0; font-size: var(--fs-xs); color: var(--text-dim); }
+.chat-btw-status.is-running { color: var(--accent); }
+.chat-btw-status.is-error, .chat-btw-status.is-interrupted { color: var(--error); }
+.chat-btw-exchange { min-width: 0; overflow-wrap: anywhere; padding-block: var(--space-2) var(--space-3); }
+.chat-btw-exchange + .chat-btw-exchange { border-top: 1px dashed var(--border); }
+.chat-btw-question { border-left: 2px solid var(--accent); padding-left: var(--space-3); margin-bottom: var(--space-2); }
+.chat-btw-turn-meta { display: flex; gap: var(--space-2); color: var(--text-dim); font-size: var(--fs-xs); }
+.chat-btw .md-code { max-width: 100%; }

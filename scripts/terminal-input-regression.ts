@@ -74,7 +74,7 @@ export async function checkTerminalInput(browser: Browser, origin: string, pane:
     assert.equal(await page.locator(".key-bar").isVisible(), false, "a desktop shows no key bar under the terminal");
     // a phone keyboard's autocorrect would swap a flag or path for a dictionary word before Send
     assert.deepEqual(await line.evaluate((box) => [box.getAttribute("autocorrect"), box.getAttribute("spellcheck"), box.getAttribute("autocapitalize")]), ["off", "false", "off"]);
-    assert.equal(await page.getByRole("button", { name: "Type straight into the terminal", exact: true }).count(), 0);
+    assert.equal(await page.getByRole("button", { name: "Input line", exact: true }).count(), 0);
     await page.locator(".pane-frame.is-current").focus();
     const beforeFocus = sent.length;
     await page.keyboard.press("ControlOrMeta+Shift+E");
@@ -405,7 +405,8 @@ export async function checkTerminalInput(browser: Browser, origin: string, pane:
     await page.keyboard.press("ControlOrMeta+Shift+E");
     assert.equal(await page.locator(".xterm-helper-textarea").evaluate(node => node === document.activeElement), true, "the input shortcut also focuses direct terminal input before readiness");
     assert.equal(sent.length, before, "focus sends no input before readiness");
-    const heldNotice = page.getByText("Input held until the terminal is ready:", { exact: true });
+    // the held-input row: the command and its two controls, no sentence (todo 27)
+    const heldNotice = page.locator(".pane-frame.is-current .terminal-banner-draft");
     const leftOut = page.getByText("An Enter or line break was left out: Send never presses Enter.", { exact: true });
     // Enter on a terminal that is not ready, with nothing held, separates nothing: no notice.
     // The "a" landing after it proves the Enter was handled first.
@@ -497,7 +498,7 @@ export async function checkTerminalInput(browser: Browser, origin: string, pane:
     await setMode("direct");
     // a draft that takes pastes holds more than "a b" by now: Send types what it holds
     const heldText = await page.locator(".draft-text").textContent();
-    await page.getByRole("button", { name: "Send", exact: true }).click();
+    await page.getByRole("button", { name: "Send held input", exact: true }).click();
     await until(() => sent.length > before + 1);
     assert.equal(sent.at(-1).text, heldText);
     assert.equal(sent.length, before + 2, "Send types the held text once, with no Enter");

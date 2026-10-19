@@ -71,11 +71,13 @@ export function parseConversationMetadata(text: string, source: ConversationResp
       if (model || effort !== undefined) metadata.reasoning_effort = label(effort);
     } else if (source === "omp-transcript" || source === "omo-transcript" || source === "gjc-transcript" || source === "pi-transcript") {
       if (entry.type === "model_change") {
-        // omp writes `model` as provider/id; pi and omo write `modelId`. A change that
-        // names neither must not wipe the model the last answer ran at.
-        const raw = label(entry.modelId) ?? label(entry.model);
-        if (raw) metadata.model = raw;
-        const provider = label(entry.provider) ?? (raw?.includes("/") ? raw.slice(0, raw.lastIndexOf("/")) : null);
+        // omp names provider/id in `model`; pi and omo use separate provider/modelId fields.
+        // An incomplete change must not erase the model already read from a valid answer.
+        const named = label(entry.model);
+        const slash = named?.indexOf("/") ?? -1;
+        const model = label(entry.modelId) ?? (slash > 0 ? named!.slice(slash + 1) : named);
+        if (model) metadata.model = model;
+        const provider = label(entry.provider) ?? (slash > 0 ? named!.slice(0, slash) : null);
         if (provider) piProvider = provider;
       }
       if (entry.type === "thinking_level_change") metadata.reasoning_effort = label(entry.thinkingLevel);

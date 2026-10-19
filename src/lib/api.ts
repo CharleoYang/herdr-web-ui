@@ -1,5 +1,6 @@
 import type { PreferencesChange, SharedPreferences } from "../../shared/preferences.ts";
 import { machinePath, type BridgeHealth, type HerdrIdentity, type Machine, type SetupAction, type SetupJob, type SetupRequest } from "../../shared/machines.ts";
+import type { BtwHistory } from "../../shared/omp-btw.ts";
 import type {
   AgentKind,
   AgentRenameRequest,
@@ -7,6 +8,7 @@ import type {
   CreateWorktreeRequest,
   CreateTabRequest,
   CreateWorkspaceRequest,
+  DirectoryCreated,
   DirectoryListing,
   FileInfo,
   FocusPaneRequest,
@@ -34,6 +36,7 @@ import type {
   PaneFindRequest,
   PaneFindResponse,
   PlanStep,
+  ProjectFavicon,
   PromptAnswer,
   PushKey,
   PortalStatus,
@@ -67,6 +70,21 @@ import type { VoiceConfigUpdate, VoiceStatus } from "../../shared/voice.ts";
 import { MAX_ATTACHMENT_BYTES } from "../../shared/attachments.ts";
 import { t } from "./i18n.ts";
 import { chatReadDeadlineMs, withChatReadDeadline } from "./chatReadDeadline.ts";
+import type { UsageLoginAccounts, UsageLoginProvider, UsageLoginRequest, UsageLoginStarted } from "../../shared/usage-login.ts";
+
+export function fetchUsageLoginProviders(signal: AbortSignal): Promise<{ providers: readonly UsageLoginProvider[] }> {
+  return getJson("/api/usage/login", { signal });
+}
+
+export function fetchUsageLoginAccounts(provider: string, signal: AbortSignal): Promise<UsageLoginAccounts> {
+  return getJson(`/api/usage/login?provider=${encodeURIComponent(provider)}`, { signal });
+}
+
+export function startUsageLogin(request: UsageLoginRequest): Promise<UsageLoginStarted> {
+  return getJson<UsageLoginStarted>("/api/usage/login", {
+    method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(request), signal: AbortSignal.timeout(30_000),
+  });
+}
 
 /** Settings → Phone: what Tailscale on the server's PC already serves, or the command to run. */
 export function fetchRemoteAccess(): Promise<RemoteAccess> {
@@ -76,6 +94,16 @@ export function fetchRemoteAccess(): Promise<RemoteAccess> {
 /** The sidebar's plan meters; `refresh` asks the providers again instead of the server's recent answer. */
 export function fetchUsage(refresh = false): Promise<UsageReport> {
   return getJson<UsageReport>(refresh ? "/api/usage?refresh=1" : "/api/usage");
+}
+
+/** Local server's CLIProxyAPI controls; secrets are only ever sent, never read back. */
+export function cliProxyRequest<T>(path = "", init: RequestInit = {}): Promise<T> {
+  return getJson<T>(`/api/cliproxy${path}`, { ...init, cache: "no-store", signal: init.signal ?? AbortSignal.timeout(60_000) });
+}
+
+/** OMP's saved side conversations; the transcript and its update stream stay independent. */
+export function fetchPaneBtw(paneId: string, machineId = "local", signal?: AbortSignal): Promise<BtwHistory> {
+  return getJson<BtwHistory>(machinePath(machineId, `pane/btw?pane_id=${encodeURIComponent(paneId)}`), { cache: "no-store", signal });
 }
 
 export function fetchUpdateStatus(): Promise<UpdateStatus> {
@@ -560,6 +588,12 @@ export async function fetchDirectories(path: string, hidden: boolean, machineId 
   return getJson<DirectoryListing>(machinePath(machineId, `workspace/directories?${query.toString()}`));
 }
 
+/** POST /api/workspace/directories: makes the folder `name` inside `path`, for the folder browser's New folder. */
+export async function createDirectory(path: string, name: string, machineId = "local"): Promise<DirectoryCreated> {
+  const response = await sendJson(machinePath(machineId, "workspace/directories"), "POST", { path, name });
+  return (await response.json()) as DirectoryCreated;
+}
+
 function fileQuery(path: string, paneId: string | null): string {
   return new URLSearchParams({ path, ...(paneId ? { pane_id: paneId } : {}) }).toString();
 }
@@ -577,6 +611,11 @@ export async function fetchFileInfo(path: string, paneId: string | null, machine
   }
   if (!response.ok) throw await errorFrom(url, response);
   return (await response.json()) as FileInfo;
+}
+
+/** GET /api/fs/favicon: the icon the project in folder `root` keeps, or null, in one request. */
+export async function fetchProjectFavicon(root: string, machineId = "local"): Promise<FileInfo | null> {
+  return (await getJson<ProjectFavicon>(machinePath(machineId, `fs/favicon?${new URLSearchParams({ root }).toString()}`))).icon;
 }
 
 /** GET /api/fs/file: the file itself, streamed (ranges for media); `download` saves it instead. */

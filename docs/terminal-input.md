@@ -5,12 +5,12 @@ input boundary; the terminal screen is still rendered from the attach stream.
 
 ## Input modes and drafts
 
-Settings → Terminal → Terminal input mode offers Automatic, Input line and Direct typing.
-Automatic keeps the existing device preference: a touch screen uses the input line unless the
-user previously chose direct typing; a fine pointer uses direct typing. The key bar's keyboard
+Settings → Terminal → Terminal input mode offers Direct typing, the default on every device
+with phones included, and Input line, for a line you edit before sending. The key bar's keyboard
 button switches modes too, on a touch screen only: a desktop changes the mode in Settings.
-Settings → Shortcuts can change each app action's Mod+Shift key or return its keys to the
-terminal. The hold-to-dictate binding remains fixed. Conflicts include the legacy New workspace
+Settings → Shortcuts can change each app action's binding or return its keys to the terminal.
+Bindings default to Mod+Shift, which leaves Ctrl+key to the pane; a recorded plain Ctrl/Alt chord
+takes that key from the pane only after Save anyway. The hold-to-dictate binding remains fixed. Conflicts include the legacy New workspace
 alias, and Reset restores the defaults. Palette hints reflect the saved bindings and disappear
 when a binding is off. Known browser/OS reservations are marked; delivery still depends on the
 browser, OS and installed-app mode. These settings belong to this browser, not the remote PC.
@@ -288,6 +288,40 @@ inside Tailscale, passed Unicode text entry, draft reload, direct/line mode swit
 batched composition regression (`["니", "다", "."]`). The Safari WebDriver session used an
 owned test workspace and was deleted afterward. These checks use WebDriver text entry and
 synthetic composition events; they do not certify a physical Korean IME or an iOS keyboard.
+
+### Native iOS keyboard check: a held ⌫ (#862)
+
+Updated: 2026-10-18
+
+In the iOS 27.0 simulator (iPhone 18 Pro, Safari, the on-screen keyboard driven by AXe touch
+down/up), holding ⌫ for 3 s in direct typing sent one DEL to an owned raw-mode PTY and stopped.
+A plain page with textareas showed why: the keyboard repeats ⌫ (keydown `repeat:true` about every
+0.1 s) only while the focused field has text, cancelled keydowns included, and not at all in a
+field with `white-space: nowrap`, which xterm's stylesheet gives its helper textarea. Opacity,
+size, z-index and an opaque element over the field made no difference. On iPhone and iPad the
+terminal therefore keeps one space in an otherwise empty helper textarea and sets it to
+`pre-wrap`; xterm still sends each ⌫ as DEL and cancels its edit, so the space never reaches
+the pane. After the change the same 3 s hold sent 24 DELs, on the English and the Korean
+keyboard, and typed text, Space and Enter reached the PTY unchanged. The input line is a plain
+field and already repeated. `scripts/key-bar-hold-repeat-regression.ts` checks the field's state
+under an iPhone user agent; Chromium cannot repeat an iOS key, so the repeat itself was only
+measured in the simulator.
+
+### Native iOS keyboard check: iPhone Hangul
+
+Updated: 2026-10-18
+
+In the iOS 27.0 simulator (iPhone 18 Pro, Safari, on-screen Korean 2-set keyboard driven by AXe
+taps, owned raw-mode PTY), direct typing sent 한글 as `ㅎㅏㄴㄱㅡㄹ`, also after English
+(`abcㅎㅏㄴㄱㅡㄹ`). A plain textarea composed it: the iPhone keyboard sends each jamo as a keydown
+with `keyCode` 0 and its jamo as `key`, then edits the field with deleteContentBackward and
+insertText and no composition events, the sequence the iPad hardware keyboard sends (#938). The
+xterm patch's replacement path was limited to Mac and iPad platforms; it now includes the iPhone.
+Afterwards the same taps delivered `한글 `, `abc한글 `, `하 ` (Backspace inside the syllable),
+`갑사 ` (a final consonant moving on), `한\r`, and a fourth Backspace past an emptied syllable as
+one DEL. The iPad simulator's on-screen keyboard already composed.
+`scripts/terminal-ipad-ime-regression.ts` replays the trace under an iPhone user agent and
+platform with `keyCode` 0.
 
 ### Native Android/Gboard check
 

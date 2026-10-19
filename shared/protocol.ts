@@ -173,7 +173,7 @@ export type { Machine, MachineEvent, PaneTarget, SetupJob, SetupRequest, SetupAc
  *         pane's OmO session started, or a Claude Code pane's subagents (no workflows): running ones, then
  *         those that ended in the last day; empty for any other pane or one whose session is not
  *         known yet. server_time: that PC's clock, which the times are on)
- *  GET    /api/pane/plan?pane_id=       -> PanePlan (the plan the pane's Claude Code or Codex session
+ *  GET    /api/pane/plan?pane_id=       -> PanePlan (the plan the pane's Claude Code, Codex or OmO session
  *         keeps: its task list or checklist, read from the transcript; null when it keeps none)
  *  GET    /api/pane/files?pane_id=&q=&limit=  -> { files: string[] } (paths relative to the pane
  *         cwd matching q, for @-mentions; git ls-files when the cwd is a repo, bounded walk otherwise)
@@ -336,6 +336,22 @@ export interface UsageReport {
   readonly providers: readonly ProviderUsage[];
 }
 
+/** CLIProxyAPI management configuration: the management key never leaves the server. */
+export interface CLIProxyStatus {
+  readonly configured: boolean;
+  readonly url: string;
+  readonly ok: boolean;
+  readonly problem: string | null;
+}
+export type CLIProxyProvider = "claude" | "codex";
+export interface CLIProxyLogin {
+  readonly url: string;
+  readonly state: string;
+}
+export interface CLIProxyLoginStatus {
+  readonly status: "wait" | "ok" | "error";
+}
+
 /** How a request got in, when it did. */
 export type AccessVia = "local" | "tailscale" | "device" | "token" | "open";
 /** Why a request did not. */
@@ -348,6 +364,8 @@ export interface HealthAuth {
   readonly required: boolean;
   readonly authenticated: boolean;
   readonly via?: AccessVia;
+  /** with `via: "token"`: the token came in an `Authorization` header (a proxy sends it), so signing out of this browser would change nothing */
+  readonly bearer?: true;
   readonly role?: DeviceRole;
   readonly reason?: AccessRefusal;
 }
@@ -554,7 +572,7 @@ export interface OmoActivity {
 
 /**
  * One step of the plan an agent keeps for its session (GET /api/pane/plan): a task of Claude
- * Code's task list (`TaskCreate`/`TaskUpdate`), or an item of Codex's `update_plan` checklist.
+ * Code's task list (`TaskCreate`/`TaskUpdate`), Codex's `update_plan` checklist, or OmO's `todo` list.
  */
 export interface PlanStep {
   id: string;
@@ -687,6 +705,22 @@ export interface DirectoryListing {
   files?: { name: string; size: number }[];
 }
 
+/**
+ * POST /api/workspace/directories: makes one folder `name` directly inside `path` (absolute,
+ * `~` or `~/…`), for the folder browser's New folder. 201 with the folder made; 400
+ * invalid_cwd / invalid_name (empty, `.`, `..`, a separator, over 255 bytes), 403
+ * permission_denied, 409 folder_exists. Nothing is made recursively or overwritten.
+ */
+export interface CreateDirectoryRequest {
+  path: string;
+  name: string;
+}
+
+export interface DirectoryCreated {
+  /** the folder made, absolute */
+  path: string;
+}
+
 /** How the file viewer shows a file. */
 export type FileKind = "image" | "video" | "audio" | "pdf" | "text" | "binary";
 
@@ -703,6 +737,18 @@ export interface FileInfo {
   modified: string;
   mime: string;
   kind: FileKind;
+}
+
+/**
+ * GET /api/fs/favicon?root=: the icon the project in folder `root` keeps, or null. The PC looks
+ * through every place a project keeps one (`FAVICON_CANDIDATES` in server/project-favicon.ts),
+ * best first, each read as /api/fs/stat reads `<root>/<place>`, and answers once: a folder with
+ * no icon is `{ icon: null }`, never a 404. 400 missing_root; the access rules of /api/fs/stat
+ * (no watching device, no other site's page).
+ */
+export interface ProjectFavicon {
+  /** the image found; `path` opens it through /api/fs/file */
+  icon: FileInfo | null;
 }
 
 /** Which two states of a repository are compared. */
@@ -994,6 +1040,12 @@ export interface SlashCommand {
   source: "builtin" | "user" | "project" | "skill" | "plugin";
   /** `$`: typed as `$name` (Codex skills); otherwise `/name` */
   trigger?: "$";
+  /**
+   * where a skill comes from, for every agent: `user` is the person's own (the agent's own
+   * directory or ~/.agents/skills), `project` the checkout's, `bundled` ships with the agent,
+   * `plugin` comes with one of its plugins
+   */
+  origin?: "user" | "project" | "bundled" | "plugin";
 }
 
 /**
@@ -1024,6 +1076,9 @@ export interface InteractivePrompt {
   /** the questions of a form that asks several at once (omo), in order: which are answered and
    * which one the card asks now (none while the answers are reviewed). Absent for one question */
   steps?: InteractivePromptStep[];
+  /** the answers a review asks to submit (Claude, omp), each question with what was picked for it,
+   * read whole where the terminal wrapped them. A question cut off above the pane's top is null */
+  answers?: InteractivePromptAnswer[];
   /** the last-resort card for a blocked pane no reader knows: answered with its own buttons only,
    * so a message typed in the chat still goes to the agent as typed */
   fallback?: true;
@@ -1035,6 +1090,13 @@ export interface InteractivePromptStep {
   label: string;
   answered: boolean;
   current: boolean;
+}
+
+export interface InteractivePromptAnswer {
+  question: string | null;
+  answer: string | null;
+  /** the note typed with the answer (omp) */
+  note?: string;
 }
 
 export interface InteractivePromptOption {

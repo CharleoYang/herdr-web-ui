@@ -10,8 +10,10 @@
  */
 
 import type { AgentStatus, SlashCommand } from "../../shared/protocol.ts";
+import { skillSyntax } from "../../shared/skill-syntax.ts";
 import { knownStatus, STATUS_WORD } from "./status.ts";
 import { t } from "./i18n.ts";
+import type { ActiveTrigger } from "./mentions.ts";
 
 /** This cap keeps one composer message inside a single WS frame. */
 export const MAX_COMPOSER_CHARS = 20_000;
@@ -36,7 +38,19 @@ export function submitNotTyped(code: string): boolean {
   return ["agent_blocked", "read_only", "submit_timeout", "agent_not_ready", "pending_input_unsupported", "invalid_delivery", "invalid_submit_text",
     "invalid_submit_id", "pending_limit", "pending_not_found", "pending_busy", "invalid_pending_action", "pending_target_changed", "pending_lease_lost", "not_attached", "input_not_ready", "attach_held", "pane_not_found", "retired_submit_id", "input_draft",
     // refused by this view while the terminal holds input (PaneTerminal), before anything was sent
-    "held_input"].includes(code);
+    "held_input",
+    // the connection dropped before the request's frame left the browser (HerdrSocket)
+    "not_transmitted"].includes(code);
+}
+
+/**
+ * Whether a failed Send now or Discard of a bridge-owned row leaves it not confirmed. An action whose
+ * frame never left (`not_transmitted`) proves only that a held row was not sent: a queued row may still
+ * be typed by its turn's end, since the bridge keeps its lease until it notices the connection is gone.
+ */
+export function pendingActionUncertain(code: string, state: string): boolean {
+  if (code === "not_transmitted") return state !== "held";
+  return code === "pending_not_found" || !submitNotTyped(code);
 }
 
 /**
@@ -49,10 +63,10 @@ export type DraftRefusal = { note: string; draft: string } | { note: string; any
  * submitNote, or a DraftRefusal when the server named a draft it can clear (SubmitResult's `draft`)
  * or showed a box it could not tell empty (`box`; empty when it could not read one whole).
  */
-export function submitRefusal(code: string, message: string, draft?: string, box?: string): string | DraftRefusal {
+export function submitRefusal(code: string, message: string, draft?: string, box?: string, agent?: string | null): string | DraftRefusal {
   if (code === "input_draft" && draft) return { note: t("Not sent: Claude Code's input box in the terminal already holds “{draft}”.", { draft }), draft };
   if (code === "input_draft" && box) return { note: t("Not sent: Claude Code's input box in the terminal may not be empty. It shows “{box}”.", { box }), anyway: true };
-  return submitNote(code, message);
+  return submitNote(code, message, agent);
 }
 
 /** The same message as typed, however a terminal wrapped or indented it: equal once all whitespace is gone. */
@@ -60,14 +74,17 @@ export function sameMessage(a: string, b: string): boolean {
   const bare = (text: string): string => text.replace(/[\s\u00a0]+/gu, "");
   return bare(a) !== "" && bare(a) === bare(b);
 }
-export function submitNote(code: string, message: string): string {
+/** `agent`: the pane's agent, which names the input an input_draft refusal is about (Claude Code's when unknown) */
+export function submitNote(code: string, message: string, agent?: string | null): string {
   if (code === "submit_partial") return t("Not confirmed: the terminal draft was cleared or may have changed. Your message stayed here. Check the terminal before sending again.");
   if (code === "agent_blocked") return t("Not sent: the agent is waiting for an answer in the terminal. Answer it first.");
   if (code === "read_only") return t("Not sent: this view only watches the pane.");
   if (code === "held_input") return t("Not sent: send or discard the held input first.");
+  if (code === "input_draft" && agent === "hermes") return t("Not sent: Hermes' input in the terminal is not empty. Send or clear it there, then send this message.");
   if (code === "input_draft") return t("Not sent: Claude Code's input box in the terminal is not empty. Send or clear it there, then send this message.");
   if (code === "pending_input_unsupported") return t("Update this PC to send messages in the next turn. Your draft stayed here.");
   if (code === "submit_timeout") return t("Not sent: it waited too long behind an earlier message, and nothing was typed. Send it again.");
+  if (code === "not_transmitted") return t("Not sent: the connection dropped before this message left. Send it again.");
   if (code === "disconnected" || code === "timeout") return t("Not confirmed: the pane did not confirm this message. Check the terminal before sending it again.");
   return t("Not sent: {message}", { message });
 }
@@ -240,6 +257,54 @@ function slashMatchTier(command: SlashCommand, needle: string, prefixOnly: boole
     if (at === needle.length) return 3;
   }
   return needle.length >= 2 && command.description.toLocaleLowerCase().includes(needle) ? 4 : null;
+}
+
+/** Commands the agent can invoke at this position, before query ranking. */
+export function commandsForTrigger(commands: readonly SlashCommand[], agent: string | null, trigger: ActiveTrigger): SlashCommand[] {
+  const syntax = skillSyntax(agent);
+  const prefix = trigger.prefix ?? "/";
+  return commands.filter((command) => {
+    if (trigger.start === 0) {
+      return syntax.skillTriggers.length > 1
+        ? prefix === "/" || command.source === "skill"
+        : (command.trigger ?? "/") === prefix;
+    }
+    if (command.source !== "skill" || !syntax.inline.includes(prefix)) return false;
+    if (agent === "codex") return command.trigger === "$";
+    if (agent === "claude") return command.trigger === undefined;
+    if (agent === "omp") return command.name.startsWith("skill:");
+    return true;
+  });
+}
+
+/**
+ * A menu row's description down to its first sentence: a skill's goes on to say when to use it
+ * and when not, which is for the agent, and on a phone it ran to five lines a row. A full stop
+ * ends a sentence only before a capital (or a letter with no case) or as `\u3002`, so `e.g. foo`
+ * and `v1.2` keep their text.
+ */
+export function briefDescription(description: string): string {
+  const text = description.trim();
+  const end = /[.!?](?=\s+[\p{Lu}\p{Lo}"'(])|\u3002/u.exec(text);
+  return (end ? text.slice(0, end.index) : text).replace(/(?<!\.)[.\u3002]$/u, "");
+}
+
+/**
+ * Where a bare `/` or `$` lists a command: a skill under where it comes from, yours before the
+ * project's, then the ones without a known origin, the agent's own and its plugins'.
+ */
+export const COMMAND_GROUPS = ["builtin", "user", "project", "skill-user", "skill-project", "skill", "skill-bundled", "skill-plugin", "plugin"] as const;
+export type CommandGroup = (typeof COMMAND_GROUPS)[number];
+
+export function commandGroup(command: SlashCommand): CommandGroup {
+  if (command.source === "skill" && command.origin !== undefined) return `skill-${command.origin}`;
+  return command.source;
+}
+
+/** Multi-trigger skills use the typed prefix; others use the command's wire trigger. */
+export function slashCommandReplacement(command: SlashCommand, agent: string | null, trigger: ActiveTrigger): string {
+  const prefix = skillSyntax(agent).skillTriggers.length > 1 ? trigger.prefix ?? "/" : command.trigger ?? "/";
+  return `${prefix}${command.name} `;
 }
 
 /**

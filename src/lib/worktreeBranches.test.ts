@@ -1,6 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import type { WorkspaceInfo, WorktreeEntry, WorktreeListing, WorktreeOpened } from "../../shared/protocol.ts";
 import { normalizeCheckoutPath, WorkspaceBranchCache, worktreeRepositories, worktreeWorkspaceSignature } from "./worktreeBranches.ts";
+import { branchWords, DETACHED } from "./paneBranch.ts";
 
 function workspace(id: string, path = `/repo/${id}`, repoKey = "repo", linked = true): WorkspaceInfo {
   return {
@@ -38,7 +39,34 @@ describe("worktree branch metadata", () => {
     const shell = { ...workspace("shell"), worktree: null };
     expect(worktreeRepositories([workspace("child"), workspace("other", "/other", "other"), workspace("main", "/repo", "repo", false), workspace("second"), shell]))
       .toEqual([{ repoKey: "other", workspaceId: "other" }, { repoKey: "repo", workspaceId: "main" }]);
-    expect(worktreeRepositories([workspace("main", "/repo", "repo", false), shell])).toEqual([]);
+    // a repository with no linked worktree is read too, for its branch line
+    expect(worktreeRepositories([workspace("main", "/repo", "repo", false), shell])).toEqual([{ repoKey: "repo", workspaceId: "main" }]);
+    expect(worktreeRepositories([shell])).toEqual([]);
+  });
+
+  it("names an unmarked git workspace's branch by the checkout it answered from, while it is still listed as one", () => {
+    const unmarked = { ...workspace("plain"), worktree: null };
+    const cache = new WorkspaceBranchCache();
+    cache.reconcile([unmarked]);
+    expect(cache.applyUnmarked("plain", listing([entry(null, "/repo/", "main", { is_linked_worktree: false }), entry("child", "/repo/child")]), cache.generation)).toBe(true);
+    expect(cache.branchesFor([unmarked], new Set(["plain"])).get("plain")).toEqual({ checkoutPath: "/repo", branch: "main", isDetached: false });
+    expect(cache.applyUnmarked("plain", listing([entry(null, "/repo", "main", { is_linked_worktree: false })]), cache.generation)).toBe(false);
+    expect(cache.branchesFor([unmarked]).has("plain")).toBe(false);
+    expect(cache.applyUnmarked("plain", listing([entry(null, "/repo", "main")]), cache.generation - 1)).toBe(false);
+    cache.applyUnmarked("plain", listing([entry("child", "/repo/child")]), cache.generation);
+    expect(cache.branchesFor([unmarked], new Set(["plain"])).has("plain")).toBe(false);
+  });
+
+  it("forgets an unmarked workspace's branch once git refuses it, but not from a stale read", () => {
+    const unmarked = { ...workspace("plain"), worktree: null };
+    const cache = new WorkspaceBranchCache();
+    cache.reconcile([unmarked]);
+    cache.applyUnmarked("plain", listing([entry(null, "/repo", "main", { is_linked_worktree: false })]), cache.generation);
+    expect(cache.forgetUnmarked("plain", cache.generation - 1)).toBe(false);
+    expect(cache.branchesFor([unmarked], new Set(["plain"])).has("plain")).toBe(true);
+    expect(cache.forgetUnmarked("plain", cache.generation)).toBe(true);
+    expect(cache.branchesFor([unmarked], new Set(["plain"])).has("plain")).toBe(false);
+    expect(cache.forgetUnmarked("plain", cache.generation)).toBe(false);
   });
 
   it("ignores status, names and order but changes its signature for checkout identity", () => {
@@ -78,6 +106,25 @@ describe("worktree branch metadata", () => {
     cache.applyListing("repo", listing([entry("detached", "/repo/detached", null, { is_detached: true }), entry("unknown", "/repo/unknown", null)]), cache.generation);
     expect(cache.branchesFor(workspaces).get("detached")).toMatchObject({ branch: null, isDetached: true });
     expect(cache.branchesFor(workspaces).get("unknown")).toMatchObject({ branch: null, isDetached: false });
+  });
+
+  it("publishes an omitted detached branch from Herdr without crashing the sidebar", () => {
+    const workspaces = [workspace("detached"), workspace("unknown")];
+    const cache = new WorkspaceBranchCache();
+    cache.reconcile(workspaces);
+    // Herdr 0.9.5 omits absent Option fields from JSON rather than sending null.
+    cache.rememberOpened(JSON.parse(JSON.stringify(opened("detached", "/repo/detached", null)),
+      (key, value: unknown) => key === "branch" ? undefined : value));
+    expect([...branchWords(cache.branchesFor(workspaces))]).toEqual([]);
+    const inventory: WorktreeListing = JSON.parse(JSON.stringify(listing([
+      entry("detached", "/repo/detached", null, { is_detached: true }),
+      entry("unknown", "/repo/unknown", null),
+    ])), (key, value: unknown) => key === "branch" ? undefined : value);
+    cache.applyListing("repo", inventory, cache.generation);
+    const branches = cache.branchesFor(workspaces);
+    expect([...branchWords(branches)]).toEqual([["detached", DETACHED]]);
+    expect(branches.get("detached")).toMatchObject({ branch: null, isDetached: true });
+    expect(branches.get("unknown")).toMatchObject({ branch: null, isDetached: false });
   });
 
   it("retains a known checkout across failed reads and removes closed or changed identities", () => {

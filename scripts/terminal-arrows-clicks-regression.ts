@@ -236,9 +236,10 @@ try {
 
     // a link opens and is not clicked in the program as well
     await s.page.evaluate(() => {
-      const opened: string[] = [];
-      (window as unknown as { opened: string[] }).opened = opened;
-      window.open = (url) => { opened.push(String(url)); return null; };
+      const opened: unknown[] = [];
+      (window as unknown as { opened: unknown[] }).opened = opened;
+      window.open = (url, target, features) => { opened.push(["window.open", String(url), target, features]); return null; };
+      HTMLAnchorElement.prototype.click = function (this: HTMLAnchorElement) { opened.push(["link", this.href, this.target, this.rel]); };
     });
     const link = await s.point(40, 6);
     await s.page.mouse.move(link.x, link.y);
@@ -246,7 +247,8 @@ try {
     await s.page.mouse.click(link.x, link.y);
     await Bun.sleep(NO_SEND_WAIT_MS);
     assert.doesNotMatch(s.received(), /\x1b\[<0;/, "a click on a link sends the program no button");
-    assert.deepEqual(await s.page.evaluate(() => (window as unknown as { opened: string[] }).opened), ["https://example.test/621"], "and opens the link once");
+    // in a new tab, as a chat link: window.open with a features string ("noopener" too) opens a popup window
+    assert.deepEqual(await s.page.evaluate(() => (window as unknown as { opened: unknown[] }).opened), [["link", "https://example.test/621", "_blank", "noopener noreferrer"]], "and opens the link once, in a new tab with no opener or referrer");
 
     // the keys held with a click go with it: Ctrl adds 16 to the button
     await s.page.keyboard.down("Control");
@@ -272,6 +274,16 @@ try {
     await until(() => click.test(got += s.received()), "a later click received");
     const later = click.exec(got)!;
     assert.ok(Number(later[1]) > Number(first[1]) && Number(later[2]) > Number(first[2]), "at its own cell, right of and below the first");
+
+    // the top right cell, under a lone pane's floating head: a program's control there (Claude Code's
+    // diff panel close) takes the click, not the head around the hidden ellipsis
+    const grid = (await s.page.locator(".xterm-screen").boundingBox())!;
+    got = "";
+    await s.page.mouse.click(grid.x + grid.width - 3, grid.y + 3);
+    await until(() => click.test(got += s.received()), "a click on the top right cell received");
+    const corner = click.exec(got)!;
+    assert.equal(corner[2], "1", "on the top row");
+    assert.ok(Number(corner[1]) > Number(later[1]), "in the rightmost column");
 
     // a drag is a selection, as before: no button report, and the dragged cells are selected
     const to = await s.point(300, 70);

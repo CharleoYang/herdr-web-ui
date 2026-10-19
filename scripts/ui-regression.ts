@@ -23,7 +23,7 @@ import { checkCtrlEnter } from "./terminal-ctrl-enter-regression.ts";
 import { checkCommandArrows } from "./terminal-command-arrows-regression.ts";
 import { checkPaneShortcuts } from "./terminal-pane-shortcut-regression.ts";
 import { createPendingInputCheck } from "./pending-input-regression.ts";
-import { checkFolderFilter } from "./folder-filter-regression.ts";
+import { checkFolderFilter, checkNewFolder } from "./folder-filter-regression.ts";
 import { checkPaletteKeys } from "./palette-keys-regression.ts";
 import { UsageService } from "../server/usage.ts";
 import { openSettingsPage } from "./settings-page.ts";
@@ -895,18 +895,20 @@ try {
   assert.deepEqual(await sidebarWidths(), defaultWidths, "a double-click goes back to the default width and forgets the stored one");
   console.log("PASS the sidebar's edge drags, steps from the keyboard, remembers its width and resets on a double-click");
 
-  // Sidebar rows: a workspace row says what its pane is doing over its place, on a taller row,
-  // until Settings → Sidebar rows → One line gives the workspace its name back
-  const twoLineHeight = await page.locator(".workspace-header").first().evaluate((row) => row.getBoundingClientRect().height);
-  assert.ok(await page.locator(".workspace-copy.is-two-line").count() > 0, "rows are two lines until one is chosen");
+  // Sidebar rows: a workspace row is its name until Settings → Sidebar rows → Two lines says
+  // what its pane is doing over its place, on a taller row
+  const oneLineHeight = await page.locator(".workspace-header").first().evaluate((row) => row.getBoundingClientRect().height);
+  const oneLineAgentHeight = await page.locator(".agents-sidebar .agent-row").first().evaluate((row) => row.getBoundingClientRect().height);
+  assert.equal(await page.locator(".workspace-copy.is-two-line").count(), 0, "rows are one line until two are chosen");
+  assert.equal(await page.locator(".agents-sidebar.is-one-line").count(), 1, "agent rows follow the one-line choice");
   await page.keyboard.press("ControlOrMeta+Shift+Comma");
   const rowsSetting = page.locator('.settings-dialog .segmented[aria-label="Sidebar rows"]');
-  await rowsSetting.getByRole("button", { name: "One line", exact: true }).click();
-  await page.locator(".workspace-copy.is-two-line").first().waitFor({ state: "detached" });
-  assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem("herdr-web-ui:settings") ?? "{}").sidebarRows), "one");
-  assert.ok(await page.locator(".workspace-header").first().evaluate((row) => row.getBoundingClientRect().height) < twoLineHeight, "a one-line row is shorter");
   await rowsSetting.getByRole("button", { name: "Two lines", exact: true }).click();
   await page.locator(".workspace-copy.is-two-line").first().waitFor();
+  assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem("herdr-web-ui:settings") ?? "{}").sidebarRows), "two");
+  assert.ok(await page.locator(".workspace-header").first().evaluate((row) => row.getBoundingClientRect().height) > oneLineHeight, "a two-line row is taller");
+  await page.locator(".agents-sidebar.is-one-line").waitFor({ state: "detached" });
+  assert.ok(await page.locator(".agents-sidebar .agent-row").first().evaluate((row) => row.getBoundingClientRect().height) > oneLineAgentHeight, "a two-line agent row is taller");
   await rowsSetting.getByRole("button", { name: "One line", exact: true }).click();
   await page.locator(".workspace-copy.is-two-line").first().waitFor({ state: "detached" });
   await page.getByRole("button", { name: "Close settings", exact: true }).click();
@@ -957,8 +959,20 @@ try {
   console.log("PASS an update answer that arrives while the page is hidden releases the buttons");
 
   // the More menu's Alerts item turns this device's alerts on, and off again (it stayed disabled once on)
-  // the header has no button of its own for it, for New tab or for the file browser any more
-  assert.equal(await page.locator(".app-header .bell-button, .app-header .new-tab-button, .app-header .files-button").count(), 0, "the three actions are the More menu's items");
+  // the header has no button of its own for it or for New tab; from 769px Files is the header's own
+  // button and leaves the menu, a phone keeps it there (deep-link-demo-regression)
+  assert.equal(await page.locator(".app-header .bell-button, .app-header .new-tab-button").count(), 0, "Alerts and New tab are not header buttons");
+  const filesButton = page.locator(".app-header .header-files-button");
+  assert.equal(await filesButton.getAttribute("aria-label"), "Browse files", "a computer's header has its own Files button");
+  await page.locator(".header-more-button").click();
+  await page.locator('.row-menu [role="menuitem"]').first().waitFor();
+  assert.equal(await page.locator('.row-menu [role="menuitem"]', { hasText: "Browse files" }).count(), 0, "Files left the More menu on a computer");
+  await page.keyboard.press("Escape");
+  await page.locator(".row-menu").waitFor({ state: "detached" });
+  await filesButton.click();
+  await page.getByRole("dialog", { name: "Files", exact: true }).waitFor();
+  await page.getByRole("button", { name: "Close files", exact: true }).click();
+  await page.getByRole("dialog", { name: "Files", exact: true }).waitFor({ state: "detached" });
   // before the permission question is answered the item already reads as on: in-app alerts show
   assert.equal(await alertsState(page), "On in the app");
   assert.equal(await alertsOffMarked(page), false, "alerts that are on leave the More button unmarked");
@@ -1184,7 +1198,7 @@ try {
 
   const selectPane = async (paneId: string) => {
     await page.locator(`.pane-select[title^="${paneId} —"]`).click();
-    await page.getByRole("log", { name: `conversation of ${paneId}`, exact: true }).waitFor();
+    await page.locator(`.pane-frame[data-layout-pane="${paneId}"]`).getByRole("log").waitFor();
   };
   await composer.fill("draft for A");
   await selectPane(paneB);
@@ -1396,9 +1410,9 @@ try {
   await composer.fill("");
   console.log("PASS paths wait for a /command, typed or dictated, or an IME composition to finish, and selections keep their direction");
 
-  // A path that does not fit whole is never cut: it waits, its chip and the status line say how many
-  // characters to remove, Send is off, and the path goes in once there is room. The count of
-  // characters left shows only near the limit.
+  // A path that does not fit whole is never cut: it waits, its chip shows a warning glyph (its words
+  // for assistive tech) and the status line says the limit and how many characters over, Send is
+  // off, and the path goes in once there is room. The count of characters left shows only near the limit.
   const MAX_COMPOSER_CHARS = 20_000; // src/lib/compose.ts; importing it would load the app's modules here
   const statusHint = page.locator(".composer-status-hint");
   const sendButton = page.getByRole("button", { name: "Send message", exact: true });
@@ -1412,9 +1426,10 @@ try {
   await finish("fourteenth.txt");
   const roomless = page.locator(".composer-attachment.is-no-room");
   await roomless.waitFor();
-  assert.match(await roomless.innerText(), /No room/);
-  await until(async () => /No room for fourteenth\.txt: remove \d+ characters/.test(await statusHint.textContent() ?? ""), "the status line says how much to cut");
-  const short = Number(/remove (\d+) characters/.exec(await statusHint.textContent() ?? "")![1]);
+  assert.equal(await roomless.locator(".composer-attachment-state svg").count(), 1, "the tile's badge is a glyph");
+  assert.equal(await roomless.locator(".composer-attachment-state .visually-hidden").innerText(), "No room", "its words are for assistive tech");
+  await until(async () => /20,000-character limit · \d+ over/.test(await statusHint.textContent() ?? ""), "the status line says the limit and how much over");
+  const short = Number(/· (\d+) over/.exec(await statusHint.textContent() ?? "")![1]);
   assert.equal(await sendButton.isDisabled(), true, "Send waits for the path");
   assert.equal(await composer.inputValue(), "x".repeat(MAX_COMPOSER_CHARS - 5), "no part of the path went in");
   await composer.fill("x".repeat(MAX_COMPOSER_CHARS - 200));
@@ -1430,7 +1445,7 @@ try {
   await finish(long);
   await roomless.waitFor();
   await finish("sixteenth.txt");
-  assert.match(await roomless.innerText(), /No room/);
+  assert.equal(await roomless.locator(".composer-attachment-state svg").count(), 1, "the long path's tile shows the glyph");
   assert.equal(await sendButton.isDisabled(), true, "the short path waits behind the long one");
   assert.doesNotMatch(await composer.inputValue(), /sixteenth/u);
   await page.getByRole("button", { name: `Remove ${long}`, exact: true }).click();
@@ -1468,18 +1483,36 @@ try {
   const createGate = new Promise<void>((resolve) => { releaseCreate = resolve; });
   releases.push(releaseCreate);
   let createRequests = 0;
+  let createCwd: string | null = null;
   await page.route("**/api/workspace/create", async (route) => {
     createRequests += 1;
+    const body = route.request().postDataJSON() as { cwd?: string | null };
+    createCwd = typeof body.cwd === "string" ? body.cwd : null;
     await createGate;
     await route.continue();
   });
   await page.getByRole("button", { name: /^New workspace on / }).click();
   const dialog = page.getByRole("dialog", { name: /^New workspace/ });
+  // opening Browse on home leaves Directory as typed, `~`, not the absolute path it lists
+  await dialog.getByLabel(/^Directory/).fill("~");
+  await dialog.getByRole("button", { name: "Browse", exact: true }).click();
+  await dialog.locator(".dir-browser-item").first().waitFor();
+  assert.equal(await dialog.getByLabel(/^Directory/).inputValue(), "~", "Browse keeps the home-relative form");
+  await dialog.getByRole("button", { name: "Browse", exact: true }).click();
   await dialog.getByLabel(/^Directory/).fill(root);
   await checkFolderFilter(page, dialog, () => createRequests);
+  // Browse into a child and Start without Use this folder: create must use that child (#1162).
+  // root/a and root/b already exist from the owned panes at the top of this script.
+  await dialog.getByRole("button", { name: "Browse", exact: true }).click();
+  await dialog.getByRole("searchbox", { name: "Filter folders" }).waitFor();
+  await dialog.locator(".dir-browser-item", { hasText: /^a$/ }).click();
+  await until(async () => (await dialog.getByLabel(/^Directory/).inputValue()).endsWith("/a"), "Directory follows Browse into a");
+  // New folder inside a: the workspace starts in the folder it made
+  await checkNewFolder(page, dialog, () => createRequests, "made-here");
   await dialog.getByLabel(/^Name/).fill("herdr-web-ui-test-browser-created");
   await dialog.getByRole("button", { name: "Start", exact: true }).click();
   await until(() => createRequests === 1, "creation started");
+  assert.equal(createCwd, join(root, "a", "made-here"), "Start uses the folder Browse is showing");
   await page.keyboard.press("Escape");
   assert.equal(await dialog.isVisible(), true, "in-flight creation cannot be dismissed");
   assert.equal(await dialog.getByRole("button", { name: "Close dialog" }).isDisabled(), true);
@@ -1694,7 +1727,6 @@ try {
   const pinnedCard = page.locator(".workspace-list-pinned");
   await pinnedCard.locator(`.workspace-group[data-workspace="${worktree.workspace_id}"]`).waitFor();
   assert.equal(await page.locator(`.worktree-children .workspace-group[data-workspace="${worktree.workspace_id}"]`).count(), 0, "a pinned worktree leaves its group");
-  assert.equal(await pinnedCard.locator(".sidebar-pin-mark").count(), 1, "the pinned row carries its pin");
   await pinnedCard.locator(`.workspace-group[data-workspace="${worktree.workspace_id}"] .workspace-select`).click({ button: "right" });
   await childMenu.getByRole("menuitem", { name: "Unpin workspace", exact: true }).click();
   await pinnedCard.waitFor({ state: "detached" });
@@ -1714,17 +1746,21 @@ try {
   worktreeWorkspaces.splice(worktreeWorkspaces.indexOf(worktree.workspace_id), 1);
   console.log("PASS a worktree row sits under its repository's row, and its menu deletes the checkout, asking twice for a dirty one");
 
-  // A second tab from the tab strip's +: the dialog is New tab, with the workspace's folder shown
+  // A second tab from the tab's menu, New tab with agent…: the dialog is New tab, with the workspace's folder shown
   // and not asked for; the new pane opens, the workspace stays one row, and a strip over the pane
   // lists both tabs from then on.
   // The new pane's terminal takes the focus once it paints, which would close a menu opened before.
   await until(() => painted.has(created.pane_id), "created pane paint");
   await page.locator(`.pane-select[title^="${created.pane_id} —"]`).click();
   await until(async () => (await page.locator(`.pane-select[title^="${created.pane_id} —"]`).getAttribute("aria-current")) === "true", "the created workspace is selected again");
-  await page.locator(".tab-strip-add").click();
+  const openAgentTab = async () => {
+    await page.locator(".tab-strip").getByRole("tab", { selected: true }).click({ button: "right" });
+    await page.getByRole("menuitem", { name: "New tab with agent…", exact: true }).click();
+  };
+  await openAgentTab();
   const tabDialog = page.getByRole("dialog", { name: /^New tab · herdr-web-ui-test-browser-created/ });
   await tabDialog.waitFor();
-  assert.equal(await tabDialog.locator(".new-session-folder").textContent(), root, "the folder is the workspace's, shown");
+  assert.equal(await tabDialog.locator(".new-session-folder").textContent(), join(root, "a", "made-here"), "the folder is the workspace's, shown");
   assert.equal(await tabDialog.getByRole("button", { name: "Browse", exact: true }).count(), 0, "the folder is not asked for");
   const tabNameField = tabDialog.getByLabel(/^Name/);
   await tabNameField.fill("second");
@@ -1755,22 +1791,107 @@ try {
   assert.deepEqual(await strip.getByRole("tab").allTextContents(), ["Tab 1", "second"]);
   assert.equal(await strip.getByRole("tab", { selected: true }).textContent(), "second");
   assert.equal(await strip.locator(".tab-strip-close, .tab-strip-panes").count(), 0, "tab close buttons and chevrons are removed");
-  assert.equal(await strip.locator(".tab-strip-menu:visible").count(), 0, "desktop tabs use their context menu");
+  assert.equal(await strip.locator(".tab-strip-menu:visible").count(), 0, "desktop tabs show no menu button at rest");
+  // the selected tab's actions button waits hidden in its place: the pointer over the strip or the
+  // tab's keyboard focus brings it into view, and no other tab draws one
+  const stripMenu = strip.locator(".tab-strip-item.is-active .tab-strip-menu");
+  const stripMenuOpacity = () => stripMenu.evaluate((node) => getComputedStyle(node).opacity);
+  await strip.hover();
+  await stripMenu.waitFor({ state: "visible" });
+  await until(async () => await stripMenuOpacity() === "1", "the pointer over the strip reveals the selected tab's actions button");
+  assert.equal(await strip.locator(".tab-strip-menu:visible").count(), 1, "only the selected tab shows an actions button");
+  assert.equal(await stripMenu.getAttribute("aria-label"), "Actions for second");
+  await page.mouse.move(640, 600);
+  await stripMenu.waitFor({ state: "hidden" });
+  await page.locator(".tab-strip-add").focus();
+  await page.keyboard.press("Shift+Tab");
+  assert.equal(await strip.getByRole("tab", { selected: true }).evaluate((node) => node === document.activeElement), true, "Shift+Tab from the + lands on the selected tab");
+  await stripMenu.waitFor({ state: "visible" });
+  await until(async () => await stripMenuOpacity() === "1", "keyboard focus on the selected tab reveals its actions button");
+  assert.equal(await strip.locator(".tab-strip-menu:visible").count(), 1, "keyboard focus reveals the selected tab's button alone");
   await strip.getByRole("tab", { name: "Tab 1", exact: true }).click();
   await until(async () => (await page.locator(`.pane-select[title^="${created.pane_id} —"]`).getAttribute("aria-current")) === "true", "the first tab opens its pane again");
   assert.equal(await strip.getByRole("tab", { selected: true }).textContent(), "Tab 1");
   // reopened right after a creation: its fields are live and Escape puts it away at once
-  await page.locator(".tab-strip-add").click();
+  // The menu restores this terminal on unmount. Record focus at the dialog's DOM commit,
+  // before any animation frame can rescue it: Escape may arrive before that first paint.
+  await page.locator(".pane-frame.is-current .xterm-helper-textarea").focus();
+  await page.evaluate(() => {
+    const observer = new MutationObserver(() => {
+      const dialog = document.querySelector(".new-session-modal");
+      if (!dialog) return;
+      dialog.setAttribute("data-focus-at-open", String(dialog.contains(document.activeElement)));
+      observer.disconnect();
+    });
+    observer.observe(document.body, { childList: true, subtree: true });
+  });
+  await openAgentTab();
   await tabDialog.waitFor();
+  assert.equal(await tabDialog.getAttribute("data-focus-at-open"), "true", "the dialog owns focus before its first paint, not the terminal restored by its menu");
   assert.equal(await tabDialog.getByRole("button", { name: "Start", exact: true }).isDisabled(), false, "a reopened dialog is not left pending");
   await page.keyboard.press("Escape");
   await tabDialog.waitFor({ state: "hidden" });
+  // A failed launch leaves its created pane available through Open. Closing instead must
+  // not leave the next opening's agent picker disabled, with focus back in the terminal.
+  await page.route("**/api/agents", (route) => route.fulfill({ json: { agents: [{ kind: "claude", label: "Claude", installed: true }] } }));
+  await page.route("**/api/tab/create", (route) => route.fulfill({ json: {
+    workspace_id: created.workspace_id, pane_id: created.pane_id, agent_started: false,
+    error: { code: "agent_start_failed", message: "Agent could not start" },
+  } satisfies WorkspaceCreated }));
+  await openAgentTab();
+  await tabDialog.getByRole("combobox", { name: "Agent", exact: true }).click();
+  await tabDialog.getByRole("option").filter({ hasText: "Claude" }).click();
+  await tabDialog.getByRole("button", { name: "Start", exact: true }).click();
+  await tabDialog.getByRole("button", { name: "Open", exact: true }).waitFor();
+  assert.equal(await tabDialog.getByRole("combobox", { name: "Agent", exact: true }).isDisabled(), true, "a failed launch keeps its created pane available, not a second Start");
+  await page.keyboard.press("Escape");
+  await tabDialog.waitFor({ state: "hidden" });
+  await page.locator(".pane-frame.is-current .xterm-helper-textarea").focus();
+  await page.evaluate(() => {
+    const observer = new MutationObserver(() => {
+      const dialog = document.querySelector(".new-session-modal");
+      if (!dialog) return;
+      dialog.setAttribute("data-focus-at-open", String(dialog.contains(document.activeElement)));
+      observer.disconnect();
+    });
+    observer.observe(document.body, { childList: true, subtree: true });
+  });
+  await openAgentTab();
+  await tabDialog.waitFor();
+  assert.equal(await tabDialog.getAttribute("data-focus-at-open"), "true", "reopening after an agent start failure owns focus before paint");
+  assert.equal(await tabDialog.getByRole("combobox", { name: "Agent", exact: true }).isDisabled(), false, "reopening after a failed launch enables the agent picker");
+  await page.keyboard.press("Escape");
+  await tabDialog.waitFor({ state: "hidden" });
+  await page.unroute("**/api/tab/create");
+  await page.unroute("**/api/agents");
+  await page.evaluate(() => localStorage.removeItem("herdr-web-ui:new-session-agent"));
+  console.log("PASS reopening after a failed agent start owns focus before paint, enables its fields and closes with Escape");
   // the PC's + is New workspace again, not a tab in the workspace the last dialog was for
   await page.getByRole("button", { name: /^New workspace on / }).click();
   await page.getByRole("dialog", { name: /^New workspace/ }).waitFor();
   await page.keyboard.press("Escape");
   await page.getByRole("dialog", { name: /^New workspace/ }).waitFor({ state: "hidden" });
   console.log("PASS a second tab is made from the tab strip, listed over the pane, and opened from it");
+
+  // The strip's + is herdr's own new tab: a shell tab in the workspace's folder at once, no dialog,
+  // and its pane opens. It is closed again, so the tabs below stay the two named ones.
+  const terminalResponse = page.waitForResponse((response) => response.url().endsWith("/api/tab/create"));
+  await page.locator(".tab-strip-add").click();
+  const terminalAnswer = await terminalResponse;
+  assert.deepEqual(terminalAnswer.request().postDataJSON(), { workspace_id: created.workspace_id, cwd: join(root, "a", "made-here"), label: null, agent: null }, "the + asks for a shell tab in the workspace's folder");
+  const terminalTab = await terminalAnswer.json() as WorkspaceCreated;
+  assert.equal(terminalTab.workspace_id, created.workspace_id, "the shell tab joins the workspace");
+  assert.equal(terminalTab.agent_started, false, "no agent is started");
+  await until(async () => (await page.locator(`.pane-select[title^="${terminalTab.pane_id} —"]`).getAttribute("aria-current")) === "true", "the shell tab's pane is selected");
+  assert.equal(await page.getByRole("dialog", { name: /^New tab/ }).count(), 0, "the + opens no dialog");
+  assert.equal(await strip.getByRole("tab").count(), 3, "the strip lists the shell tab");
+  const terminalTabId = (await sessionSnapshot()).panes.find((pane) => pane.pane_id === terminalTab.pane_id)?.tab_id;
+  assert.ok(terminalTabId, "herdr has the shell tab's pane");
+  await strip.getByRole("tab", { name: "Tab 1", exact: true }).click();
+  await until(async () => (await page.locator(`.pane-select[title^="${created.pane_id} —"]`).getAttribute("aria-current")) === "true", "the first tab opens its pane again");
+  await herdrRpc("tab.close", { tab_id: terminalTabId });
+  await until(async () => (await strip.getByRole("tab").count()) === 2, "the shell tab is gone from the strip");
+  console.log("PASS the strip's + opens a shell tab at once, with no dialog");
 
   // A tab is renamed and closed from the strip, as herdr's prefix+shift+t and prefix+shift+x.
   const tabsInHerdr = async () => (await sessionSnapshot()).tabs.filter((tab) => tab.workspace_id === created.workspace_id).map((tab) => tab.label);
@@ -1808,7 +1929,7 @@ try {
   await tabMenu.waitFor();
   assert.equal(await strip.getByRole("tab", { selected: true }).textContent(), "first", "opening another tab's context menu does not select it");
   // The tab menu keeps native tab scope; pane operations belong to the pane or header.
-  assert.deepEqual(await tabMenu.getByRole("menuitem").allTextContents(), ["Move tab left", "New tab", "Rename tab", "Close tab"], "the last tab offers only a move to the left");
+  assert.deepEqual(await tabMenu.getByRole("menuitem").allTextContents(), ["Move tab left", "New tab with agent…", "Rename tab", "Close tab"], "the last tab offers only a move to the left");
   await tabMenu.getByRole("menuitem", { name: "Rename tab", exact: true }).click();
   await tabName.fill("build");
   await page.keyboard.press("Enter");
@@ -1831,7 +1952,7 @@ try {
   const tabSheet = tabPhonePage.getByRole("dialog", { name: "build", exact: true });
   await tabSheet.waitFor();
   const touchTabItems = await tabSheet.locator(".row-sheet-item").allTextContents();
-  assert.deepEqual(touchTabItems.slice(-4), ["Move tab left", "Move tab right", "Rename tab", "Close tab"], "a tab between siblings offers both adjacent moves on touch");
+  assert.deepEqual(touchTabItems.slice(-5), ["Move tab left", "Move tab right", "New tab with agent…", "Rename tab", "Close tab"], "a tab between siblings offers both adjacent moves on touch");
   assert.ok(touchTabItems.includes("Rename pane") && touchTabItems.includes("Close pane"), "the touch menu carries the open pane's actions");
   await tabSheet.getByRole("button", { name: "Cancel", exact: true }).tap();
   await tabSheet.waitFor({ state: "detached" });
@@ -2103,8 +2224,8 @@ try {
     await page.mouse.up();
     await until(async () => await page.locator(".pane-slot").count() === 2, "two halves after the drop");
     const half = (side: string) => page.locator(`.pane-slot[data-side="${side}"]`);
-    await half("left").getByRole("log", { name: `conversation of ${paneA}`, exact: true }).waitFor();
-    await half("right").getByRole("log", { name: `conversation of ${paneB}`, exact: true }).waitFor();
+    await half("left").locator(`.pane-frame[data-layout-pane="${paneA}"]`).getByRole("log").waitFor();
+    await half("right").locator(`.pane-frame[data-layout-pane="${paneB}"]`).getByRole("log").waitFor();
     assert.equal(await half("right").evaluate((slot) => slot.classList.contains("is-active")), true, "the dropped pane's half is active");
     assert.equal(await page.locator(".pane-select[aria-current=\"true\"]").getAttribute("title").then((title) => title?.startsWith(`${paneB} —`)), true, "and its pane is the selected one");
     const [left, right] = await Promise.all([half("left").boundingBox(), half("right").boundingBox()]);
@@ -2113,13 +2234,13 @@ try {
     await until(async () => await half("left").evaluate((slot) => slot.classList.contains("is-active")), "a press makes the left half active");
     // the header speaks for the active half's connection, handed over by a terminal that was already connected
     await page.locator(".conn.conn-live").waitFor();
-    await half("left").getByRole("log", { name: `conversation of ${paneA}`, exact: true }).waitFor();
-    await half("right").getByRole("log", { name: `conversation of ${paneB}`, exact: true }).waitFor();
+    await half("left").locator(`.pane-frame[data-layout-pane="${paneA}"]`).getByRole("log").waitFor();
+    await half("right").locator(`.pane-frame[data-layout-pane="${paneB}"]`).getByRole("log").waitFor();
     assert.match(await page.evaluate(() => sessionStorage.getItem("herdr-web-ui:split") ?? ""), /"active":"a"/, "the split is kept for a reload");
     await half("right").getByRole("button", { name: "Close this half", exact: true }).click();
     await until(async () => await page.locator(".pane-slot").count() === 1, "one pane after closing a half");
     assert.equal(await page.evaluate(() => sessionStorage.getItem("herdr-web-ui:split")), null);
-    await page.getByRole("log", { name: `conversation of ${paneA}`, exact: true }).waitFor();
+    await page.locator(`.pane-frame[data-layout-pane="${paneA}"]`).getByRole("log").waitFor();
   }
   console.log("PASS a dragged row opens its pane beside the open one; a press switches the active half; a half closes");
 
@@ -2209,27 +2330,34 @@ try {
   assert.equal(await mobilePage.evaluate(() => (window as unknown as { escapes: number }).escapes), 0, "Escape that closes the drawer does not reach the page");
   console.log("PASS Escape closes a phone's drawer and goes no further");
 
-  // Claude's suggestion on a phone is the placeholder and a chip that fills the box, until Settings turns the chip off
-
+  // Claude's suggestion on a phone is the placeholder; the chip that fills the box waits until Settings turns it on
+  const promptRoute = `**/api/pane/prompt?pane_id=${encodeURIComponent(paneB)}`;
+  const suggest = { json: { prompt: null, suggestion: "run the tests" } };
   const mobileComposer = mobilePage.getByRole("textbox", { name: "Message", exact: true });
   await mobileComposer.fill("");
   // the pane really paints the grey suggestion: the phone gets it from the pushed prompt, not a 2s poll
   await paintSuggestion(paneB, "run the tests");
   await until(async () => await mobileComposer.getAttribute("placeholder") === "run the tests", "a phone shows the suggestion as the placeholder");
   assert.equal(await mobilePage.locator(".voice-mic").count(), 0, "a phone's chat has no mic until Settings asks for it");
+  assert.equal(await mobilePage.getByTitle("Use the suggestion", { exact: true }).count(), 0, "a phone shows no suggestion chip by default");
+  await mobilePage.goto(`${origin}/?pane=${encodeURIComponent(paneB)}&settings=chat&section=composer`);
+  await mobilePage.getByRole("switch", { name: "Suggestion chip", exact: true }).setChecked(true);
+  await mobilePage.getByRole("button", { name: "Close settings", exact: true }).click();
+  await mobileComposer.fill("");
   await mobilePage.getByTitle("Use the suggestion", { exact: true }).click();
   assert.equal(await mobileComposer.inputValue(), "run the tests", "the chip puts the suggestion in the box");
   try { await mobileEvidence?.finish(); } finally { await mobile.close(); }
   assert.equal(errors.length, 0, errors.join("\n"));
   assertCspClean(csp, "the suggestion chip loads with no CSP violation");
-  console.log("PASS a phone offers Claude's suggestion as a chip");
+  console.log("PASS a phone offers Claude's suggestion as a chip once Settings turns it on");
 
   await checkTerminalInput(browser, origin, paneA, paneB);
   await checkSafariIme(browser, origin, paneA, paneB);
   await checkIpadIme(browser, origin, paneA, paneB);
   await checkHeldDraftPaneSwitch(browser, origin, paneA, paneB);
 
-  // the terminal lens on a touch screen: an input line sends whole lines; the grid raises no keyboard
+  // the terminal lens on a touch screen starts in direct typing without raising the keyboard;
+  // its input line sends whole lines, and there a tapped grid raises no keyboard
   const touch = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
   const touchPage = await touch.newPage();
   const touchEvidence = evidenceDirectory ? await watchBrowserEvidence(touch, touchPage, "touch-terminal-input") : undefined;
@@ -2243,8 +2371,17 @@ try {
   await touchPage.goto(`${origin}/?pane=${encodeURIComponent(paneB)}`);
   await touchPage.locator(".conn-live").waitFor();
   await touchPage.getByTitle("Live terminal (⌘⇧J)", { exact: true }).click();
+  await touchPage.locator("[data-direct-typing]").waitFor();
+  assert.equal(await touchPage.locator(".terminal-input").count(), 0, "a phone starts in direct typing");
+  assert.equal(await touchPage.evaluate(() => document.activeElement?.classList.contains("xterm-helper-textarea") ?? false), false,
+    "opening the terminal on a phone does not focus the grid, so the keyboard stays down until a tap");
+  // the keyboard key is the input line's switch: lit while the line is shown, unlit in direct typing
+  const lineKey = touchPage.getByRole("button", { name: "Input line", exact: true });
+  assert.equal(await lineKey.getAttribute("aria-pressed"), "false", "direct typing leaves the input-line key unlit");
+  await lineKey.click();
   const line = touchPage.getByRole("textbox", { name: "Terminal input line", exact: true });
   await line.waitFor();
+  assert.equal(await lineKey.getAttribute("aria-pressed"), "true", "the shown input line lights its key");
   assert.equal(await touchPage.locator(".xterm-helper-textarea").getAttribute("inputmode"), "none");
   await line.fill("printf 'line-ok\\n'");
   await line.press("Enter");
@@ -2274,10 +2411,10 @@ try {
   await until(() => touchSent.length > enters && touchSent.at(-1)?.type === "input" && touchSent.at(-1)?.text === "\r", "enter from the empty line");
   await line.fill("unsent 한글 😀");
   // typing straight into the grid is one tap away, and gives the keyboard back to it
-  await touchPage.getByRole("button", { name: "Type straight into the terminal", exact: true }).click();
+  await touchPage.getByRole("button", { name: "Input line", exact: true }).click();
   assert.equal(await touchPage.locator(".terminal-input").count(), 0);
   assert.equal(await touchPage.locator(".xterm-helper-textarea").getAttribute("inputmode"), null);
-  await touchPage.getByRole("button", { name: "Type straight into the terminal", exact: true }).click();
+  await touchPage.getByRole("button", { name: "Input line", exact: true }).click();
   await line.waitFor();
   assert.equal(await line.inputValue(), "unsent 한글 😀", "mode switches preserve the unsent line");
   await touchPage.reload();

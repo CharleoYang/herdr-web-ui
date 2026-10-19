@@ -60,17 +60,13 @@ describe("recorded conversation model settings", () => {
     }
   });
 
-  it("reads omp's provider/id model field and does not wipe a known model", () => {
+  it("reads omp's own model change, which names provider/id in one field", () => {
     expect(parseConversationMetadata(jsonl(
-      { type: "message", message: { role: "assistant", model: "grok-4.7" } },
-      { type: "thinking_level_change", thinkingLevel: "high" },
-      { type: "model_change", model: "google-antigravity/gemini-3.8-flash" },
-    ), "omp-transcript")).toEqual({ model: "google-antigravity/gemini-3.8-flash", reasoning_effort: "high" });
-    expect(parseConversationMetadata(jsonl(
-      { type: "model_change", modelId: "kept" },
-      { type: "model_change" },
-      { type: "thinking_level_change", thinkingLevel: "high" },
-    ), "omp-transcript")).toEqual({ model: "kept", reasoning_effort: "high" });
+      { type: "message", message: { role: "assistant", model: "claude-opus-5-5", provider: "anthropic" } },
+      { type: "model_change", model: "openai-codex/gpt-5.6-sol" },
+    ), "omp-transcript")).toEqual({ model: "gpt-5.6-sol", reasoning_effort: null });
+    expect(parseConversationMetadata(jsonl({ type: "model_change", model: "local-model" }), "omp-transcript"))
+      .toEqual({ model: "local-model", reasoning_effort: null });
   });
 
   it("reads Claude's actual model without deriving effort from thinking content", () => {

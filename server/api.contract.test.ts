@@ -1,6 +1,6 @@
 import { describe, expect, it, beforeAll, afterAll } from "bun:test";
 import { Database } from "bun:sqlite";
-import { appendFileSync, chmodSync, copyFileSync, mkdirSync, mkdtempSync, existsSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { appendFileSync, chmodSync, copyFileSync, mkdirSync, mkdtempSync, existsSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { ConversationMonitor } from "./conversation-monitor.ts";
@@ -12,7 +12,7 @@ import { noInstalledNotes, unmanagedUpdateStatus, type HerdrUpdateStatus, type I
 import { USAGE_PROVIDERS, UsageService } from "./usage.ts";
 import { VoiceService } from "./voice.ts";
 import { Telemetry } from "./telemetry.ts";
-import { NOTICE_VERSION, type TelemetryEvent, type TelemetryStatus } from "../shared/telemetry.ts";
+import { NOTICE_VERSION, telemetryHarnesses, type TelemetryActive, type TelemetryEvent, type TelemetryStatus } from "../shared/telemetry.ts";
 import { DEFAULT_SETTINGS, telemetrySettingsSnapshot } from "../src/lib/settings.ts";
 import { HerdrSocket } from "../src/lib/ws.ts";
 import { herdrRpc, paneRead, ping, sessionSnapshot, tabCreate, workspaceCreate, workspaceClose } from "./herdr/client.ts";
@@ -76,7 +76,8 @@ describe("Grok conversation API", () => {
     writeFileSync(events, "");
     // A native stand-in owns the fd evidence and only sleeps; no model or user's store.
     const executable = join(root, "grok");
-    copyFileSync("/bin/sleep", join(root, "grok-1.0.50-linux-x86_64")); symlinkSync("grok-1.0.50-linux-x86_64", executable); chmodSync(executable, 0o755);
+    const nativeExecutable = join(root, "grok-1.0.52-linux-x86_64");
+    copyFileSync("/bin/sleep", nativeExecutable); symlinkSync("grok-1.0.52-linux-x86_64", executable); chmodSync(executable, 0o755);
     const created = await workspaceCreate({ cwd: root, label: "herdr-web-ui-test-grok-api" });
     let app: ReturnType<typeof createServer> | undefined;
     try {
@@ -99,6 +100,9 @@ describe("Grok conversation API", () => {
       expect(body.source).toBe("grok-transcript");
       expect(body.activity).toBe("working");
       expect(body.turns[0].parts[0].text).toBe("fictional prompt");
+      // An update can unlink the running binary: /proc/<pid>/exe gains " (deleted)".
+      unlinkSync(nativeExecutable);
+      expect((await (await fetch(url)).json()).source).toBe("grok-transcript");
       expect((await fetch(url, { headers: { "if-none-match": first.headers.get("etag")! } })).status).toBe(304);
       const ref = body.turns[1].parts[0].output_ref;
       const outputUrl = `http://127.0.0.1:${app.port}/api/pane/conversation/tool-output?${new URLSearchParams({ pane_id: paneId, ref })}`;
@@ -391,6 +395,25 @@ describe("update API", () => {
     } finally { managed.stop(); rmSync(managedState, { recursive: true, force: true }); }
   });
 
+  it("tells the served build's commit once it differs from the running revision", async () => {
+    const running = "a".repeat(40), moved = "d".repeat(40);
+    let head: string | null = running;
+    const managedState = mkdtempSync(join(tmpdir(), "herdr-update-checkout-"));
+    const managed = createServer({ port: 0, stateDir: managedState,
+      updates: { status: () => ({ ...unmanagedUpdateStatus(), managed: true, current_revision: running }), notes: () => ({ revision: null, releases: [], omitted: 0 }),
+        installed: noInstalledNotes, request() {}, servedRevision: async () => head } });
+    const read = async () => (await (await fetch(`http://localhost:${managed.port}/api/updates`)).json()) as { served_revision?: string | null };
+    try {
+      expect((await read()).served_revision).toBeNull();
+      head = moved;
+      expect((await read()).served_revision).toBe(moved);
+      head = null;
+      expect((await read()).served_revision).toBeNull();
+    } finally { managed.stop(); rmSync(managedState, { recursive: true, force: true }); }
+    // an unmanaged server names no checkout
+    expect((await (await fetch(`${base()}/api/updates`)).json() as { served_revision?: string | null }).served_revision).toBeUndefined();
+  });
+
   it("answers what the last update brought, and nothing where no update was installed", async () => {
     const none = await fetch(`${base()}/api/updates/installed`);
     expect(none.status).toBe(200);
@@ -540,6 +563,51 @@ describe("telemetry API", () => {
       const off = await post({ enabled: false });
       expect(await off.json() as TelemetryStatus).toMatchObject({ enabled: false });
     } finally { server.stop(); rmSync(state, { recursive: true, force: true }); }
+  });
+
+  it("counts a browser's websocket visit as one active message naming only allowed harness kinds", async () => {
+    const state = mkdtempSync(join(tmpdir(), "herdr-telemetry-active-"));
+    const posts: { url: string; body: TelemetryActive }[] = [];
+    let firstPost!: () => void;
+    const arrived = new Promise<void>((resolve) => { firstPost = resolve; });
+    const telemetry = new Telemetry({ stateDir: state, version: "9.9.9", env: {}, url: "http://receiver.invalid/v1/events", activeUrl: "http://receiver.invalid/v1/active", noticeGraceMs: 0,
+      fetch: (async (url: string | URL | Request, init?: RequestInit) => {
+        posts.push({ url: String(url), body: JSON.parse(String(init?.body)) as TelemetryActive });
+        if (String(url).endsWith("/v1/active")) firstPost();
+        return new Response(null, { status: 204 });
+      }) as typeof fetch });
+    const server = createServer({ port: 0, stateDir: state, token: "", telemetry });
+    const url = `http://localhost:${server.port}/api/telemetry`;
+    const headers = { "content-type": "application/json", "x-herdr-update": "1", origin: new URL(url).origin };
+    const sockets: WebSocket[] = [];
+    const snapshot = (): Promise<void> => new Promise((resolve, reject) => {
+      const socket = new WebSocket(`ws://localhost:${server.port}/ws`);
+      sockets.push(socket);
+      const timer = setTimeout(() => reject(new Error("no snapshot frame")), 10_000);
+      socket.onerror = () => { clearTimeout(timer); reject(new Error("websocket error")); };
+      socket.onmessage = (event) => {
+        if ((JSON.parse(String(event.data)) as { type: string }).type !== "snapshot") return;
+        clearTimeout(timer);
+        resolve();
+      };
+    });
+    try {
+      expect((await fetch(url, { method: "POST", headers, body: JSON.stringify({ notice_seen: true, notice_version: NOTICE_VERSION }) })).status).toBe(200);
+      await snapshot();
+      await Promise.race([arrived, new Promise<never>((_, reject) => setTimeout(() => reject(new Error("no active message")), 10_000))]);
+      const active = posts.filter((post) => post.url.endsWith("/v1/active"));
+      expect(active).toHaveLength(1);
+      expect(active[0]!.body.event).toBe("active");
+      expect(telemetryHarnesses(active[0]!.body.harnesses)).toEqual(active[0]!.body.harnesses);
+      expect((await (await fetch(url)).json() as TelemetryStatus).active.harnesses).toEqual(active[0]!.body.harnesses);
+      await snapshot();
+      await telemetry.active([]);
+      expect(posts.filter((post) => post.url.endsWith("/v1/active"))).toHaveLength(1);
+    } finally {
+      for (const socket of sockets) socket.close();
+      server.stop();
+      rmSync(state, { recursive: true, force: true });
+    }
   });
 
   it("keeps telemetry behind the token gate", async () => {
@@ -1121,6 +1189,38 @@ describe("workspace and discovery endpoints", () => {
     } finally {
       process.env["PATH"] = path;
       rmSync(bin, { recursive: true, force: true });
+    }
+  });
+
+  it("makes one folder for the folder browser, and refuses names, folders and origins it must not", async () => {
+    const root = mkdtempSync(join(tmpdir(), "herdr-web-ui-mkdir-"));
+    const make = (body: unknown, headers: Record<string, string> = {}) => fetch(`${base()}/api/workspace/directories`, {
+      method: "POST", headers: { "content-type": "application/json", ...headers }, body: JSON.stringify(body),
+    });
+    const code = async (res: Response) => ((await res.json()) as ApiError).error.code;
+    try {
+      const made = await make({ path: root, name: "new-one" });
+      expect(made.status).toBe(201);
+      expect(await made.json()).toEqual({ path: join(root, "new-one") });
+      expect(statSync(join(root, "new-one")).isDirectory()).toBeTrue();
+      const again = await make({ path: root, name: "new-one" });
+      expect(again.status).toBe(409);
+      expect(await code(again)).toBe("folder_exists");
+      for (const name of ["", "..", "a/b", "../escape"]) {
+        const refused = await make({ path: root, name });
+        expect(refused.status).toBe(400);
+        expect(await code(refused)).toBe("invalid_name");
+      }
+      const missing = await make({ path: join(root, "missing"), name: "x" });
+      expect(await code(missing)).toBe("invalid_cwd");
+      expect(await code(await make({ path: root }))).toBe("invalid_body");
+      // another site's page cannot make folders on this PC
+      const crossSite = await make({ path: root, name: "from-elsewhere" }, { origin: "https://evil.example" });
+      expect(crossSite.status).toBe(403);
+      expect(existsSync(join(root, "from-elsewhere"))).toBeFalse();
+      expect(existsSync(join(tmpdir(), "escape"))).toBeFalse();
+    } finally {
+      rmSync(root, { recursive: true, force: true });
     }
   });
 
@@ -3077,7 +3177,11 @@ describe("pairing and identity", () => {
     const at = (headers: Record<string, string> = {}) => fetch(`http://127.0.0.1:${secured.port}/api/health?scope=bridge`, { headers }).then((r) => r.json() as Promise<{ auth: HealthAuth }>).then((b) => b.auth);
     try {
       expect(await at()).toMatchObject({ authenticated: false, reason: "token_required" });
-      expect(await at({ authorization: "Bearer t0k3n" })).toMatchObject({ authenticated: true, via: "token" });
+      expect(await at({ authorization: "Bearer wrong" })).toEqual({ required: true, authenticated: false, reason: "token_required" });
+      expect(await at({ authorization: "Bearer t0k3n" })).toMatchObject({ authenticated: true, via: "token", bearer: true });
+      // a token held in the sign-in cookie is one signing out can clear
+      expect(await at({ cookie: "herdr_web_token=t0k3n" })).toEqual({ required: false, authenticated: true, via: "token", role: "drive" });
+      expect(await at({ cookie: "herdr_web_token=t0k3n", authorization: "Bearer wrong" })).toEqual({ required: false, authenticated: true, via: "token", role: "drive" });
       // another proxy on this PC can pass a visitor's copy of the login header on: the token is asked for anyway
       expect(await at(proxied(OWNER))).toMatchObject({ authenticated: false, reason: "token_required" });
       expect(await at(proxied("someone@example.com"))).toMatchObject({ authenticated: false, reason: "token_required" });
