@@ -14,6 +14,8 @@ between releases do not reach them. Remote-PC runtime bundles are versioned sepa
   sidecar independently every two seconds; the main transcript and Todo remain unchanged.
   This is read-only: it does not send BTW prompts, cancel requests or create branches. Unsaved
   streaming text and focused-subagent histories are not projected into the main session's panel.
+  Its close button hides the whole dock and stops refreshes; More → Side conversations (BTW)
+  restores it. The browser remembers the choice per PC/pane across reloads and view changes.
 - OMP chat panes offer a searchable, session-only model switcher backed by the selected PC's
   installed chat models. Switching waits for an idle agent and uses the existing terminal submit path.
 - Each chat pane keeps its latest phase-grouped todo progress in one collapsible panel above

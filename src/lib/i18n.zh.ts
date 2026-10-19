@@ -11,6 +11,7 @@
  */
 export const ZH: Record<string, string> = {
   "Side conversations": "旁路对话",
+  "Close BTW": "关闭 BTW",
   "Saved answers and follow-ups; separate from the main conversation.": "已保存的问答与追问，独立于主对话。",
   "Couldn't load BTW history": "无法加载 BTW 历史",
   "Interrupted": "已中断",

@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
-import { ChevronDown, MessageSquare } from "lucide-react";
+import { ChevronDown, MessageSquare, X } from "lucide-react";
 import type { BtwTopic, BtwTurn } from "../../shared/omp-btw.ts";
-import { useMachineApi } from "../lib/machineContext.tsx";
+import { useMachineApi, useMachineId } from "../lib/machineContext.tsx";
+import { useBtwVisibility } from "../lib/btwVisibility.ts";
 import { useT } from "../lib/i18n.ts";
 import { Markdown } from "./Markdown.tsx";
 import { TurnTime } from "./TurnTime.tsx";
@@ -40,11 +41,12 @@ function BtwTopicRow({ topic }: { topic: BtwTopic }) {
 export function BtwPanel({ paneId, visible }: { paneId: string; visible: boolean }) {
   const t = useT();
   const { fetchPaneBtw } = useMachineApi();
+  const [shown, setShown] = useBtwVisibility(useMachineId(), paneId);
   const [topics, setTopics] = useState<BtwTopic[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [open, setOpen] = useState(false);
   useEffect(() => {
-    if (!visible) return;
+    if (!visible || !shown) return;
     const controller = new AbortController();
     let timer: ReturnType<typeof setTimeout>;
     const read = async (): Promise<void> => {
@@ -64,15 +66,18 @@ export function BtwPanel({ paneId, visible }: { paneId: string; visible: boolean
     };
     void read();
     return () => { controller.abort(); clearTimeout(timer); };
-  }, [paneId, visible, fetchPaneBtw]);
-  if (topics.length === 0 && error === null) return null;
+  }, [paneId, visible, shown, fetchPaneBtw]);
+  if (!shown || (topics.length === 0 && error === null)) return null;
   const running = topics.some((topic) => (topic.followUps?.at(-1) ?? topic).status === "running");
-  return <details className="chat-btw" open={open} onToggle={(event) => setOpen(event.currentTarget.open)}>
-    <summary><MessageSquare aria-hidden="true" /><strong>BTW</strong><span>{t("Side conversations")}</span><span>{topics.length}</span>{running && <span className="chat-btw-status is-running">{t("Working…")}</span>}{error !== null && <span className="chat-btw-status is-error">{t("Error")}</span>}<ChevronDown className="chat-btw-caret" aria-hidden="true" /></summary>
+  return <section className="chat-btw" aria-label={`${t("Side conversations")} (BTW)`}>
+    <div className="chat-btw-heading">
+      <button type="button" className="chat-btw-toggle" aria-expanded={open} onClick={() => setOpen((value) => !value)}><MessageSquare aria-hidden="true" /><strong>BTW</strong><span>{t("Side conversations")}</span><span>{topics.length}</span>{running && <span className="chat-btw-status is-running">{t("Working…")}</span>}{error !== null && <span className="chat-btw-status is-error">{t("Error")}</span>}<ChevronDown className="chat-btw-caret" aria-hidden="true" /></button>
+      <button type="button" className="icon-button chat-btw-close" aria-label={t("Close BTW")} title={t("Close BTW")} onClick={() => setShown(false)}><X aria-hidden="true" /></button>
+    </div>
     {open && <div className="chat-btw-body">
       <p className="chat-btw-note">{t("Saved answers and follow-ups; separate from the main conversation.")}</p>
       {error !== null && <p className="chat-inline-error" role="alert">{t("Couldn't load BTW history")} · {error}</p>}
       {topics.map((topic) => <BtwTopicRow key={topic.id} topic={topic} />)}
     </div>}
-  </details>;
+  </section>;
 }

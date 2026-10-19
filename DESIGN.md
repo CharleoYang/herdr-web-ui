@@ -1458,6 +1458,9 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   state scoped to machine, pane and history. BTW writes do not touch the main journal, so this
   refresh is independent of transcript pushes/ETags. Only saved checkpoints can be shown:
   unsaved token streaming, sending/follow-up controls, cancellation and branching stay in OMP.
+- The close button removes the whole dock and stops its reads. More → Side conversations (BTW)
+  restores it. This browser remembers the choice per PC/pane through reloads and Chat/Terminal
+  switches; it is not synced as an agent preference and never deletes the saved history.
 
 ### Plan (`.bg-tasks-plan`, `.bg-step`, `.plan-count`)
 - A pane's plan has no control of its own: it shares the composer's background-task chip

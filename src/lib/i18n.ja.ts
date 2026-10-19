@@ -9,6 +9,7 @@
  */
 export const JA: Record<string, string> = {
   "Side conversations": "サイド会話",
+  "Close BTW": "BTWを閉じる",
   "Saved answers and follow-ups; separate from the main conversation.": "保存された回答と追加の質問です。メインの会話とは別に表示します。",
   "Couldn't load BTW history": "BTW履歴を読み込めませんでした",
   "Interrupted": "中断",
