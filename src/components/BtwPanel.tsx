@@ -49,9 +49,12 @@ export function BtwPanel({ paneId, visible }: { paneId: string; visible: boolean
     if (!visible || !shown) return;
     const controller = new AbortController();
     let timer: ReturnType<typeof setTimeout>;
+    let request: AbortController | undefined;
     const read = async (): Promise<void> => {
+      request = new AbortController();
+      const deadline = setTimeout(() => request?.abort(), 10_000);
       try {
-        const answer = await fetchPaneBtw(paneId, AbortSignal.any([controller.signal, AbortSignal.timeout(10_000)]));
+        const answer = await fetchPaneBtw(paneId, request.signal);
         if (controller.signal.aborted) return;
         setTopics((previous) => JSON.stringify(previous) === JSON.stringify(answer.topics) ? previous : answer.topics);
         setError(null);
@@ -61,11 +64,12 @@ export function BtwPanel({ paneId, visible }: { paneId: string; visible: boolean
         setTopics([]);
         setError(cause instanceof Error ? cause.message : String(cause));
       } finally {
+        clearTimeout(deadline);
         if (!controller.signal.aborted) timer = setTimeout(read, 2000);
       }
     };
     void read();
-    return () => { controller.abort(); clearTimeout(timer); };
+    return () => { controller.abort(); request?.abort(); clearTimeout(timer); };
   }, [paneId, visible, shown, fetchPaneBtw]);
   if (!shown || (topics.length === 0 && error === null)) return null;
   const running = topics.some((topic) => (topic.followUps?.at(-1) ?? topic).status === "running");

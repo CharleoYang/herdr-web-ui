@@ -60,6 +60,71 @@ describe("OMP model catalogue API", () => {
   });
 });
 
+describe("OMP BTW history API", () => {
+  it("rejects a missing pane and write methods", async () => {
+    expect((await fetch(`${base()}/api/pane/btw`)).status).toBe(400);
+    expect((await fetch(`${base()}/api/pane/btw?pane_id=unused`, { method: "POST", headers: { "x-herdr-update": "1" } })).status).toBe(400);
+  });
+
+  it("reads saved side conversations without changing main turns, follows checkpoints and fences session changes", async () => {
+    const root = mkdtempSync(join(tmpdir(), "herdr-web-ui-btw-contract-"));
+    const store = join(root, ".omp", "agent", "sessions", "-btw-contract");
+    mkdirSync(store, { recursive: true });
+    const path = join(store, "first.jsonl");
+    const main = [
+      { type: "session", version: 3, id: "btw-first", cwd: root },
+      { type: "message", timestamp: "2026-10-19T00:00:01Z", message: { role: "user", content: "Main question" } },
+      { type: "message", timestamp: "2026-10-19T00:00:02Z", message: { role: "assistant", content: [{ type: "text", text: "Main answer" }] } },
+    ].map((row) => JSON.stringify(row)).join("\n") + "\n";
+    writeFileSync(path, main);
+    const executable = join(root, "omp");
+    writeFileSync(executable, "#!/bin/sh\nsleep 600\n"); chmodSync(executable, 0o755);
+    const created = await workspaceCreate({ cwd: root, label: "herdr-web-ui-test-btw-api" });
+    const originalHome = process.env["HOME"];
+    try {
+      const pane = created.root_pane.pane_id;
+      await herdrRpc("pane.send_text", { pane_id: pane, text: `${executable}\n` });
+      for (const deadline = Date.now() + 5000;;) {
+        if ((await sessionSnapshot()).panes.find((candidate) => candidate.pane_id === pane)?.agent === "omp") break;
+        if (Date.now() > deadline) throw new Error("fixture OMP did not start");
+        await Bun.sleep(50);
+      }
+      let sequence = Date.now() * 1000;
+      const report = async (file: string) => {
+        await herdrRpc("pane.report_agent", { pane_id: pane, source: "herdr:omp", agent: "omp", state: "idle", seq: ++sequence });
+        await herdrRpc("pane.report_agent_session", { pane_id: pane, source: "herdr:omp", agent: "omp", seq: ++sequence, agent_session_path: file, session_start_source: "startup" });
+      };
+      process.env["HOME"] = root;
+      await report(path);
+      const url = `${base()}/api/pane/btw?pane_id=${encodeURIComponent(pane)}`;
+      expect(await (await fetch(url)).json()).toEqual({ topics: [] });
+      const directory = join(store, "first", "btw-history");
+      mkdirSync(directory, { recursive: true });
+      const topic = { id: "side", leafId: null, question: "Side question", answer: "", status: "running", createdAt: 100, updatedAt: 100 };
+      writeFileSync(join(directory, "entry-side.json"), JSON.stringify(topic));
+      expect(await (await fetch(url)).json()).toEqual({ topics: [topic] });
+      const complete = { ...topic, answer: "**Saved answer**", status: "complete", updatedAt: 200, followUps: [{ question: "And this?", answer: "Follow-up answer", status: "complete", createdAt: 201, updatedAt: 202 }] };
+      writeFileSync(join(directory, "entry-side.json"), JSON.stringify(complete));
+      expect(await (await fetch(url)).json()).toEqual({ topics: [complete] });
+      expect(await (await fetch(url.replace("/api/pane/", "/api/machines/local/pane/"))).json()).toEqual({ topics: [complete] });
+      expect(readFileSync(path, "utf8")).toBe(main);
+      const conversation = await (await fetch(`${base()}/api/pane/conversation?pane_id=${encodeURIComponent(pane)}`)).json();
+      expect(conversation.turns.flatMap((turn: { parts: { text?: string }[] }) => turn.parts.map((part) => part.text))).toEqual(["Main question", "Main answer"]);
+      writeFileSync(join(directory, "entry-side.json"), "{}");
+      expect((await fetch(url)).status).toBe(500);
+      const second = join(store, "second.jsonl");
+      writeFileSync(second, main.replace("btw-first", "btw-second"));
+      await report(second);
+      expect(await (await fetch(url)).json()).toEqual({ topics: [] });
+    } finally {
+      if (originalHome === undefined) delete process.env["HOME"];
+      else process.env["HOME"] = originalHome;
+      await workspaceClose(created.workspace.workspace_id);
+      forgetTranscriptState(); rmSync(root, { recursive: true, force: true });
+    }
+  }, 20_000);
+});
+
 describe("Grok conversation API", () => {
   it.skipIf(process.platform !== "linux")("uses exact process/session evidence, validators and revision-bound output refs", async () => {
     const root = mkdtempSync(join(tmpdir(), "herdr-web-ui-grok-contract-"));

@@ -30,7 +30,13 @@ export async function readBtwHistory(transcript: string): Promise<BtwHistory> {
     const match = /^entry-([a-zA-Z0-9][a-zA-Z0-9_-]{0,127})\.json$/.exec(entry.name);
     if (!match || !entry.isFile()) continue;
     // OMP atomically replaces a topic: only read committed .json files, never locks or .tmp files.
-    const value: unknown = JSON.parse(await readFile(join(directory, entry.name), "utf8"));
+    let content: string;
+    try { content = await readFile(join(directory, entry.name), "utf8"); }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
+      throw error;
+    }
+    const value: unknown = JSON.parse(content);
     const row = record(value);
     if (!isTurn(value) || row.id !== match[1] || !(row.leafId === null || typeof row.leafId === "string")
       || (row.followUps !== undefined && (!Array.isArray(row.followUps) || !row.followUps.every(isTurn)))) {

@@ -1,5 +1,6 @@
-import { afterEach, expect, it } from "bun:test";
+import { afterEach, expect, it, spyOn } from "bun:test";
 import { mkdtemp, mkdir, rm, symlink, writeFile } from "node:fs/promises";
+import * as fs from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { readBtwHistory } from "./omp-btw.ts";
@@ -66,4 +67,28 @@ it("observes topic checkpoints without any main-transcript change", async () => 
   expect((await readBtwHistory(transcript)).topics[0]?.status).toBe("running");
   await writeFile(path, JSON.stringify({ ...initial, answer: "Saved final answer", status: "complete", updatedAt: 300 }));
   expect((await readBtwHistory(transcript)).topics[0]).toMatchObject({ answer: "Saved final answer", status: "complete", updatedAt: 300 });
+});
+
+it("skips only a topic removed after enumeration and keeps the remaining history", async () => {
+  const { transcript, directory } = await fixture();
+  const removed = join(directory, "entry-gone.json");
+  const kept = { ...turn, id: "kept", leafId: null };
+  await writeFile(removed, JSON.stringify({ ...turn, id: "gone", leafId: null }));
+  await writeFile(join(directory, "entry-kept.json"), JSON.stringify(kept));
+  const read = fs.readFile;
+  const intercepted = spyOn(fs, "readFile").mockImplementation((async (path: Parameters<typeof fs.readFile>[0], ...args: unknown[]) => {
+    if (path === removed) await rm(removed, { force: true });
+    return Reflect.apply(read, fs, [path, ...args]);
+  }) as typeof fs.readFile);
+  try { expect(await readBtwHistory(transcript)).toEqual({ topics: [kept] }); }
+  finally { intercepted.mockRestore(); }
+});
+
+it("does not turn a non-missing topic read error into empty history", async () => {
+  const { transcript, directory } = await fixture();
+  await writeFile(join(directory, "entry-denied.json"), JSON.stringify({ ...turn, id: "denied", leafId: null }));
+  const denied = Object.assign(new Error("Permission denied"), { code: "EACCES" });
+  const intercepted = spyOn(fs, "readFile").mockRejectedValue(denied);
+  try { await expect(readBtwHistory(transcript)).rejects.toBe(denied); }
+  finally { intercepted.mockRestore(); }
 });

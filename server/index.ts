@@ -28,12 +28,12 @@ import { claudePaneSession, paneConversation, paneTranscript } from "./conversat
 import { ConversationMonitor } from "./conversation-monitor.ts";
 import { processAlive } from "./omo-status.ts";
 import { omoRuns, omoTasks } from "./omo-tasks.ts";
+import { readBtwHistory } from "./omp-btw.ts";
 import { claudeSubagents, within } from "./claude-subagents.ts";
 import { SHELL_AGENTS, shellAgentExecutable } from "./shell-agent.ts";
 import { claudeForegroundSession, claudeSessionTempDir } from "./claude-store.ts";
 import { fileResponse, findFile, crossSiteFileRead, forgetPageMedia, pageMediaResponse, pageMediaSource, PAGE_MEDIA_PATH } from "./file-view.ts";
 import { findProjectFavicon } from "./project-favicon.ts";
-import { readBtwHistory } from "./omp-btw.ts";
 import {
   agentManifests,
   HerdrError,
@@ -955,7 +955,6 @@ export function createServer(
           return errorResponse(error);
         }
       }
-
       if (pathname === "/api/pane/btw") {
         if (request.method !== "GET") return badRequest("method_not_allowed", "use GET");
         const paneId = url.searchParams.get("pane_id");

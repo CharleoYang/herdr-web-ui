@@ -642,6 +642,11 @@ async function route(url: URL, method: string, init: RequestInit | undefined, in
     // These demo fixtures have no native Grok/Agy lifecycle: omit optional activity.
     return json({ source, turns: chat.turns, metadata: chat.metadata, cursor: null });
   }
+  if (path === "/api/pane/btw") {
+    if (method !== "GET") return error("method_not_allowed", "use GET", 400);
+    if (!paneId) return error("missing_pane_id", "pane_id query parameter is required", 400);
+    return json({ topics: [] });
+  }
   if (path === "/api/pane/plan") {
     if (method !== "GET") return error("method_not_allowed", "use GET", 400);
     if (!paneId) return error("missing_pane_id", "pane_id query parameter is required", 400);
