@@ -2,6 +2,7 @@ import type { MachineEvent, SetupAction, SetupRequest } from "../shared/machines
 import type { AgentRowTokens } from "../shared/pane-tokens.ts";
 import type { SharedPreferences } from "../shared/preferences.ts";
 import type { InteractivePrompt } from "../shared/protocol.ts";
+import type { SeenFinish } from "../shared/seen.ts";
 import { MachineManager } from "./machines.ts";
 import { canSendSecret, sameOrigin } from "./machine-security.ts";
 import { isJsonObject, jsonResponse } from "./http.ts";
@@ -27,7 +28,8 @@ function transportFailure(id: string, path: string, error: unknown): Response {
 
 export async function handleMachineRequest(request: Request, manager: MachineManager, onRevoke?: (close: () => void) => () => void,
   preferences?: { get(): SharedPreferences; subscribe(listener: (preferences: SharedPreferences) => void): () => void }, readOnly = false,
-  herdrSidebar?: { get(): AgentRowTokens | null; subscribe(listener: (agents: AgentRowTokens | null) => void): () => void }): Promise<Response> {
+  herdrSidebar?: { get(): AgentRowTokens | null; subscribe(listener: (agents: AgentRowTokens | null) => void): () => void },
+  seen?: { list(): SeenFinish[]; subscribe(listener: (finish: SeenFinish) => void): () => void }): Promise<Response> {
   const url = new URL(request.url);
   // A PC's file opens as this PC's /api/fs/file does, from any navigation: reading it changes
   // nothing, and Chrome on Android shows a PDF in the viewer's frame as an "Open" button whose
@@ -46,11 +48,12 @@ export async function handleMachineRequest(request: Request, manager: MachineMan
       let stop: (() => void) | undefined;
       let stopPreferences: (() => void) | undefined;
       let stopSidebar: (() => void) | undefined;
+      let stopSeen: (() => void) | undefined;
       let unwatchDevice: (() => void) | undefined;
       let heartbeat: ReturnType<typeof setInterval> | undefined;
       let close = () => {};
       const cleanup = () => {
-        stop?.(); stopPreferences?.(); stopSidebar?.(); unwatchDevice?.(); clearInterval(heartbeat);
+        stop?.(); stopPreferences?.(); stopSidebar?.(); stopSeen?.(); unwatchDevice?.(); clearInterval(heartbeat);
         request.signal.removeEventListener("abort", close);
       };
       const encoder = new TextEncoder();
@@ -72,6 +75,9 @@ export async function handleMachineRequest(request: Request, manager: MachineMan
           // read before listening: a change this read finds is told to the browsers already listening, and to this one once
           if (herdrSidebar) sendSidebar(herdrSidebar.get());
           stopSidebar = herdrSidebar?.subscribe(sendSidebar);
+          const sendSeen = (finishes: SeenFinish[]) => send(`data: ${JSON.stringify({ type: "seen", finishes } satisfies MachineEvent)}\n\n`);
+          if (seen) sendSeen(seen.list());
+          stopSeen = seen?.subscribe((finish) => sendSeen([finish]));
           if (closed) { cleanup(); return; }
           heartbeat = setInterval(() => send(": heartbeat\n\n"), 15_000);
           request.signal.addEventListener("abort", close, { once: true });

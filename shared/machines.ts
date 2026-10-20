@@ -1,6 +1,7 @@
 import type { AgentRowTokens } from "./pane-tokens.ts";
 import type { SharedPreferences } from "./preferences.ts";
 import type { HealthAuth, ServerMessage, SessionSnapshot } from "./protocol.ts";
+import type { SeenFinish } from "./seen.ts";
 
 export const LOCAL_MACHINE = "local";
 export const BRIDGE_PROTOCOL = 1;
@@ -84,7 +85,9 @@ export type SetupAction = { action: "answer"; challenge_id: string; answer: stri
 export type MachineEvent = { type: "machines"; machines: Machine[] } | { type: "machine-message"; machine_id: string; message: ServerMessage }
   | { type: "preferences"; preferences: SharedPreferences }
   /** the `$name` tokens herdr's `[ui.sidebar.agents]` rows draw on this server's PC, for every PC's agent rows (server/herdr-sidebar.ts) */
-  | { type: "herdr-sidebar"; agents: AgentRowTokens | null };
+  | { type: "herdr-sidebar"; agents: AgentRowTokens | null }
+  /** finishes a browser of this server presented (shared/seen.ts): every record when the stream opens, then each change */
+  | { type: "seen"; finishes: SeenFinish[] };
 export interface BridgeHealth { ok: true; auth: HealthAuth; bridge_protocol: number }
 export interface BridgeIdentity {
   pid: number;

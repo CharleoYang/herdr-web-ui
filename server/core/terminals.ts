@@ -4,8 +4,11 @@
  * sent. The pane's agent conversation is watched while a client that shows the pane asks for it.
  */
 import type { ClientMessage, ServerMessage } from "../../shared/protocol.ts";
+import { ConversationMonitor } from "../conversation-monitor.ts";
+import { paneConversation } from "../conversation.ts";
+import { readPromptState, type PromptRequestOptions } from "../prompt.ts";
+import { type SightingFacts, sightingFacts } from "../input-guard.ts";
 import { OUTPUT_HARD_BYTES, OUTPUT_HIGH_BYTES, OUTPUT_STALL_MS, OutputWindow, wireBytes } from "../output-window.ts";
-import type { PtySession } from "../pty/session.ts";
 import { type Client, connectionOf, send } from "./connections.ts";
 import { ATTACH_HELD_MESSAGE, createSpawnAttachment, type PaneAttachment } from "./terminal-process.ts";
 
@@ -18,6 +21,27 @@ const REPAINT_COALESCE_MS = 50;
 const REPAINT_MIN_INTERVAL_MS = 1000;
 
 type Frame<T extends ClientMessage["type"]> = Extract<ClientMessage, { type: T }>;
+
+/** What the server outside the registry reads of a pane's attachment: its grid, and whether another web bridge holds its terminal. */
+export type AttachmentView = { readonly cols: number; readonly rows: number; readonly held?: boolean };
+
+/**
+ * What a connection saw of a pane's terminal before an await, held as references and never
+ * copied: `facts()` compares them with the pane's terminal now, so an attach or a session that
+ * replaced the one seen never passes for it.
+ */
+export interface TerminalSighting {
+  /**
+   * The attachment the connection was in when it saw the pane, that attachment's session, and the
+   * connection's claim then. For comparing two sightings with `===` only.
+   */
+  readonly origin: unknown;
+  readonly pty: unknown;
+  readonly claim: unknown;
+  facts(): SightingFacts;
+  /** Writes into the session seen, as typing into its pty does (a mirror sends it through herdr). */
+  write(data: string): boolean | void;
+}
 
 /** Clamp surface for the shared pty, mirroring the sidecar's own limits. */
 export function validGeometry(cols: unknown, rows: unknown): { cols: number; rows: number } | null {
@@ -32,9 +56,8 @@ export function validGeometry(cols: unknown, rows: unknown): { cols: number; row
  * The server's terminals. `stopped` is read through a getter, as `stop()` sets it later, and `end`
  * is called through one, as the connections are built after the terminals.
  */
-export function createTerminalRegistry({ clients, stopped, watchConversation, releaseConversation, terminalAttach, holdFor, heldRetry, retryFor, relookupFor, holdPending, holdPendingPane, end }: {
-  watchConversation: (paneId: string) => void;
-  releaseConversation: (paneId: string) => void;
+export function createTerminalRegistry({ options, clients, stopped, terminalAttach, holdFor, heldRetry, retryFor, relookupFor, holdPending, holdPendingPane, end }: {
+  options: PromptRequestOptions & { devinDbPath?: string; opencodeDb?: string; hermesHome?: string; grokHome?: string };
   clients: Set<Client>;
   stopped: () => boolean;
   terminalAttach: () => Promise<boolean>;
@@ -52,11 +75,133 @@ export function createTerminalRegistry({ clients, stopped, watchConversation, re
   const pendingAttachments = new Map<string, Promise<PaneAttachment>>();
   // herdr releases its exclusive attach slot only after the old process exits.
   const retiringAttachments = new Map<string, Promise<void>>();
+  const conversationReads = new Map<string, Promise<void>>();
+  const conversationEligible = (client: Client, paneId: string): boolean =>
+    !stopped() && !connectionOf(client).closing && client.readyState === WebSocket.OPEN && client.data.attached.has(paneId) && client.data.conversationInterests.has(paneId);
+  const conversations = new ConversationMonitor((paneId, signature) => {
+    const recipients: { client: Client; claim: { keepSize: boolean } | undefined; interest: { signature: string | null } }[] = [];
+    for (const client of clients) {
+      if (!conversationEligible(client, paneId)) continue;
+      if (send(client, { type: "conversation-changed", pane_id: paneId, signature }) === 0) continue;
+      if (client.data.features?.includes("conversation-delta")) {
+        recipients.push({ client, claim: client.data.attached.get(paneId), interest: client.data.conversationInterests.get(paneId)! });
+      }
+    }
+    if (recipients.length === 0) return;
+    const run = (conversationReads.get(paneId) ?? Promise.resolve()).then(async () => {
+      if (stopped() || !await conversations.matches(paneId, signature)) return;
+      // The authoritative REST reader's default page, never a PTY projection or a from/before fragment.
+      const page = await paneConversation(paneId, options.codexHome, {}, options.devinDbPath, options.opencodeDb, options.hermesHome, options.grokHome);
+      if (stopped() || !await conversations.matches(paneId, signature)) return;
+      for (const { client, claim, interest } of recipients) {
+        if (!conversationEligible(client, paneId) || client.data.attached.get(paneId) !== claim || client.data.conversationInterests.get(paneId) !== interest) continue;
+        const message: Extract<ServerMessage, { type: "conversation-delta" }> = {
+          type: "conversation-delta", pane_id: paneId, signature,
+          delta: { base_signature: interest.signature, source: page.source, history_id: page.history_id, cursor: page.cursor, turns: page.turns },
+        };
+        if (Buffer.byteLength(JSON.stringify(message), "utf8") > 262144) continue;
+        if (send(client, message) !== 0) interest.signature = signature;
+      }
+    }).catch(() => { /* A read or identity failure leaves only the original invalidation. */ });
+    conversationReads.set(paneId, run);
+    void run.finally(() => { if (conversationReads.get(paneId) === run) conversationReads.delete(paneId); });
+  }, options.codexHome, options.devinDbPath, options.opencodeDb, options.hermesHome, options.grokHome);
+  const PROMPT_PUSH_MS = 2_000;
+
+
+  type PromptPush = Extract<ServerMessage, { type: "prompt-push" }>;
+  type PromptRecipient = { client: Client; claim: { keepSize: boolean } | undefined; interest: { signature: string | null } };
+  type PromptObservation = { active: boolean; reading: boolean; timer?: Timer };
+  const promptObservations = new Map<string, PromptObservation>();
+  // Baselines belong to an interest lifetime, never a pane or a disconnected client.
+  const promptSent = new WeakMap<object, string>();
+
+  function promptRecipients(paneId: string, readOnly: boolean): PromptRecipient[] {
+    const recipients: PromptRecipient[] = [];
+    for (const client of clients) {
+      if (!conversationEligible(client, paneId) || !client.data.features?.includes("prompt-push") || (client.data.promptScreenOnly === true) !== readOnly) continue;
+      recipients.push({ client, claim: client.data.attached.get(paneId), interest: client.data.conversationInterests.get(paneId)! });
+    }
+    return recipients;
+  }
+
+  // Menus can change while idle without any transcript/stat/status edge. Browsers stop empty
+  // polling; the bridge still observes the authoritative prompt reader, once per pane/policy.
+  function reconcilePrompts(paneId: string): void {
+    for (const readOnly of [false, true]) {
+      const key = JSON.stringify([paneId, readOnly]);
+      let observation = promptObservations.get(key);
+      const active = !stopped() && promptRecipients(paneId, readOnly).length > 0;
+      if (!active) {
+        if (observation) {
+          observation.active = false;
+          clearTimeout(observation.timer);
+          observation.timer = undefined;
+          // Keep an in-flight guard until the reader settles, even across unwatch/rewatch.
+          if (!observation.reading) promptObservations.delete(key);
+        }
+        continue;
+      }
+      if (!observation) {
+        observation = { active: true, reading: false };
+        promptObservations.set(key, observation);
+      }
+      observation.active = true;
+      if (observation.reading || observation.timer !== undefined) continue;
+      const current = observation;
+      const read = async (): Promise<void> => {
+        current.timer = undefined;
+        if (stopped() || !current.active) return;
+        const recipients = promptRecipients(paneId, readOnly);
+        if (recipients.length === 0) { reconcilePrompts(paneId); return; }
+        current.reading = true;
+        try {
+          const state = await readPromptState(paneId, {
+            ...options, readOnly,
+          });
+          if (state === null) return;
+          const message: PromptPush = { type: "prompt-push", pane_id: paneId, ...state };
+          const signature = JSON.stringify(message);
+          for (const { client, claim, interest } of recipients) {
+            if (!current.active || !conversationEligible(client, paneId) || client.data.attached.get(paneId) !== claim
+              || client.data.conversationInterests.get(paneId) !== interest || (client.data.promptScreenOnly === true) !== readOnly) continue;
+            if (promptSent.get(interest) === signature) continue;
+            if (send(client, message) !== 0) promptSent.set(interest, signature);
+          }
+        } catch { /* Preserve the last state on backend failure; the next observation retries. */ }
+        finally {
+          current.reading = false;
+          if (!stopped() && current.active && promptRecipients(paneId, readOnly).length > 0) {
+            current.timer = setTimeout(() => void read(), PROMPT_PUSH_MS);
+            current.timer.unref();
+          } else if (promptObservations.get(key) === current) promptObservations.delete(key);
+        }
+      };
+      void read();
+    }
+  }
+
+  function releaseConversation(paneId: string): void {
+    reconcilePrompts(paneId);
+    for (const client of clients) {
+      if (!connectionOf(client).closing && client.readyState === WebSocket.OPEN && client.data.attached.has(paneId) && client.data.conversationInterests.has(paneId)) return;
+    }
+    conversations.unwatch(paneId);
+  }
+
+  function stopConversations(): void {
+    conversations.stop();
+    for (const observation of promptObservations.values()) {
+      observation.active = false;
+      clearTimeout(observation.timer);
+    }
+    promptObservations.clear();
+  }
 
 
   function reconcileOutput(paneId: string): void {
     const attachment = attachments.get(paneId);
-    if (!attachment?.pty) return;
+    if (!attachment?.process) return;
     let paused = false;
     for (const client of attachment.clients) {
       const window = client.data.output.get(paneId);
@@ -83,8 +228,8 @@ export function createTerminalRegistry({ clients, stopped, watchConversation, re
       }
     }
     if (attachments.get(paneId) !== attachment) return;
-    if (paused) attachment.pty.pause();
-    else attachment.pty.resume();
+    if (paused) attachment.process.pause();
+    else attachment.process.resume();
   }
 
   function sendOutput(client: Client, paneId: string, data: string): void {
@@ -123,11 +268,11 @@ export function createTerminalRegistry({ clients, stopped, watchConversation, re
     for (const member of attachment.clients) member.data.conversationInterests.delete(paneId);
     for (const member of attachment.clients) member.data.output.delete(paneId);
     releaseConversation(paneId);
-    const retired = attachment.pty.exited.finally(() => {
+    const retired = attachment.process.exited.finally(() => {
       if (retiringAttachments.get(paneId) === retired) retiringAttachments.delete(paneId);
     });
     retiringAttachments.set(paneId, retired);
-    attachment.pty.kill();
+    attachment.process.kill();
   }
 
   /** An interact client's terminal sizes the pty: the grid is remembered as this client's, and it drives. */
@@ -135,7 +280,7 @@ export function createTerminalRegistry({ clients, stopped, watchConversation, re
     const attachment = attachments.get(paneId);
     const claim = client.data.attached.get(paneId);
     if (claim) claim.keepSize = false;
-    if (attachment && !attachment.mirror) {
+    if (attachment && attachment.kind !== "mirror") {
       attachment.grids.delete(client);
       attachment.grids.set(client, { cols, rows });
       attachment.driver = client;
@@ -151,23 +296,23 @@ export function createTerminalRegistry({ clients, stopped, watchConversation, re
    */
   function requestRepaint(paneId: string): void {
     const attachment = attachments.get(paneId);
-    if (!attachment || attachment.mirror || attachment.repaint) return;
+    if (!attachment || attachment.kind === "mirror" || attachment.repaint) return;
     const cooldown = attachment.repaintedAt === undefined ? 0 : attachment.repaintedAt + REPAINT_MIN_INTERVAL_MS - Date.now();
     attachment.repaint = setTimeout(() => {
       attachment.repaint = undefined;
-      if (attachments.get(paneId) !== attachment || !attachment.ready || attachment.held || attachment.mirror) return;
+      if (attachments.get(paneId) !== attachment || !attachment.ready || attachment.held) return;
       attachment.repaintedAt = Date.now();
-      (attachment.pty as PtySession).winch();
+      attachment.process.winch();
     }, Math.max(REPAINT_COALESCE_MS, cooldown));
   }
 
   function resizePty(paneId: string, cols: number, rows: number): void {
     const attachment = attachments.get(paneId);
     // a mirrored pane's grid is herdr's own: no browser resizes it
-    if (!attachment || attachment.mirror || (attachment.cols === cols && attachment.rows === rows)) return;
+    if (!attachment || attachment.kind === "mirror" || (attachment.cols === cols && attachment.rows === rows)) return;
     attachment.cols = cols;
     attachment.rows = rows;
-    attachment.pty.resize(cols, rows);
+    attachment.process.resize(cols, rows);
     // herdr redraws the whole screen for a new size: a repaint still waiting would send it twice
     clearTimeout(attachment.repaint);
     attachment.repaint = undefined;
@@ -227,6 +372,28 @@ export function createTerminalRegistry({ clients, stopped, watchConversation, re
     closeAttachment(paneId);
   }
 
+  /** What `client` sees of the pane's terminal now, for the checks it makes after an await. */
+  function sight(client: Client, paneId: string): TerminalSighting {
+    const attachment = attachments.get(paneId);
+    const member = attachment?.clients.has(client) === true;
+    const process = attachment?.process;
+    const claim = client.data.attached.get(paneId);
+    const seen = { attachment, process, claim, member };
+    return {
+      origin: member ? attachment : undefined,
+      pty: member ? process : undefined,
+      claim,
+      facts: () => sightingFacts(seen, { attachment: attachments.get(paneId), claim: client.data.attached.get(paneId) }, client),
+      write: (data) => process!.write(data),
+    };
+  }
+
+  /** Something was typed into the pane: a mirrored screen is read at once for its echo, not at its next idle read. */
+  function poke(paneId: string): void {
+    const attachment = attachments.get(paneId);
+    if (attachment?.kind === "mirror") attachment.process.poke();
+  }
+
   /** A connection whose transport queue drained: its panes' output may flow again. */
   function drainOutput(client: Client): void {
     for (const paneId of client.data.attached.keys()) reconcileOutput(paneId);
@@ -280,22 +447,26 @@ export function createTerminalRegistry({ clients, stopped, watchConversation, re
       if (!alreadyAttached && message.flow_control === "ack") client.data.output.set(message.pane_id, new OutputWindow());
       // a mirrored screen is drawn for the pane's own grid: the client takes that size
       // before the screen, or the rows would wrap in a grid of another width
-      if (attachment.mirror) send(client, { type: "pane-geometry", pane_id: message.pane_id, cols: attachment.cols, rows: attachment.rows, fixed: true });
+      if (attachment.kind === "mirror") send(client, { type: "pane-geometry", pane_id: message.pane_id, cols: attachment.cols, rows: attachment.rows, fixed: true });
       // hand the newcomer the current screen it would otherwise have missed
       // (a mirror keeps its latest screen whole; a pty keeps a bounded tail of its stream)
-      const replay = attachment.mirror ? attachment.mirror.current ?? "" : attachment.replay.text();
+      const replay = attachment.kind === "mirror" ? attachment.process.current ?? "" : attachment.replay.text();
+      // the members heard `input-ready: false` when the stream ended; a newcomer is told the replay
+      // is the screen from before in a frame of its own, as an early negative receipt would pass for
+      // the attach-complete barrier queued input waits on
+      if (!alreadyAttached && attachment.recovering) send(client, { type: "output-recovering", pane_id: message.pane_id });
       if (!alreadyAttached && replay) {
         client.data.output.get(message.pane_id)?.join(replay, client.getBufferedAmount());
         sendOutput(client, message.pane_id, replay);
         // a tail that lost the stream's start may miss what was drawn once: herdr draws it again
-        if (!attachment.mirror && attachment.ready && !attachment.held && attachment.replay.truncated) requestRepaint(message.pane_id);
+        if (attachment.kind !== "mirror" && attachment.ready && !attachment.held && attachment.replay.truncated) requestRepaint(message.pane_id);
       }
       // a pane waiting for another web bridge to let go says so to each newcomer, too
       if (!alreadyAttached && attachment.held) send(client, { type: "error", code: "attach_held", message: ATTACH_HELD_MESSAGE, pane_id: message.pane_id });
       reconcileOutput(message.pane_id);
       if (connectionOf(client).closing) return;
       if (attachment.ready && !attachment.held) send(client, { type: "input-ready", pane_id: message.pane_id });
-      if (attachment.mirror) return;
+      if (attachment.kind === "mirror") return;
       if (connectionOf(client).mode === "interact" && !claim.keepSize) {
         // an operator's viewport owns the shared grid
         drivePty(message.pane_id, client, geometry.cols, geometry.rows);
@@ -318,7 +489,7 @@ export function createTerminalRegistry({ clients, stopped, watchConversation, re
         return;
       }
       const attachment = attachments.get(message.pane_id);
-      if (attachment?.clients.has(client)) attachment.takeOver?.(client);
+      if (attachment?.kind === "pty" && attachment.clients.has(client)) attachment.takeOver?.(client);
       return;
     },
     detach(client: Client, message: Frame<"detach">): void {
@@ -337,7 +508,8 @@ export function createTerminalRegistry({ clients, stopped, watchConversation, re
           return;
         }
         if (!client.data.conversationInterests.has(message.pane_id)) client.data.conversationInterests.set(message.pane_id, { signature: null });
-        watchConversation(message.pane_id);
+        conversations.watch(message.pane_id);
+        reconcilePrompts(message.pane_id);
       } else {
         client.data.conversationInterests.delete(message.pane_id);
         releaseConversation(message.pane_id);
@@ -389,7 +561,7 @@ export function createTerminalRegistry({ clients, stopped, watchConversation, re
       // still be awaiting herdr, and must not revive this hidden grid when it completes.
       claim.keepSize = true;
       const attachment = typeof message.pane_id === "string" ? attachments.get(message.pane_id) : undefined;
-      if (!attachment || attachment.mirror) return;
+      if (!attachment || attachment.kind === "mirror") return;
       attachment.grids.delete(client);
       if (attachment.driver !== client) return;
       attachment.driver = undefined;
@@ -400,5 +572,8 @@ export function createTerminalRegistry({ clients, stopped, watchConversation, re
     },
   };
 
-  return { attachments, pendingAttachments, releaseConversation, reconcileOutput, sendOutput, closeAttachment, drivePty, requestRepaint, ensureAttachment, detach, detachClaimed, dropClaims, releaseUnclaimed, drainOutput, terminalFrames };
+  // the same live records, read through their grid and held state only: the server outside reaches a
+  // pane's terminal through `sight`, `poke` and the frames
+  const views: ReadonlyMap<string, AttachmentView> = attachments;
+  return { attachments: views, conversations, stopConversations, reconcileOutput, closeAttachment, detachClaimed, dropClaims, sight, poke, drainOutput, terminalFrames };
 }

@@ -27,3 +27,5 @@ scripts/*.tmp.ts
 .loopx/
 .worktree/
 .pi/
+# the iOS app's bundled pages and demo, assembled by app/scripts/build-web.ts
+app/www/

@@ -64,18 +64,9 @@ const ATTACH_RELOOKUP_MS = 100;
 /** what a pane lookup answers for a pane that has no terminal to attach any more */
 const PANE_GONE_CODES = new Set(["pane_not_found", "pane_not_restored", "no_terminal"]);
 
-/**
- * One live PTY per pane, shared by every client watching that pane.
- *
- * The terminal is a real `herdr terminal attach` on a PTY rather than repeated
- * `pane.read` snapshots, so the browser receives an actual byte stream: xterm.js
- * keeps screen state and selection, while herdr owns scrollback.
- */
-export interface PaneAttachment {
+/** What a pane's attachment keeps whichever process it has. */
+interface AttachmentState {
   ready: boolean;
-  pty: PtySession | MirrorSession;
-  /** set when herdr cannot attach here: `pty` repaints the pane's screen (server/mirror.ts), on the pane's own grid */
-  mirror?: MirrorSession;
   clients: Set<Client>;
   /** the pty's current grid: interact clients set it, observe clients adopt it */
   cols: number;
@@ -90,10 +81,10 @@ export interface PaneAttachment {
   stalled: Map<Client, number>;
   /** another web bridge holds herdr's one attach slot for this terminal: waiting for it to let go */
   held?: boolean;
+  /** the stream ended after it was ready: until an attach takes again, the replay is the screen from before */
+  recovering?: boolean;
   /** the next held or read-race retry; takeover and close both cancel it */
   retry?: ReturnType<typeof setTimeout>;
-  /** a held terminal's next try takes the slot from the other bridge for this client (`take-over`); a pty attachment only */
-  takeOver?: (client: Client) => void;
   /** the next look for the terminal a pane lives on after herdr ended its attach; a closed attachment cancels it */
   relookup?: ReturnType<typeof setTimeout>;
   /** a repaint asked of herdr for clients that joined with only the replay tail; a closed attachment cancels it */
@@ -101,6 +92,32 @@ export interface PaneAttachment {
   /** when herdr was last asked to repaint (or redrew for a resize), for REPAINT_MIN_INTERVAL_MS */
   repaintedAt?: number;
 }
+
+/**
+ * One live PTY per pane, shared by every client watching that pane.
+ *
+ * The terminal is a real `herdr terminal attach` on a PTY rather than repeated
+ * `pane.read` snapshots, so the browser receives an actual byte stream: xterm.js
+ * keeps screen state and selection, while herdr owns scrollback.
+ */
+export interface PtyAttachment extends AttachmentState {
+  readonly kind: "pty";
+  /** the attach the latest start made: each retry, take-over or handoff's new terminal replaces it */
+  process: PtySession;
+  /** a held terminal's next try takes the slot from the other bridge for this client (`take-over`) */
+  takeOver?: (client: Client) => void;
+}
+
+/**
+ * Where herdr cannot attach here, `process` repaints the pane's screen (server/mirror.ts) on the
+ * pane's own grid: no browser resizes it, and there is no attach slot to take over.
+ */
+export interface MirrorAttachment extends AttachmentState {
+  readonly kind: "mirror";
+  process: MirrorSession;
+}
+
+export type PaneAttachment = PtyAttachment | MirrorAttachment;
 
 /**
  * The attach the server's clients share for each pane. `attachments` stays the server's: a callback
@@ -147,9 +164,7 @@ export function createSpawnAttachment({ attachments, retiringAttachments, termin
     // watching phone's viewport
     const spawnCols = forObserver || mirrored ? (rect?.width ?? 80) : cols;
     const spawnRows = forObserver || mirrored ? (rect?.height ?? 24) : rows;
-    const attachment: PaneAttachment = {
-      ready: mirrored,
-      pty: undefined as unknown as PtySession,
+    const state = {
       clients: new Set<Client>(),
       cols: spawnCols,
       rows: spawnRows,
@@ -157,9 +172,10 @@ export function createSpawnAttachment({ attachments, retiringAttachments, termin
       stalled: new Map(),
       grids: new Map(),
     };
-    attachments.set(paneId, attachment);
 
     if (mirrored) {
+      const attachment: MirrorAttachment = { kind: "mirror", ready: true, process: undefined as unknown as MirrorSession, ...state };
+      attachments.set(paneId, attachment);
       const mirror = new MirrorSession({
         cols: spawnCols,
         rows: spawnRows,
@@ -187,10 +203,12 @@ export function createSpawnAttachment({ attachments, retiringAttachments, termin
           closeAttachment(paneId);
         },
       });
-      attachment.pty = mirror;
-      attachment.mirror = mirror;
+      attachment.process = mirror;
       return attachment;
     }
+
+    const attachment: PtyAttachment = { kind: "pty", ready: false, process: undefined as unknown as PtySession, ...state };
+    attachments.set(paneId, attachment);
 
     // No --takeover unless asked: another web bridge may own the exclusive attach slot.
     // Report that conflict without displacing it or the user's own TUI; a client here may
@@ -226,7 +244,7 @@ export function createSpawnAttachment({ attachments, retiringAttachments, termin
         return;
       }
       try {
-        attachment.pty = start();
+        attachment.process = start();
       } catch (error) {
         const message = spawnFailure(paneId, error);
         broadcast(paneId, { type: "error", code: error instanceof HerdrError ? error.code : "command_failed", message, pane_id: paneId });
@@ -300,6 +318,7 @@ export function createSpawnAttachment({ attachments, retiringAttachments, termin
           broadcast(paneId, { type: "attach-resumed", pane_id: paneId });
         }
         attachment.ready = true;
+        attachment.recovering = false;
         broadcast(paneId, { type: "input-ready", pane_id: paneId });
         release();
       };
@@ -309,6 +328,7 @@ export function createSpawnAttachment({ attachments, retiringAttachments, termin
         clearTimeout(tailTimer);
         if (attachments.get(paneId) !== attachment) return;
         if (attachment.ready) {
+          attachment.recovering = true;
           broadcast(paneId, { type: "input-ready", pane_id: paneId, ready: false });
           holdPendingPane(paneId, { code: "input_not_ready", message: "The pane's attachment is restarting; review pending messages before sending them" });
         }
@@ -382,7 +402,7 @@ export function createSpawnAttachment({ attachments, retiringAttachments, termin
             refusedSince = null;
             retries = 0;
             try {
-              attachment.pty = start();
+              attachment.process = start();
             } catch (error) {
               const message = spawnFailure(paneId, error);
               broadcast(paneId, { type: "error", code: error instanceof HerdrError ? error.code : "command_failed", message, pane_id: paneId });
@@ -447,7 +467,7 @@ export function createSpawnAttachment({ attachments, retiringAttachments, termin
       again();
     };
     try {
-      attachment.pty = start();
+      attachment.process = start();
     } catch (error) {
       // Bun.spawn throws synchronously (node missing from PATH, fd or process limits): the
       // placeholder must go with it, or the next attach joins a record with no pty and
