@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import { askedQuestions } from "./askQuestions.ts";
+import { askedQuestions } from "../../shared/askQuestions.ts";
 
 describe("a past question tool call", () => {
   test("reads omp's ask, with its recommended option by index", () => {

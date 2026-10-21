@@ -186,6 +186,35 @@ Claude has written up a plan and is ready to execute. Would you like to proceed?
     expect(labels(approval)).toEqual(["Approve", "Deny"]);
   });
 
+  test("reads OMP Ask above its native status row without accepting later output", () => {
+    const panel = `╭─ Ask ─────────────────────────────╮
+│ 请选择输出格式？                  │
+├───────────────────────────────────┤
+│ ❯ ○ Markdown (Recommended)         │
+│   ○ JSON                           │
+│   ○ Other (type your own)           │
+├───────────────────────────────────┤
+│ ⏎ select · n note · ↑/↓ move · ⎋ cancel · ⌥H hide │
+╰───────────────────────────────────╯`;
+    const status = "π · ◉ deepseek-flash · 📁 ~/coding_agent · ⑂ main *2 · ◫ 2.4%/1M ⟲ · $0.00 ↑";
+    const card = parseInteractivePrompt("omp", `${panel}\n ${status}\n`);
+    expect(card).toMatchObject({ kind: "question", question: "请选择输出格式？", custom_option_index: 2 });
+    expect(labels(card)).toEqual(["Markdown", "JSON"]);
+    expect(answerKeys(card!, { option_index: 1 })).toEqual([{ keys: ["down"] }, { keys: ["enter"] }]);
+    const running = "⠦ 4m · ◉ deepseek-flash · 📁 ~/coding_agent · ⑂ main · ◫ 3.1%/1M ⟲ · $0.01 ↑     📝 ASK: Test markdown";
+    expect(parseInteractivePrompt("omp", `${panel}\n${running}\n`)).toMatchObject({ kind: "question", question: "请选择输出格式？" });
+    expect(parseInteractivePrompt("omp", `${panel}\n⠦ 1m · ◔ deepseek-flash · 🗑 /tmp · ◫ 1.1%/1M ⟲ · $0.00 ↑\n`)).toMatchObject({ kind: "question" });
+    for (const suffix of ["Agent resumed", "❯ next message", running]) {
+      expect(parseInteractivePrompt("omp", `${panel}\n${running}\n${suffix}\n`)).toBeNull();
+    }
+    for (const tail of ["Agent resumed", "❯ next message", "π · ordinary output", `${status}\nAgent resumed`, `Agent resumed\n${status}`, `${status}\n${status}`]) {
+      expect(parseInteractivePrompt("omp", `${panel}\n${tail}\n`)).toBeNull();
+    }
+    for (const agent of ["claude", "codex", "omo", "pi", "hermes", "gjc", "cmd"]) {
+      expect(parseInteractivePrompt(agent, `${panel}\n${status}\n`)).toBeNull();
+    }
+  });
+
   test("recognizes OMP's clipped legacy single-select footer only with its full menu identity", () => {
     const screen = (footer = "Enter select · n note · ↑/↓ move · Tab/←/→ · Esc can…", rows = ["❯ ○ Local socket", "  ○ Remote relay", "  ○ Other (type your own)"], suffix = "") => `
 ╭─ Ask ─────────────────────────────────────────────────╮

@@ -1169,6 +1169,8 @@ export interface InteractivePrompt {
   title: string;
   question: string;
   body: string | null;
+  /** Original Markdown from a session call matched to the live native menu; absent for screen text. */
+  text_format?: "markdown";
   options: InteractivePromptOption[];
   multi_select: boolean;
   /** Native OpenCode question explicitly marked required: false; an empty answer skips it. */
@@ -1216,6 +1218,8 @@ export interface InteractivePromptAnswer {
 export interface InteractivePromptOption {
   label: string;
   description: string | null;
+  /** Original rich preview from the matched native Ask call. */
+  preview?: string | null;
 }
 
 /** POST /api/pane/prompt/answer body. One answer or navigation action; native OpenCode multiselect may combine option_indices and custom_text. */

@@ -325,6 +325,33 @@
   flex-direction: column;
 }
 
+/* Rich text stays outside the answer control: links, previews and code-copy buttons must not
+   submit an option or nest interactive elements inside its button/checkbox label. */
+.prompt-card-rich-option {
+  min-width: 0;
+}
+
+.prompt-card-option-rich-text {
+  min-width: 0;
+  padding: 0 var(--space-3) var(--space-2);
+  overflow-wrap: anywhere;
+}
+
+.prompt-card-option-preview {
+  margin-top: var(--space-2);
+  font-size: var(--fs-xs);
+}
+
+.prompt-card-option-preview > summary {
+  cursor: pointer;
+  color: var(--text-dim);
+}
+
+.prompt-card .markdown {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
 .prompt-card-option {
   width: 100%;
   min-height: var(--control-h);

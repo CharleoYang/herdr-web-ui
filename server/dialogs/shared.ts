@@ -256,6 +256,7 @@ export function publicPrompt(parsed: ParsedPrompt): InteractivePrompt {
     title: parsed.title,
     question: parsed.question,
     body: parsed.body,
+    ...(parsed.text_format ? { text_format: parsed.text_format } : {}),
     options: parsed.options,
     multi_select: parsed.multi_select,
     ...(parsed.optional ? { optional: true as const } : {}),

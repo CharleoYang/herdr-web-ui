@@ -1,4 +1,4 @@
-import { useContext, useEffect, useId, useRef, useState } from "react";
+import { useContext, useEffect, useId, useMemo, useRef, useState } from "react";
 import { ArrowLeft, Check, ChevronDown, ChevronUp, FileText, Send } from "lucide-react";
 
 import "./PromptCard.css";
@@ -11,6 +11,8 @@ import { dismissKeyboardOn } from "../lib/keyboard.ts";
 import { useT } from "../lib/i18n.ts";
 import { userErrorMessage, type UserError } from "../lib/userError.ts";
 import { OpenFileContext } from "../lib/filePaths.ts";
+import { ParsedMarkdown } from "./Markdown.tsx";
+import { parseMarkdown } from "../lib/markdown.ts";
 
 /**
  * One card is one occurrence of a prompt on one pane: its owner mounts a new card (a `key`) for
@@ -29,6 +31,11 @@ export interface PromptCardProps {
   onTypedAnswerDone?(): void;
   /** the last reads of the screen failed: the question shown may have changed since (an answer is still checked, 409 prompt_changed) */
   stale?: boolean;
+}
+
+function AskMarkdown({ children, className }: { children: string; className?: string }) {
+  const blocks = useMemo(() => parseMarkdown(children, 0, false, true), [children]);
+  return <ParsedMarkdown blocks={blocks} className={className} />;
 }
 
 export function PromptCard({ paneId, prompt, onPromptChanged, onAnswered, typedAnswer = null, onTypedAnswerDone, stale = false }: PromptCardProps) {
@@ -217,7 +224,9 @@ export function PromptCard({ paneId, prompt, onPromptChanged, onAnswered, typedA
         </ol>
       )}
       {/* a Claude approval's heading is its question too: said once */}
-      {prompt.question !== prompt.title && <p className="prompt-card-question">{prompt.question}</p>}
+      {prompt.question !== prompt.title && (prompt.text_format === "markdown"
+        ? <AskMarkdown className="prompt-card-question">{prompt.question}</AskMarkdown>
+        : <p className="prompt-card-question">{prompt.question}</p>)}
       {prompt.queued && (
         <p className="prompt-card-hint">
           {prompt.queued === "open"
@@ -260,6 +269,23 @@ export function PromptCard({ paneId, prompt, onPromptChanged, onAnswered, typedA
             // the key the user can type, drawn as a keycap; the option's name keeps the menu's "1."
             const number = <span className="prompt-card-number"><span aria-hidden="true">{index + 1}</span><span className="visually-hidden">{index + 1}.</span></span>;
             const described = option.description !== null ? " has-description" : "";
+            if (prompt.text_format === "markdown") {
+              const descriptionId = `${customLabelId}-option-${index}`;
+              const richText = option.description !== null || Boolean(option.preview);
+              const label = <span className="prompt-card-option-label">{text}{recommended && <> <span className="prompt-card-tag">{t("Recommended")}</span></>}</span>;
+              return <div className="prompt-card-rich-option" key={index}>
+                {prompt.multi_select
+                  ? <label className={`prompt-card-option${selected.has(index) ? " is-checked" : ""}`}>
+                    <input type="checkbox" checked={selected.has(index)} disabled={pending} aria-describedby={richText ? descriptionId : undefined} onChange={() => toggle(index)} />
+                    {number}{label}
+                  </label>
+                  : <button type="button" className={`prompt-card-option${typedAnswer?.option_index === index ? " is-typed" : ""}`} disabled={pending} aria-describedby={richText ? descriptionId : undefined} onClick={(event) => void answer({ option_index: index }, event)}>{number}{label}</button>}
+                {richText && <div className="prompt-card-option-rich-text" id={descriptionId}>
+                  {option.description !== null && <AskMarkdown className="prompt-card-option-description">{option.description}</AskMarkdown>}
+                  {option.preview && <details className="prompt-card-option-preview"><summary>{t("Preview")}</summary><AskMarkdown>{option.preview}</AskMarkdown></details>}
+                </div>}
+              </div>;
+            }
             if (prompt.multi_select) {
               const checked = selected.has(index);
               return (

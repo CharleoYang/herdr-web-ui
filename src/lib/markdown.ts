@@ -105,7 +105,7 @@ const MAX_INLINE_DEPTH = 16;
  * start, and where a closer may be far away, only if one is there: each closer is looked for
  * once, for every opener before it.
  */
-export function* inlineMarks(source: string): Generator<RegExpExecArray> {
+export function* inlineMarks(source: string, dollarMath = false): Generator<RegExpExecArray> {
   // Underscores inside identifiers are literal: MAC_QA_CHAT_OK must survive
   // rendering exactly as it appears in the terminal and native transcript.
   // a bare or <angle> http(s) URL is a link too; it stops at the first non-ASCII character,
@@ -114,7 +114,8 @@ export function* inlineMarks(source: string): Generator<RegExpExecArray> {
   // its last part alone, for a `__` that nothing closes as bold: one `_` may still close it
   const emphasis = /(?<![\p{L}\p{N}\p{M}_])_(?=\S)[^\n]*?\S_(?![\p{L}\p{N}\p{M}_])/yu;
   // what any part of `marker` starts with
-  const opener = /[`[<*_~]|\\\(|file:\/\/\/|https?:\/\/|www\./g;
+  const opener = dollarMath ? /[`[<*_~$]|\\\(|file:\/\/\/|https?:\/\/|www\./g : /[`[<*_~]|\\\(|file:\/\/\/|https?:\/\/|www\./g;
+  const dollar = dollarMath ? /(?<![\\$])\$(?![\s$])(?:[^$\r\n]*?[^$\s])(?<!\\)\$(?![\d$])/y : null;
   /** Where `pattern` is next found from `from` on. Asked with a `from` that only rises, so a place found serves every `from` before it. */
   const next = (pattern: RegExp): ((from: number) => number) => {
     let found = -1;
@@ -130,6 +131,7 @@ export function* inlineMarks(source: string): Generator<RegExpExecArray> {
   // `.` stops at these, and a formula is `.+?`
   const mathBreak = next(/[\n\r\u2028\u2029]/g);
   const mathClose = next(/\\\)/g);
+  const dollarClose = dollarMath ? next(/(?<!\\)\$(?![\d$])/g) : null;
   const labelEnd = next(/[\]\n]/g);
   const targetEnd = next(/[\s)]/g);
   const emphasisClose = next(/(?<=\S)_(?![\p{L}\p{N}\p{M}_])/gu);
@@ -144,6 +146,8 @@ export function* inlineMarks(source: string): Generator<RegExpExecArray> {
     const char = source[start];
     if (char === "\\") {
       if (!(mathClose(start + 3) < mathBreak(start + 2))) pattern = null;
+    } else if (char === "$") {
+      pattern = dollarClose && dollarClose(start + 2) < mathBreak(start + 1) ? dollar : null;
     } else if (char === "[") {
       const label = labelEnd(start + 1);
       const target = label + 2;
@@ -167,11 +171,11 @@ export function* inlineMarks(source: string): Generator<RegExpExecArray> {
 }
 
 /** Dependency-free inline markdown scanner. Unknown or malformed markup remains text. */
-export function parseInline(source: string, links = true, depth = 0): InlineNode[] {
+export function parseInline(source: string, links = true, depth = 0, dollarMath = false): InlineNode[] {
   if (depth > MAX_INLINE_DEPTH) return source === "" ? [] : [{ type: "text", value: source }];
   const nodes: InlineNode[] = [];
   let offset = 0;
-  for (const match of inlineMarks(source)) {
+  for (const match of inlineMarks(source, dollarMath)) {
     const index = match.index ?? 0;
     let token = match[0];
     // the `!` of an image stays in the text before its bracket
@@ -196,6 +200,8 @@ export function parseInline(source: string, links = true, depth = 0): InlineNode
       nodes.push({ type: "code", value: token.slice(1, -1) });
     } else if (token.startsWith("\\(")) {
       nodes.push({ type: "math", value: token.slice(2, -2) });
+    } else if (token.startsWith("$")) {
+      nodes.push({ type: "math", value: token.slice(1, -1) });
     } else if (token.startsWith("[")) {
       const split = token.lastIndexOf("](");
       const label = token.slice(1, split);
@@ -203,17 +209,17 @@ export function parseInline(source: string, links = true, depth = 0): InlineNode
       // a label holds no `]`, so no link nests in one: only emphasis counts toward the depth
       const href = safeMarkdownHref(target) ?? webLikeHref(target);
       const file = href === null ? markdownFileTarget(target) : null;
-      const shown: InlineNode = href !== null ? { type: "link", href, children: parseInline(label, false, depth) }
-        : file !== null ? { type: "file", path: file, children: parseInline(label, false, depth) }
+      const shown: InlineNode = href !== null ? { type: "link", href, children: parseInline(label, false, depth, dollarMath) }
+        : file !== null ? { type: "file", path: file, children: parseInline(label, false, depth, dollarMath) }
         : { type: "text", value: label };
       if (image) nodes.push({ type: "image", alt: label, src: target, fallback: [{ type: "text", value: "!" }, shown] });
       else nodes.push(shown);
     } else if (token.startsWith("**") || token.startsWith("__")) {
-      nodes.push({ type: "strong", children: parseInline(token.slice(2, -2), links, depth + 1) });
+      nodes.push({ type: "strong", children: parseInline(token.slice(2, -2), links, depth + 1, dollarMath) });
     } else if (token.startsWith("~~")) {
-      nodes.push({ type: "del", children: parseInline(token.slice(2, -2), links, depth + 1) });
+      nodes.push({ type: "del", children: parseInline(token.slice(2, -2), links, depth + 1, dollarMath) });
     } else {
-      nodes.push({ type: "em", children: parseInline(token.slice(1, -1), links, depth + 1) });
+      nodes.push({ type: "em", children: parseInline(token.slice(1, -1), links, depth + 1, dollarMath) });
     }
     offset = index + token.length;
   }
@@ -248,13 +254,13 @@ function startsTable(lines: string[], index: number): boolean {
   return lineAt(lines, index).includes("|") && isTableSeparator(lineAt(lines, index + 1));
 }
 /** A table in a list item (`within` > 0) ends at a line outside the item or at the next item. */
-function parseTable(lines: string[], start: number, within = 0): { block: MarkdownBlock; next: number } {
-  const header = cells(lineAt(lines, start)).map((cell) => parseInline(cell));
+function parseTable(lines: string[], start: number, within = 0, dollarMath = false): { block: MarkdownBlock; next: number } {
+  const header = cells(lineAt(lines, start)).map((cell) => parseInline(cell, true, 0, dollarMath));
   let index = start + 2;
   const rows: InlineNode[][][] = [];
   const inItem = (line: string): boolean => within === 0 || ((/^\s*/.exec(line)?.[0].length ?? 0) >= within && !listLine.test(line));
   while (index < lines.length && lineAt(lines, index).includes("|") && lineAt(lines, index).trim() !== "" && inItem(lineAt(lines, index))) {
-    rows.push(cells(lineAt(lines, index)).map((cell) => parseInline(cell)));
+    rows.push(cells(lineAt(lines, index)).map((cell) => parseInline(cell, true, 0, dollarMath)));
     index += 1;
   }
   return { block: { type: "table", header, rows }, next: index };
@@ -268,13 +274,13 @@ function startsBlock(lines: string[], index: number, html = false): boolean {
 }
 
 /** An item's text, with a GitHub task box (`[x]`, `[X]`, `[ ]`) read off its start. */
-function listItem(text: string): ListItem {
+function listItem(text: string, dollarMath: boolean): ListItem {
   const task = /^\[([ xX])\](?:\s+(.*))?$/.exec(text);
-  if (task === null) return { content: parseInline(text) };
-  return { content: parseInline(task[2] ?? ""), checked: task[1] !== " " };
+  if (task === null) return { content: parseInline(text, true, 0, dollarMath) };
+  return { content: parseInline(task[2] ?? "", true, 0, dollarMath), checked: task[1] !== " " };
 }
 
-function parseList(lines: string[], start: number): { block: ListBlock; next: number } {
+function parseList(lines: string[], start: number, dollarMath = false): { block: ListBlock; next: number } {
   const first = listLine.exec(lineAt(lines, start));
   if (first === null) return { block: { type: "list", ordered: false, items: [] }, next: start + 1 };
   const baseIndent = (first[1] ?? "").length;
@@ -297,7 +303,7 @@ function parseList(lines: string[], start: number): { block: ListBlock; next: nu
       if (sibling !== null && (sibling[1] ?? "").length >= baseIndent + 2) { index = ahead; continue; }
       if (ahead < lines.length && sibling === null && indent >= baseIndent + 2 && startsTable(lines, ahead)) {
         const item = block.items.at(-1)!;
-        const table = parseTable(lines, ahead, baseIndent + 2);
+        const table = parseTable(lines, ahead, baseIndent + 2, dollarMath);
         (item.blocks ??= []).push(table.block);
         index = table.next;
         continue;
@@ -308,13 +314,13 @@ function parseList(lines: string[], start: number): { block: ListBlock; next: nu
         if (last === undefined) {
           // added to, not copied: an item of thousands of lines copies itself at every one
           item.content.push({ type: "text", value: " " });
-          for (const node of parseInline(line.trim())) item.content.push(node);
+          for (const node of parseInline(line.trim(), true, 0, dollarMath)) item.content.push(node);
         } else {
           // after a table or nested list the item's text goes on below it; a quote or rule
           // there ends the list and shows as its own block, as it did before tables nested
           if (startsBlock(lines, ahead)) break;
-          if (last.type === "paragraph" && ahead === index) last.lines.push(parseInline(line.trim()));
-          else item.blocks!.push({ type: "paragraph", lines: [parseInline(line.trim())] });
+          if (last.type === "paragraph" && ahead === index) last.lines.push(parseInline(line.trim(), true, 0, dollarMath));
+          else item.blocks!.push({ type: "paragraph", lines: [parseInline(line.trim(), true, 0, dollarMath)] });
         }
         index = ahead + 1;
         continue;
@@ -326,13 +332,13 @@ function parseList(lines: string[], start: number): { block: ListBlock; next: nu
     if ((match[1] ?? "").length >= baseIndent + 2) {
       const parent = block.items.at(-1);
       if (parent === undefined) break;
-      const nested = parseList(lines, index);
+      const nested = parseList(lines, index, dollarMath);
       (parent.blocks ??= []).push(nested.block);
       index = nested.next;
       continue;
     }
     if ((match[1] ?? "").length !== baseIndent || /\d/.test(match[2] ?? "") !== ordered) break;
-    block.items.push(listItem(match[3] ?? ""));
+    block.items.push(listItem(match[3] ?? "", dollarMath));
     index += 1;
   }
   return { block, next: index };
@@ -371,7 +377,8 @@ export function foldCode(value: string): { head: string; lines: number } | null 
 const MAX_QUOTE_DEPTH = 32;
 
 /** `html`: a file's markdown, whose HTML blocks are read as markdown (lib/markdownHtml.ts); an agent's text keeps them as text */
-export function parseMarkdown(source: string, depth = 0, html = false): MarkdownBlock[] {
+/** Dollar-delimited math is opt-in for native Ask Markdown; ordinary chat keeps currency literal. */
+export function parseMarkdown(source: string, depth = 0, html = false, dollarMath = false): MarkdownBlock[] {
   const lines = source.replace(/\r\n?/g, "\n").split("\n");
   const blocks: MarkdownBlock[] = [];
   let index = 0;
@@ -431,7 +438,7 @@ export function parseMarkdown(source: string, depth = 0, html = false): Markdown
 
     const heading = /^(#{1,6})\s+(.+)$/s.exec(line);
     if (heading !== null) {
-      blocks.push({ type: "heading", level: (heading[1] ?? "#").length as 1 | 2 | 3 | 4 | 5 | 6, content: parseInline(heading[2] ?? "") });
+      blocks.push({ type: "heading", level: (heading[1] ?? "#").length as 1 | 2 | 3 | 4 | 5 | 6, content: parseInline(heading[2] ?? "", true, 0, dollarMath) });
       index += 1;
       continue;
     }
@@ -446,20 +453,20 @@ export function parseMarkdown(source: string, depth = 0, html = false): Markdown
       const quoted: string[] = [];
       while (index < lines.length && /^\s*>/.test(lineAt(lines, index))) quoted.push(lineAt(lines, index++).replace(/^\s*>\s?/, ""));
       // a line of thousands of ">" (text nobody wrote by hand) would otherwise overflow the stack
-      blocks.push({ type: "blockquote", blocks: depth < MAX_QUOTE_DEPTH ? parseMarkdown(quoted.join("\n"), depth + 1, html)
-        : [{ type: "paragraph", lines: quoted.map((quotedLine) => parseInline(quotedLine)) }] });
+      blocks.push({ type: "blockquote", blocks: depth < MAX_QUOTE_DEPTH ? parseMarkdown(quoted.join("\n"), depth + 1, html, dollarMath)
+        : [{ type: "paragraph", lines: quoted.map((quotedLine) => parseInline(quotedLine, true, 0, dollarMath)) }] });
       continue;
     }
 
     if (listLine.test(line)) {
-      const parsed = parseList(lines, index);
+      const parsed = parseList(lines, index, dollarMath);
       blocks.push(parsed.block);
       index = parsed.next;
       continue;
     }
 
     if (startsTable(lines, index)) {
-      const table = parseTable(lines, index);
+      const table = parseTable(lines, index, 0, dollarMath);
       blocks.push(table.block);
       index = table.next;
       continue;
@@ -467,7 +474,7 @@ export function parseMarkdown(source: string, depth = 0, html = false): Markdown
 
     const paragraph: InlineNode[][] = [];
     while (index < lines.length && lineAt(lines, index).trim() !== "" && (paragraph.length === 0 || !startsBlock(lines, index, html))) {
-      paragraph.push(parseInline(lineAt(lines, index)));
+      paragraph.push(parseInline(lineAt(lines, index), true, 0, dollarMath));
       index += 1;
     }
     blocks.push({ type: "paragraph", lines: paragraph });

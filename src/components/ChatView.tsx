@@ -41,7 +41,7 @@ import { PAGE_OVERLAP_ROWS, pageScrollDistance } from "../lib/pageScroll.ts";
 import { followGlides } from "../lib/followScroll.ts";
 import { useMediaQuery } from "../lib/useMediaQuery.ts";
 import { statusEdgeRead } from "../lib/status.ts";
-import { askedQuestions } from "../lib/askQuestions.ts";
+import { askedQuestions } from "../../shared/askQuestions.ts";
 import { ConversationRefresh } from "../lib/conversationRefresh.ts";
 import { teammateMessageParts, type TeammateMessage } from "../lib/teammateMessage.ts";
 import { usePageVisible } from "../lib/visibility.ts";

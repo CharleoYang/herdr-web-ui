@@ -25,6 +25,8 @@ import { OMP_CLIPPED_SINGLE_HINT_RE, OMP_MULTI_HINT_RE, OMP_REVIEW_HINT_RE, OMP_
 import { HERMES_HINT_RE } from "./dialogs/hermes.ts";
 import { PI_INPUT_HINT_RE, PI_MENU_HINT_RE, parsePiDialog } from "./dialogs/pi.ts";
 import { parseFallbackPrompt } from "./dialogs/fallback.ts";
+import { paneConversation } from "./conversation.ts";
+import { enrichOmpAsk } from "./omp-ask.ts";
 export { removedInvisible } from "./dialogs/claude.ts";
 export { INVISIBLE_CHAR_RE } from "./dialogs/claude.ts";
 export type { OmoAsk } from "./dialogs/shared.ts";
@@ -315,7 +317,13 @@ function omoFooterIsActive(lines: string[]): boolean {
 
 function promptTailIsActive(prompt: ParsedPrompt, screen: string): boolean {
   const cleanLines = screen.replace(ANSI_RE, "").split(/\r?\n/).map(cleanLine);
-  const visible = cleanLines.filter((line) => line && !isDivider(line));
+  // OMP 18.12 keeps its compact status row below an open dialog. Only that complete row,
+  // immediately after the panel's bottom border, is chrome rather than subsequent output.
+  const tail = cleanLines.filter(Boolean);
+  const ompStatus = ["omp-question", "omp-submit", "omp-approval"].includes(prompt.responder)
+    && /^╰─+╯$/.test(tail.at(-2) ?? "")
+    && /^(?:π|[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]\s+\d+[hms](?:\s+\d+[hms])*)\s+·\s+.+\s+·\s+\S+\s+(?:~[\/\\]|[\/\\]|[A-Za-z]:[\/\\]).*\s+·\s+◫\s+\d+(?:\.\d+)?%\/\S+.*\s+·\s+\$\d+(?:\.\d+)?\s+[↑↓](?:\s{2,}\S.*)?$/.test(tail.at(-1) ?? "");
+  const visible = (ompStatus ? tail.slice(0, -1) : tail).filter((line) => !isDivider(line));
   // Claude's review has no hint of its own: its last row ends the panel, the session's rule and task list come after it
   const shown = prompt.responder === "claude-submit" ? withoutClaudeTasks(visible, (lines, end) => CLAUDE_SUBMIT_TAIL_RE.test(lines[end - 1] ?? ""))
     : prompt.responder.startsWith("claude-") ? withoutClaudeTasks(visible) : visible;
@@ -1350,7 +1358,13 @@ async function readKnownPrompt(
   // a pane herdr names claude, or not at all, is omo's only on evidence: herdr reports it waiting
   // on the user, or the session's pending call is the form on screen
   const omoTrusted = (agent !== "claude" && agent !== "") || pane.agent_status === "blocked";
-  const prompt = parseInteractivePrompt(agent, screen, omoAsks[0] ?? null, omoTrusted, omoAsks, agent === "claude" ? heldCandidate(paneId) : null, pane.agent_status === "working");
+  let prompt = parseInteractivePrompt(agent, screen, omoAsks[0] ?? null, omoTrusted, omoAsks, agent === "claude" ? heldCandidate(paneId) : null, pane.agent_status === "working");
+  if (agent === "omp" && prompt !== null && parsedByPublicPrompt.get(prompt)?.responder === "omp-question") {
+    try {
+      const conversation = await paneConversation(paneId);
+      if (conversation.source === "omp-transcript") prompt = enrichOmpAsk(prompt, conversation.turns, conversation.history_id);
+    } catch { /* Unavailable or not yet persisted: the live terminal card remains authoritative. */ }
+  }
   if (prompt && await claudeHeldIsGrey(paneId, prompt)) return { prompt: null, screen };
   if (!prompt && agent === "gjc") {
     const fallback = parseFallbackPrompt(agent, screen);
