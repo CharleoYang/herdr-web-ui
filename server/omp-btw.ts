@@ -1,4 +1,4 @@
-import { readdir, readFile, realpath } from "node:fs/promises";
+import { readdir, readFile, realpath, stat } from "node:fs/promises";
 import { join } from "node:path";
 import type { BtwHistory, BtwTopic, BtwTurn } from "../shared/omp-btw.ts";
 
@@ -14,7 +14,12 @@ const isTurn = (value: unknown): value is BtwTurn => {
 /** Match OMP's artifactsDirectoryFor and unscoped main-session BtwHistoryStore.
  * Do not recurse into sessions/: those topics belong to focused subagents, not this transcript.
  * A missing store is normal on older OMP; unreadable or invalid saved data is an error, not an empty history.
+ * Reads are bounded (AGENTS.md): the newest MAX_TOPICS topic files, each at most MAX_TOPIC_BYTES; a larger
+ * file is invalid saved data, like one that does not parse.
  */
+const MAX_TOPICS = 128;
+const MAX_TOPIC_BYTES = 1024 * 1024;
+
 export async function readBtwHistory(transcript: string): Promise<BtwHistory> {
   const path = await realpath(transcript);
   if (!path.endsWith(".jsonl")) return { topics: [] };
@@ -25,20 +30,33 @@ export async function readBtwHistory(transcript: string): Promise<BtwHistory> {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return { topics: [] };
     throw error;
   }
-  const topics: BtwTopic[] = [];
+  const candidates: { id: string; path: string; mtime: number; size: number }[] = [];
   for (const entry of entries) {
     const match = /^entry-([a-zA-Z0-9][a-zA-Z0-9_-]{0,127})\.json$/.exec(entry.name);
     if (!match || !entry.isFile()) continue;
+    const file = join(directory, entry.name);
+    try {
+      const info = await stat(file);
+      candidates.push({ id: match[1]!, path: file, mtime: info.mtimeMs, size: info.size });
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
+      throw error;
+    }
+  }
+  candidates.sort((a, b) => b.mtime - a.mtime || a.id.localeCompare(b.id));
+  const topics: BtwTopic[] = [];
+  for (const candidate of candidates.slice(0, MAX_TOPICS)) {
+    if (candidate.size > MAX_TOPIC_BYTES) throw new Error("Invalid saved OMP BTW topic");
     // OMP atomically replaces a topic: only read committed .json files, never locks or .tmp files.
     let content: string;
-    try { content = await readFile(join(directory, entry.name), "utf8"); }
+    try { content = await readFile(candidate.path, "utf8"); }
     catch (error) {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
       throw error;
     }
     const value: unknown = JSON.parse(content);
     const row = record(value);
-    if (!isTurn(value) || row.id !== match[1] || !(row.leafId === null || typeof row.leafId === "string")
+    if (!isTurn(value) || row.id !== candidate.id || !(row.leafId === null || typeof row.leafId === "string")
       || (row.followUps !== undefined && (!Array.isArray(row.followUps) || !row.followUps.every(isTurn)))) {
       throw new Error("Invalid saved OMP BTW topic");
     }

@@ -63,6 +63,7 @@ between releases do not reach them. Remote-PC runtime bundles are versioned sepa
 - The BTW and Subagents docks take a 404 from a PC whose bridge has no such route (upstream's published
   runtime) as nothing to show: no error panel, no further polls. A session not yet written answers both
   routes with an empty list instead of a logged internal error.
+- The BTW history reader is bounded: the newest 128 saved topics, each at most 1 MiB.
 - The bridge token reaches the OMP model list, so the model switcher works through the PC proxy.
 - The Subagents dock and the pinned Todo's progress are translated.
 - The Pretendard face is declared again (unused by the UI stack, so nothing downloads) for the browser

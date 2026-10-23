@@ -162,6 +162,10 @@ export type { Machine, MachineEvent, MachineRoster, PaneTarget, SetupJob, SetupR
  *         plugin_log_not_found once herdr's log no longer holds it)
  *  GET    /api/omp/models                -> OmpModelsResponse (chat models from this PC's
  *         `omp models --json`, cached for 60 seconds; selection uses terminal submit)
+ *  GET    /api/pane/btw?pane_id=         -> BtwHistory (shared/omp-btw.ts: an OMP pane's saved /btw
+ *         topics, newest first, at most 128; empty for any other pane or a session not yet written)
+ *  GET    /api/pane/omp-agents?pane_id=  -> OmpAgents (shared/omp-agents.ts: checkpoints of the OMP
+ *         session's direct child transcripts, newest 64; empty for any other pane)
  *  GET    /api/sessions/history?workspace_id=&agent= -> SessionHistoryResponse (earlier sessions of
  *         one agent in the workspace's folder, newest first, from the agent's own store; at most 50.
  *         First messages are prompt text: a watch-only device gets 403 read_only. 400
