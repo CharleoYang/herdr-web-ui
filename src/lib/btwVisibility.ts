@@ -1,6 +1,6 @@
 import { useSyncExternalStore } from "react";
 
-const PREFIX = "herdr-web-ui:btw-visible:";
+const PREFIX = "ovis:btw-visible:";
 const memory = new Map<string, boolean>();
 const listeners = new Set<() => void>();
 const notify = (): void => { for (const listener of listeners) listener(); };

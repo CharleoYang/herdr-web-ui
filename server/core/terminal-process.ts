@@ -115,6 +115,8 @@ export interface PtyAttachment extends AttachmentState {
 export interface MirrorAttachment extends AttachmentState {
   readonly kind: "mirror";
   process: MirrorSession;
+  /** clients that attached before any screen went out: the first screen they get is their replay */
+  unscreened: Set<Client>;
 }
 
 export type PaneAttachment = PtyAttachment | MirrorAttachment;
@@ -123,7 +125,7 @@ export type PaneAttachment = PtyAttachment | MirrorAttachment;
  * The attach the server's clients share for each pane. `attachments` stays the server's: a callback
  * of an attachment that is no longer the pane's record does nothing.
  */
-export function createSpawnAttachment({ attachments, retiringAttachments, terminalAttach, isStopped, closeAttachment, broadcast, sendOutput, reconcileOutput, holdPendingPane, holdFor, heldRetry, retryFor, relookupFor }: {
+export function createSpawnAttachment({ attachments, retiringAttachments, terminalAttach, isStopped, closeAttachment, broadcast, sendOutput, reconcileOutput, holdPendingPane, inputReady, holdFor, heldRetry, retryFor, relookupFor }: {
   attachments: Map<string, PaneAttachment>;
   retiringAttachments: Map<string, Promise<void>>;
   terminalAttach: () => Promise<boolean>;
@@ -131,9 +133,11 @@ export function createSpawnAttachment({ attachments, retiringAttachments, termin
   isStopped: () => boolean;
   closeAttachment: (paneId: string) => void;
   broadcast: (paneId: string, message: ServerMessage) => void;
-  sendOutput: (client: Client, paneId: string, data: string) => void;
+  sendOutput: (client: Client, paneId: string, data: string, replay?: boolean) => void;
   reconcileOutput: (paneId: string) => void;
   holdPendingPane: (paneId: string, fault: { code: string; message: string }) => void;
+  /** the attach took and input flows: a pending message waiting for a typist may go now */
+  inputReady: (paneId: string) => void;
   holdFor: number;
   heldRetry: number;
   retryFor: number;
@@ -174,7 +178,7 @@ export function createSpawnAttachment({ attachments, retiringAttachments, termin
     };
 
     if (mirrored) {
-      const attachment: MirrorAttachment = { kind: "mirror", ready: true, process: undefined as unknown as MirrorSession, ...state };
+      const attachment: MirrorAttachment = { kind: "mirror", ready: true, process: undefined as unknown as MirrorSession, unscreened: new Set(), ...state };
       attachments.set(paneId, attachment);
       const mirror = new MirrorSession({
         cols: spawnCols,
@@ -194,7 +198,7 @@ export function createSpawnAttachment({ attachments, retiringAttachments, termin
         write: (data) => paneSendText(paneId, data),
         onData: (frame) => {
           if (attachments.get(paneId) !== attachment) return;
-          for (const client of attachment.clients) sendOutput(client, paneId, frame);
+          for (const client of attachment.clients) sendOutput(client, paneId, frame, attachment.unscreened.delete(client));
           reconcileOutput(paneId);
         },
         onExit: (code) => {
@@ -320,6 +324,7 @@ export function createSpawnAttachment({ attachments, retiringAttachments, termin
         attachment.ready = true;
         attachment.recovering = false;
         broadcast(paneId, { type: "input-ready", pane_id: paneId });
+        inputReady(paneId);
         release();
       };
       const ended = (code: number | null): void => {
@@ -417,11 +422,11 @@ export function createSpawnAttachment({ attachments, retiringAttachments, termin
         };
         relookup();
       };
-      const command = process.env["HERDR_WEB_HERDR_BIN"] || "herdr";
+      const command = process.env["OVIS_HERDR_BIN"] || "herdr";
       // node-pty reports a command it cannot exec only as a silent exit 1, which reads as an
       // ended attach (#925): look it up on the PATH and from the home directory the sidecar uses.
       if (!Bun.which(command, { PATH: process.env["PATH"] ?? "", cwd: process.env["HOME"] ?? "/" })) {
-        throw new HerdrError("attach_failed", `herdr could not be started: ${command} is not an executable on the server's PATH (set HERDR_WEB_HERDR_BIN to herdr's full path)`);
+        throw new HerdrError("attach_failed", `herdr could not be started: ${command} is not an executable on the server's PATH (set OVIS_HERDR_BIN to herdr's full path)`);
       }
       const session = new PtySession({
         command,

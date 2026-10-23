@@ -25,8 +25,8 @@ export async function withTerminalSmoke<T>(run: (fixture: TerminalSmokeFixture) 
     || !session || !disposableConfig(process.env, socket)) {
     throw new SmokeSetupError("Terminal smoke requires disposable isolation; use bun run smoke:terminal (or bun run check run).");
   }
-  if (!Bun.which(process.env.HERDR_WEB_HERDR_BIN || "herdr") || !Bun.which("node")) {
-    throw new Error("Terminal smoke requires herdr and Node on PATH (HERDR_WEB_HERDR_BIN may select herdr).");
+  if (!Bun.which(process.env.OVIS_HERDR_BIN || "herdr") || !Bun.which("node")) {
+    throw new Error("Terminal smoke requires herdr and Node on PATH (OVIS_HERDR_BIN may select herdr).");
   }
   if (!existsSync(new URL("../dist/index.html", import.meta.url))) {
     throw new Error("Build the web UI first, or use bun run smoke:terminal to build and run it.");

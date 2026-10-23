@@ -108,8 +108,8 @@ process.stdin.on("data", data => {
     context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
     await context.addInitScript(({ origin, panes }) => {
       if (location.origin !== origin) return;
-      localStorage.setItem("herdr-web-ui:settings", JSON.stringify({ language: "en" }));
-      for (const id of panes) localStorage.setItem(`herdr-web-ui:view:${id}`, "terminal");
+      localStorage.setItem("ovis:settings", JSON.stringify({ language: "en" }));
+      for (const id of panes) localStorage.setItem(`ovis:view:${id}`, "terminal");
     }, { origin: new URL(origin).origin, panes });
     const page = await context.newPage();
     evidence = await startBrowserEvidence({

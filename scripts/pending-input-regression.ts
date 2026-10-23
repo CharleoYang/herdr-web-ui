@@ -70,7 +70,7 @@ export function createPendingInputCheck(page: Page, evidenceDirectory?: string) 
   // The pending protocol has a real foreground agent and an owned byte recorder: merely
   // reporting an idle shell as working would not prove that server-side queueing happened.
   const pendingCwd = join(root, "pending"); mkdirSync(pendingCwd);
-  const pendingWorkspace = await workspaceCreate({ cwd: pendingCwd, label: "herdr-web-ui-test-browser-pending" });
+  const pendingWorkspace = await workspaceCreate({ cwd: pendingCwd, label: "ovis-test-browser-pending" });
   workspaces.push(pendingWorkspace.workspace.workspace_id);
   const pendingPane = pendingWorkspace.root_pane.pane_id;
   const pendingProgram = join(root, "claude"); copyFileSync(process.execPath, pendingProgram); chmodSync(pendingProgram, 0o755);
@@ -105,11 +105,11 @@ export function createPendingInputCheck(page: Page, evidenceDirectory?: string) 
   assert.equal(await page.locator(".composer-action").count(), 1, "one primary action");
   const actionsBeforeTextClick = pendingActions.length;
   await pendingRows.locator(".pending-message-bubble").first().click();
-  await page.waitForTimeout(NO_SEND_WAIT_MS);
+  await page.waitForTimeout(NO_SEND_WAIT_MS); // fixed wait: nothing may reach the pty in this time
   assert.equal(pendingActions.length, actionsBeforeTextClick, "pending message text is selectable, not a send action");
   assert.equal(pendingBytes(), "");
   await reportPending("blocked"); await page.locator('.composer-status[data-status="blocked"]').waitFor();
-  await page.waitForTimeout(NO_SEND_WAIT_MS);
+  await page.waitForTimeout(NO_SEND_WAIT_MS); // fixed wait: nothing may reach the pty in this time
   assert.equal(pendingBytes(), "", "blocked status never advances pending input");
   assert.equal(await pendingRows.count(), 3);
   await reportPending("working"); await page.locator('.composer-status[data-status="working"]').waitFor();
@@ -121,7 +121,7 @@ export function createPendingInputCheck(page: Page, evidenceDirectory?: string) 
   // a draft puts Send where Stop was: Escape in the box is still Stop, once a completion is put away, and keeps the draft
   await composer.fill("/he");
   await composer.press("Escape");
-  await page.waitForTimeout(NO_SEND_WAIT_MS);
+  await page.waitForTimeout(NO_SEND_WAIT_MS); // fixed wait: nothing may reach the pty in this time
   assert.equal(pendingBytes(), `\u001b[200~${queuedTexts[0]}\u001b[201~\r`, "the first Escape on a command being completed only puts the completion away");
   await composer.fill("a draft while the agent works");
   assert.equal(await page.getByRole("button", { name: "Stop agent", exact: true }).count(), 0);
@@ -166,7 +166,7 @@ export function createPendingInputCheck(page: Page, evidenceDirectory?: string) 
   assert.equal(await page.locator('.pending-message[data-state="uncertain"]').count(), 2, "reload removes connection proof");
   assert.equal(await page.locator(".pending-message-send").count(), 0, "unknown delivery cannot be resent");
   await reportPending("idle"); await page.locator('.composer-status:not([data-status="working"])').waitFor();
-  await page.waitForTimeout(NO_SEND_WAIT_MS);
+  await page.waitForTimeout(NO_SEND_WAIT_MS); // fixed wait: nothing may reach the pty in this time
   assert.equal(pendingBytes(), `\u001b[200~${queuedTexts[0]}\u001b[201~\r\u001b`, "reload and readiness never replay saved pending input");
   for (let left = 2; left > 0; left--) { await page.getByRole("button", { name: "Discard saved copy", exact: true }).first().click(); await until(async () => await pendingRows.count() === left - 1, "discard saved copy"); }
   console.log("PASS Send queues server-owned input, explicit Send now delivers once, and reload/readiness never replay uncertain copies");

@@ -144,7 +144,7 @@ describe("native conversation invalidation", () => {
     const executable = join(root, "bin", "omp");
     writeFileSync(executable, "#!/bin/sh\nsleep 600\n");
     chmodSync(executable, 0o755);
-    const created = await workspaceCreate({ cwd: root, label: "herdr-web-ui-test-conversation-push" });
+    const created = await workspaceCreate({ cwd: root, label: "ovis-test-conversation-push" });
     workspaceId = created.workspace.workspace_id;
     paneId = created.root_pane.pane_id;
     await herdrRpc("pane.send_text", { pane_id: paneId, text: `${executable}\n` });
@@ -757,7 +757,7 @@ describe("native conversation invalidation", () => {
     const deviceStore = new DeviceStore(state);
     const device = deviceStore.pair(deviceStore.startPairing().code, "Watch plan", "watch")!;
     deviceStore.match(device.token);
-    const cookie = `herdr_web_device=${device.token}`;
+    const cookie = `ovis_device=${device.token}`;
     const config = join(root, ".claude");
     const sessionId = "01a0c7a1-56d9-7e20-9f08-f7a2d973bcff";
     const project = root.replace(/[^a-zA-Z0-9]/g, "-");
@@ -811,7 +811,7 @@ Claude has written up a plan and is ready to execute. Would you like to proceed?
         [connection, "plan-policy-owner", "connection"],
         [upstream, "plan-policy-upstream", "private-upstream"],
       ] as const) {
-        const ownerCookie = `herdr_web_token=${token}`;
+        const ownerCookie = `ovis_token=${token}`;
         const bootstrap = new TranscriptSocket(target, "/ws", ownerCookie, `${name}/setup`);
         clients.push(bootstrap);
         await bootstrap.open();
@@ -838,7 +838,7 @@ Claude has written up a plan and is ready to execute. Would you like to proceed?
           search.set("plan", policy === "reduced-owner" ? "0" : "1");
           const label = `${remote ? "relay" : "local"}/${policy}/policy`;
           // Both HTTP and WS use the same source identity. Never send the owner token with watch.
-          const credential = policy === "watch" ? cookie : "herdr_web_token=plan-policy-owner";
+          const credential = policy === "watch" ? cookie : "ovis_token=plan-policy-owner";
           const client = new TranscriptSocket(connection, `/ws?${search}`, credential, label);
           clients.push(client);
           try {

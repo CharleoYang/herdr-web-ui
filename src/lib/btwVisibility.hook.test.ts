@@ -10,7 +10,7 @@ let renderer: ReactTestRenderer | undefined;
 let setShown: (value: boolean) => void;
 let denyReads = false;
 let denyWrites = false;
-const key = (pane: string) => "herdr-web-ui:btw-visible:" + JSON.stringify(["local", pane]);
+const key = (pane: string) => "ovis:btw-visible:" + JSON.stringify(["local", pane]);
 const receive = (key: string | null) => { for (const listener of storageListeners) listener({ key }); };
 
 beforeAll(async () => {

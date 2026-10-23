@@ -3,7 +3,7 @@ import type { PendingMessage } from "../../shared/protocol.ts";
 export interface PendingMessageView extends PendingMessage { serverOwned: boolean; resendInFlight?: true; resendGeneration?: number }
 type StoragePort = Pick<Storage, "getItem" | "setItem" | "removeItem">;
 type Removal = { id: string; outcome: "sent" | "discarded" };
-const PREFIX = "herdr-web-ui:pending:";
+const PREFIX = "ovis:pending:";
 
 /** Connection proof stays in memory. A saved copy can never resume automatic delivery. */
 export class PendingMessageStore {
@@ -111,7 +111,11 @@ export class PendingMessageStore {
   publish(owner: string, messages: PendingMessage[], removed: Removal[], scope: string): void {
     for (const message of messages) this.accept(owner, message, scope);
     const proofs = this.scopes.get(owner);
-    const deleted = new Set(removed.filter((item) => proofs?.get(item.id) === scope).map((item) => item.id));
+    // a receipt settles a row this connection proves. A create request's first message (request_id < 0, no
+    // connection's own) is the bridge's, told to every connection: its receipt also settles the copy kept since
+    // a dropped connection (suspend), which no connection proves any more
+    const unproved = new Set(this.read(owner).filter((message) => message.request_id < 0 && !message.serverOwned && proofs?.get(message.id) === undefined).map((message) => message.id));
+    const deleted = new Set(removed.filter((item) => proofs?.get(item.id) === scope || unproved.has(item.id)).map((item) => item.id));
     const receipts = this.removed.get(owner) ?? new Map<string, Set<string>>();
     this.removed.set(owner, receipts);
     for (const item of removed) {

@@ -7,6 +7,7 @@ import type { MachineManager } from "./machines.ts";
 const asked: (string | null)[] = [];
 const promptAsked: (string | null)[] = [];
 const PLAN_CARD = { id: "claude-plan:abc", agent: "claude", kind: "plan", title: "Plan", question: "Would you like to proceed?", options: [{ label: "Yes", description: null }], multi_select: false, custom_option_index: null };
+const historyAsked: (string | null)[] = [];
 const faviconAsked: { search: string; authorization: string | null; cookie: string | null }[] = [];
 const diffAsked: { path: string; search: string; authorization: string | null; cookie: string | null; forwarded: string | null }[] = [];
 const remote = Bun.serve({
@@ -17,6 +18,10 @@ const remote = Bun.serve({
     if (path === "/api/pane/conversation/tool-output") return new Response("complete remote output", { headers: { "content-type": "text/plain; charset=utf-8" } });
     if (path === "/api/fs/file") return new Response("%PDF-1.7", { headers: { "content-type": "application/pdf" } });
     if (path === "/api/omp/models") return Response.json({ models: [{ provider: "demo", id: "chat", selector: "demo/chat", name: "Demo chat" }] });
+    if (path === "/api/sessions/history") {
+      historyAsked.push(request.headers.get("authorization"));
+      return Response.json({ workspace_id: "w1", agent: "pi", cwd: "/work", sessions: [{ id: "s1", title: null, firstMessage: "a private prompt", startedAt: null, updatedAt: "2026-10-01T00:00:00.000Z", resume: null }] });
+    }
     if (path === "/api/fs/favicon") {
       faviconAsked.push({ search: new URL(request.url).search, authorization: request.headers.get("authorization"), cookie: request.headers.get("cookie") });
       return Response.json({ icon: null });
@@ -70,6 +75,26 @@ it("reads the selected PC's OMP catalogue and rejects paths beyond that endpoint
   expect((await handleMachineRequest(new Request(`${url}/private`), manager)).status).toBe(404);
 });
 
+it("never forwards a PC's session history to a watching device, nor a route spelled with a trailing, doubled or encoded slash", async () => {
+  const base = "http://127.0.0.1/api/machines/pc1";
+  const query = "?workspace_id=w1&agent=pi";
+  const watched = await handleMachineRequest(new Request(`${base}/sessions/history${query}`), manager, undefined, undefined, true);
+  expect(watched.status).toBe(403);
+  expect(await watched.text()).not.toContain("a private prompt");
+  for (const readOnly of [true, false]) {
+    for (const path of ["sessions/history/", "sessions//history", "sessions%2Fhistory", "sessions%2fhistory", "pane/commands/", "workspace/directories/"]) {
+      const response = await handleMachineRequest(new Request(`${base}/${path}${query}`), manager, undefined, undefined, readOnly);
+      expect([readOnly, path, response.status]).toEqual([readOnly, path, 404]);
+    }
+  }
+  expect(historyAsked).toEqual([]);
+  // a driving device gets the PC's answer, asked with the PC's credential
+  const driven = await handleMachineRequest(new Request(`${base}/sessions/history${query}`), manager);
+  expect(driven.status).toBe(200);
+  expect(JSON.stringify(await driven.json())).toContain("a private prompt");
+  expect(historyAsked).toEqual(["Bearer remote-token"]);
+});
+
 it("forwards conversation images and complete output, while rejecting arbitrary nested paths", async () => {
   const base = "http://127.0.0.1/api/machines/pc1/pane/conversation";
   const image = await handleMachineRequest(new Request(`${base}/image?pane_id=w1:p1&ref=asset`), manager);
@@ -113,7 +138,7 @@ it("opens a PC's file from a navigation another site started, and keeps every ot
 
 it("asks a PC for a folder's project icon once, with the bridge's own credential, and only from this app", async () => {
   const search = `?root=${encodeURIComponent("/home/u/my app")}`;
-  const response = await handleMachineRequest(new Request(`http://127.0.0.1/api/machines/pc1/fs/favicon${search}`, { headers: { cookie: "herdr_web_token=browser-secret" } }), manager);
+  const response = await handleMachineRequest(new Request(`http://127.0.0.1/api/machines/pc1/fs/favicon${search}`, { headers: { cookie: "ovis_token=browser-secret" } }), manager);
   expect(response.status).toBe(200);
   expect(response.headers.get("cache-control")).toBe("no-store");
   expect(await response.json()).toEqual({ icon: null });
@@ -138,7 +163,7 @@ it("forwards a repository diff read with its query and the bridge's own credenti
   const search = "?pane_id=w1%3Ap1&scope=commit&base=HEAD~1&path=dir%20with%20space%2Fa.txt";
   for (const route of ["files", "file"]) {
     const response = await handleMachineRequest(new Request(`http://127.0.0.1/api/machines/pc1/workspace/diff/${route}${search}`, {
-      headers: { cookie: "herdr_web_token=browser-secret; herdr_web_device=device-secret", authorization: "Bearer browser-secret", "x-forwarded-for": "203.0.113.9" },
+      headers: { cookie: "ovis_token=browser-secret; ovis_device=device-secret", authorization: "Bearer browser-secret", "x-forwarded-for": "203.0.113.9" },
     }), manager);
     expect(response.status).toBe(200);
     expect(response.headers.get("set-cookie")).toBeNull();

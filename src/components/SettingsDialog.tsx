@@ -70,6 +70,11 @@ export interface SettingsDialogProps {
   onEnableNotifications: () => Promise<boolean>;
   /** the last change the server refused to save (lib/preferencesSync.ts); null once a save lands */
   saveError: UserError | null;
+  /** three saves failed in a row: nothing is sent until Retry, a reconnect or a longer wait */
+  savePaused: boolean;
+  /** a Retry of that save is waiting for its answer */
+  saveRetrying: boolean;
+  onRetrySave: () => void;
   /** a file preview is open beneath: the dialog is drawn above it */
   overPreview?: boolean;
 }
@@ -341,6 +346,8 @@ function ChatPage() {
   const { settings, update } = useSettings();
   const t = useT();
   const touch = useMediaQuery("(pointer: coarse)");
+  // the same query Composer.tsx hides the New tab button by
+  const compactComposer = useMediaQuery("(max-width: 640px), (pointer: coarse)");
   return (
     <>
       <SettingsGroup>
@@ -373,6 +380,12 @@ function ChatPage() {
         <SettingsRow label={t("Send queued messages automatically")} description={t("A message sent while the agent works goes by itself when the turn ends. When off, it waits until you press Send now.")}>
           <Toggle label={t("Send queued messages automatically")} checked={settings.autoSendQueued} onChange={(autoSendQueued) => update({ autoSendQueued })} />
         </SettingsRow>
+        {/* the button is drawn in a wide, mouse-driven window only (Composer.tsx), so it is offered only there */}
+        {!compactComposer && (
+          <SettingsRow label={t("New tab button")} description={t("A button in the message box opens New tab with an agent… on the pane's workspace. The tab menu offers it either way.")}>
+            <Toggle label={t("New tab button")} checked={settings.composerNewTabButton} onChange={(composerNewTabButton) => update({ composerNewTabButton })} />
+          </SettingsRow>
+        )}
         {touch && (
           <SettingsRow label={t("Suggestion chip")} description={t("A chip above the message box puts the prompt Claude Code suggests next into the box. With a keyboard, Tab does it.")}>
             <Toggle label={t("Suggestion chip")} checked={settings.suggestionChip} onChange={(suggestionChip) => update({ suggestionChip })} />
@@ -578,7 +591,7 @@ function VoicePage() {
         <div className="settings-item">
           {voice && (
             <p className="settings-label voice-status">
-              {voice.configured ? t(voice.source === "env" ? "OpenAI key set by HERDR_WEB_OPENAI_API_KEY" : "OpenAI key saved on this PC") : t("No OpenAI key: the browser's speech recognition is used")}
+              {voice.configured ? t(voice.source === "env" ? "OpenAI key set by OVIS_OPENAI_API_KEY" : "OpenAI key saved on this PC") : t("No OpenAI key: the browser's speech recognition is used")}
             </p>
           )}
           {voice && voice.source !== "env" && (
@@ -946,9 +959,9 @@ function AboutPage({ updates, herdrVersion, bridgesFollow }: { updates: UpdatesM
         <div className="settings-row">
           <div className="settings-row-text">
             <span className="settings-label">Ovis</span>
-            <a className="settings-link" href="https://herdrweb.dev/" target="_blank" rel="noreferrer">herdrweb.dev</a>
+            <a className="settings-link" href="https://ovis.sh/" target="_blank" rel="noreferrer">ovis.sh</a>
           </div>
-          <a className="btn" href="https://github.com/devswha/herdr-web-ui" target="_blank" rel="noreferrer"><Star aria-hidden="true" />{t("Star on GitHub")}</a>
+          <a className="btn" href="https://github.com/devswha/ovis" target="_blank" rel="noreferrer"><Star aria-hidden="true" />{t("Star on GitHub")}</a>
         </div>
       </SettingsGroup>
     </>
@@ -996,20 +1009,26 @@ function SettingsCrash({ onClose, overPreview }: { onClose: () => void; overPrev
 
 /**
  * A change the server refused to save, on whichever page is open: the plain sentence (lib/userError.ts),
- * the server's own words behind Details. It stays until a save lands; the change is sent again
- * every few seconds meanwhile (lib/preferencesSync.ts).
+ * the server's own words behind Details, and where the change is now with the Retry that sends it.
+ * It stays until a save lands; the change is sent again every few seconds meanwhile, and after three
+ * failures on Retry, a reconnect or once a longer wait ends (lib/preferencesSync.ts). Only this page
+ * holds the change until then: a reload takes the server's values again.
  */
-function SaveFailure({ error }: { error: UserError }) {
+function SaveFailure({ error, paused, retrying, onRetry }: { error: UserError; paused: boolean; retrying: boolean; onRetry: () => void }) {
   const t = useT();
-  return <div className="settings-save-error" role="alert">
+  return <div className="settings-save-error" role="alert" data-paused={paused || undefined}>
     {error.detail === null ? <p>{error.message}</p> : <details className="settings-details">
       <summary>{error.message}<span className="settings-details-toggle">{t("Details")}</span></summary>
       <code>{error.detail}</code>
     </details>}
+    <div className="settings-save-local">
+      <p>{retrying ? t("Sending the change to the server…") : t("Not saved on the server yet; reloading or closing this page can undo the change.")}</p>
+      <button type="button" className="btn" disabled={retrying} aria-busy={retrying} onClick={onRetry}>{t("Retry")}</button>
+    </div>
   </div>;
 }
 
-function OpenSettingsDialog({ section = null, linkPage = null, linkSection = null, onPage, onClose, onUsageLogin, actions, updates, auth, herdrVersion, onEnableNotifications, saveError, overPreview = false }: SettingsDialogProps) {
+function OpenSettingsDialog({ section = null, linkPage = null, linkSection = null, onPage, onClose, onUsageLogin, actions, updates, auth, herdrVersion, onEnableNotifications, saveError, savePaused, saveRetrying, onRetrySave, overPreview = false }: SettingsDialogProps) {
   const t = useT();
   const narrow = useNarrow();
   // opened by Forward, the dialog shows what that entry of the history showed
@@ -1153,7 +1172,7 @@ function OpenSettingsDialog({ section = null, linkPage = null, linkSection = nul
             </div>
           </nav>
         )}
-        {page !== null && <div key={page} ref={settingsBodyRef} id="settings-panel" className="modal-body settings-body" role="tabpanel" aria-label={label(page)} hidden={keyBarOpen}>{saveError !== null && <SaveFailure error={saveError} />}{body()}</div>}
+        {page !== null && <div key={page} ref={settingsBodyRef} id="settings-panel" className="modal-body settings-body" role="tabpanel" aria-label={label(page)} hidden={keyBarOpen}>{saveError !== null && <SaveFailure error={saveError} paused={savePaused} retrying={saveRetrying} onRetry={onRetrySave} />}{body()}</div>}
         {keyBarOpen && <div className="modal-body settings-key-bar-body"><KeyBarSettings /></div>}
       </section>
     </div>

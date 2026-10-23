@@ -33,7 +33,6 @@ export const TELEMETRY_THEME_IDS = [
   "amber", "charcoal", "codex", "catppuccin", "catppuccin-latte", "tokyo-night", "tokyo-night-day", "dracula", "nord",
   "gruvbox", "gruvbox-light", "one-dark", "one-light", "solarized", "solarized-light", "kanagawa",
   "kanagawa-lotus", "rose-pine", "rose-pine-dawn", "vesper",
-  "monokai",
 ] as const;
 export type TelemetryThemeId = typeof TELEMETRY_THEME_IDS[number];
 

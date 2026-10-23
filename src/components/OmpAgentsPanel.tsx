@@ -1,33 +1,47 @@
 import { useEffect, useState } from "react";
 import { ChevronDown, ChevronRight, Users } from "lucide-react";
 import type { OmpAgent } from "../../shared/omp-agents.ts";
+import { ApiError } from "../lib/api.ts";
+import { useT, type Translate } from "../lib/i18n.ts";
 import { useMachineApi } from "../lib/machineContext.tsx";
 import { Markdown } from "./Markdown.tsx";
 import "./OmpAgentsPanel.css";
 
-const labels: Record<OmpAgent["status"], string> = {
-  unknown: "No completion recorded", submitted: "Submitted", failed: "Failed", cancelled: "Cancelled", interrupted: "Interrupted",
-};
+function statusLabel(t: Translate, status: OmpAgent["status"]): string {
+  switch (status) {
+    case "submitted": return t("Submitted");
+    case "failed": return t("Failed");
+    case "cancelled": return t("Cancelled");
+    case "interrupted": return t("Interrupted");
+    default: return t("No completion recorded");
+  }
+}
 
-function OmpAgentRow({ agent }: { agent: OmpAgent }) {
+function OmpAgentRow({ agent, t }: { agent: OmpAgent; t: Translate }) {
   const [open, setOpen] = useState(false);
+  const clipped = <p>{t("Showing the first {count} characters.", { count: "24,000" })}</p>;
   return <details className="chat-subagent" open={open} onToggle={(event) => setOpen(event.currentTarget.open)}>
     <summary>
-      <strong>{agent.id}</strong><span className={`chat-subagent-status is-${agent.status}`}>{labels[agent.status]}</span>
-      <span className="chat-subagent-model">{agent.model ?? "Model not recorded"}</span>
+      <strong>{agent.id}</strong><span className={`chat-subagent-status is-${agent.status}`}>{statusLabel(t, agent.status)}</span>
+      <span className="chat-subagent-model">{agent.model ?? t("Model not recorded")}</span>
       {agent.activity && <span className="chat-subagent-activity">{agent.activity}</span>}
     </summary>
     {open && <div className="chat-subagent-body">
-      {agent.agent && <p>Agent: {agent.agent}</p>}
-      {agent.updatedAt && <p>Last checkpoint: <time dateTime={agent.updatedAt}>{new Date(agent.updatedAt).toLocaleString()}</time></p>}
-      {agent.assignment && <details><summary>Assignment</summary><Markdown>{agent.assignment}</Markdown>{agent.assignment.length >= 24_000 && <p>Showing the first 24,000 characters.</p>}</details>}
-      {agent.result ? <><h4>{agent.status === "failed" ? "Error" : "Submitted result"}</h4><Markdown>{agent.result}</Markdown>{agent.result.length >= 24_000 && <p>Showing the first 24,000 characters.</p>}</> : <p>No submitted result recorded.</p>}
+      {agent.agent && <p>{t("Agent: {agent}", { agent: agent.agent })}</p>}
+      {agent.updatedAt && <p>{t("Last checkpoint")}: <time dateTime={agent.updatedAt}>{new Date(agent.updatedAt).toLocaleString()}</time></p>}
+      {agent.assignment && <details><summary>{t("Assignment")}</summary><Markdown>{agent.assignment}</Markdown>{agent.assignment.length >= 24_000 && clipped}</details>}
+      {agent.result ? <><h4>{agent.status === "failed" ? t("Error") : t("Submitted result")}</h4><Markdown>{agent.result}</Markdown>{agent.result.length >= 24_000 && clipped}</> : <p>{t("No submitted result recorded.")}</p>}
     </div>}
   </details>;
 }
 
 /** A journal checkpoint, not a process monitor. Kept outside the virtual transcript. */
-export function OmpAgentsPanel({ paneId, visible }: { paneId: string; visible: boolean }) {
+export function OmpAgentsPanel(props: { paneId: string; visible: boolean }) {
+  return <OmpAgentsDock {...props} t={useT()} />;
+}
+
+/** The dock with its translator given, so a test renders it without the settings provider's DOM. */
+export function OmpAgentsDock({ paneId, visible, t }: { paneId: string; visible: boolean; t: Translate }) {
   const { fetchPaneOmpAgents } = useMachineApi();
   const [agents, setAgents] = useState<OmpAgent[]>([]);
   const [open, setOpen] = useState(false);
@@ -36,14 +50,18 @@ export function OmpAgentsPanel({ paneId, visible }: { paneId: string; visible: b
     if (!visible) return;
     const controller = new AbortController();
     let timer: ReturnType<typeof setTimeout> | undefined;
+    let unsupported = false;
     const poll = async () => {
       try {
         const result = await fetchPaneOmpAgents(paneId, controller.signal);
         if (!controller.signal.aborted) { setAgents(result.agents.filter((agent) => agent.status === "unknown")); setError(null); }
       } catch (cause) {
-        if (!controller.signal.aborted) setError(cause instanceof Error ? cause.message : String(cause));
+        if (controller.signal.aborted) return;
+        // a PC running a bridge without this route (upstream's published runtime) has nothing to show: no error, no more polls
+        if (cause instanceof ApiError && cause.status === 404) { unsupported = true; setAgents([]); setError(null); return; }
+        setError(cause instanceof Error ? cause.message : String(cause));
       } finally {
-        if (!controller.signal.aborted) timer = setTimeout(poll, 3000);
+        if (!controller.signal.aborted && !unsupported) timer = setTimeout(poll, 3000);
       }
     };
     void poll();
@@ -51,16 +69,16 @@ export function OmpAgentsPanel({ paneId, visible }: { paneId: string; visible: b
   }, [paneId, visible, fetchPaneOmpAgents]);
 
   if (!agents.length && !error) return null;
-  return <section className="chat-subagents" aria-label="OMP subagents">
+  return <section className="chat-subagents" aria-label={t("OMP subagents")}>
     <button type="button" className="chat-subagents-toggle" aria-expanded={open} onClick={() => setOpen(!open)}>
       {open ? <ChevronDown size={14} /> : <ChevronRight size={14} />}<Users size={14} />
-      <strong>Subagents</strong><span>{agents.length}</span>
-      <span className="chat-subagents-summary">{error ? "Update unavailable" : `${agents.length} unfinished`}</span>
+      <strong>{t("Subagents")}</strong><span>{agents.length}</span>
+      <span className="chat-subagents-summary">{error ? t("Update unavailable") : t("{n} unfinished", { n: agents.length })}</span>
     </button>
     {open && <div className="chat-subagents-list">
-      <p className="chat-subagents-note">Unfinished checkpoints · not a live process status</p>
-      {error && <p role="status">Could not refresh subagents: {error}</p>}
-      {agents.map((agent) => <OmpAgentRow key={agent.id} agent={agent} />)}
+      <p className="chat-subagents-note">{t("Unfinished checkpoints · not a live process status")}</p>
+      {error && <p role="status">{t("Could not refresh subagents: {error}", { error })}</p>}
+      {agents.map((agent) => <OmpAgentRow key={agent.id} agent={agent} t={t} />)}
     </div>}
   </section>;
 }

@@ -91,7 +91,7 @@ async function until(check: () => boolean | Promise<boolean>, label: string, tim
   }
 }
 async function observe(page: Page, ms: number) {
-  // A bounded observation window proves the absence/cadence of network activity, not UI readiness.
+  // fixed wait: a bounded observation window proves the absence/cadence of network activity, not UI readiness
   await page.waitForTimeout(ms);
 }
 async function visibility(page: Page, hidden: boolean) {
@@ -374,7 +374,7 @@ try {
   let stopped = !shutdownHerdr;
   await cleanup("private herdr", () => {
     if (!shutdownHerdr) return;
-    const binary = process.env.HERDR_WEB_HERDR_BIN || Bun.which("herdr");
+    const binary = process.env.OVIS_HERDR_BIN || Bun.which("herdr");
     assert.ok(binary, "private herdr stop requires its binary");
     // Inherited HERDR_SOCKET_PATH belongs to the invoking pane, not this session.
     const stopEnv = Object.fromEntries(Object.entries(process.env).filter(([name]) => !/^(HERDR|OMO|SENPI|PI)_/.test(name)));

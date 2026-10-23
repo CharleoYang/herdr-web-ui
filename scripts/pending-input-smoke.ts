@@ -21,7 +21,7 @@ try {
     const root = realpathSync(mkdtempSync(join(tmpdir(), "pending-input-smoke-")));
     try {
       context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
-      await context.addInitScript(() => localStorage.setItem("herdr-web-ui:settings", JSON.stringify({ language: "en" })));
+      await context.addInitScript(() => localStorage.setItem("ovis:settings", JSON.stringify({ language: "en" })));
       page = await context.newPage();
       const pending = createPendingInputCheck(page, evidence);
       releasePending = () => pending.release();

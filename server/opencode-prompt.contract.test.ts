@@ -9,7 +9,7 @@ import { opencodeAuthHeader, type OpenCodeFormInfo } from "./opencode-service.ts
 import type { InteractivePrompt } from "../shared/protocol.ts";
 import { OpenCodePromptState } from "./prompt.ts";
 
-const root = mkdtempSync(join(tmpdir(), "herdr-web-ui-opencode-prompt-contract-"));
+const root = mkdtempSync(join(tmpdir(), "ovis-opencode-prompt-contract-"));
 const fakeOpencode = join(root, "bin", "opencode");
 const workspaces: string[] = [];
 let server: ReturnType<typeof createServer>;
@@ -34,6 +34,8 @@ beforeAll(async () => {
     async fetch(req) {
       const url = new URL(req.url);
       const auth = req.headers.get("authorization") ?? "";
+      // the identity check: the process service.json names answers at its URL
+      if (req.method === "GET" && url.pathname === "/api/info") return Response.json({ version: "2.0.32", pid: process.pid, urls: [url.origin], paths: { tmp: root } });
 
       // List forms: GET /api/session/{sessionID}/form
       const listMatch = url.pathname.match(/^\/api\/session\/([^/]+)\/form$/);

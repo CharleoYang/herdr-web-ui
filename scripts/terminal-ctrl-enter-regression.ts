@@ -58,8 +58,8 @@ process.stdin.on("data", (data) => {
     await context.addInitScript(({ expectedOrigin, paneId }) => {
       if (location.origin !== expectedOrigin) return;
       Object.defineProperty(navigator, "platform", { get: () => "Linux x86_64" });
-      localStorage.setItem("herdr-web-ui:settings", JSON.stringify({ language: "en" }));
-      localStorage.setItem(`herdr-web-ui:view:${paneId}`, "terminal");
+      localStorage.setItem("ovis:settings", JSON.stringify({ language: "en" }));
+      localStorage.setItem(`ovis:view:${paneId}`, "terminal");
     }, { expectedOrigin: new URL(origin).origin, paneId });
     const page = await context.newPage();
     const oracle = terminalOracle(page, paneId);

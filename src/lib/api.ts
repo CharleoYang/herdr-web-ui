@@ -1,12 +1,15 @@
+import { apiFetch as fetch } from "./api-request-id.ts";
 import type { PreferencesChange, SharedPreferences } from "../../shared/preferences.ts";
 import type { SeenFinish } from "../../shared/seen.ts";
 import { resumeConnectionTraces } from "./connectionTrace.ts";
-import { machinePath, type BridgeHealth, type HerdrIdentity, type Machine, type SetupAction, type SetupJob, type SetupRequest } from "../../shared/machines.ts";
+import { machinePath, type BridgeHealth, type HerdrIdentity, type Machine, type MachineRoster, type SetupAction, type SetupJob, type SetupRequest } from "../../shared/machines.ts";
 import type { BtwHistory } from "../../shared/omp-btw.ts";
 import type { OmpAgents } from "../../shared/omp-agents.ts";
 import type {
+  WorkspaceMoved,
   AgentKind,
   AgentRenameRequest,
+  CommandOutcome,
   ConversationResponse,
   CreateWorktreeRequest,
   CreateTabRequest,
@@ -28,6 +31,7 @@ import type {
   PaneDirection,
   PaneInfo,
   PanePlan,
+  PanePromptResponse,
   PaneReadResult,
   PaneResized,
   RepoDiffFileList,
@@ -46,6 +50,8 @@ import type {
   RemoteAccess,
   RemoveWorktreeRequest,
   ResizePaneRequest,
+  SessionHistoryAgent,
+  SessionHistoryResponse,
   SessionSnapshot,
   SetSplitRatioRequest,
   SlashCommand,
@@ -53,6 +59,7 @@ import type {
   SplitPaneRequest,
   SwapPaneRequest,
   TabCreated,
+  UpdateInstallRequest,
   UsageReport,
   WorkspaceCreated,
   PluginActionRequest,
@@ -66,7 +73,7 @@ import type {
 } from "../../shared/protocol.ts";
 import { SUPPORTED_AGENT_KINDS } from "../../shared/supported-agents.ts";
 import type { PaneScrollInfo } from "../../shared/herdr-api.generated.ts";
-import { readInstalledNotes, readUpdateNotes, type HerdrUpdateStatus, type InstalledNotes, type UpdateCommand, type UpdateNotes, type UpdateStatus } from "../../shared/update.ts";
+import { readInstalledNotes, readUpdateNotes, type HerdrUpdateStatus, type InstalledNotes, type UpdateNotes, type UpdateRequest, type UpdateStatus } from "../../shared/update.ts";
 import type { AlertPrefs } from "../../shared/notify-policy.ts";
 import type { TelemetryChange, TelemetryStatus } from "../../shared/telemetry.ts";
 import type { VoiceConfigUpdate, VoiceStatus } from "../../shared/voice.ts";
@@ -127,9 +134,12 @@ export async function fetchInstalledNotes(): Promise<InstalledNotes> {
   return readInstalledNotes(await getJson<unknown>("/api/updates/installed"));
 }
 
-export async function requestUpdate(command: UpdateCommand): Promise<void> {
-  const url = `/api/updates/${command}`;
-  const response = await fetch(url, { method: "POST", headers: { "x-herdr-update": "1" } });
+/** A check goes without a body; an install names the release the person was offered. */
+export async function requestUpdate(request: UpdateRequest): Promise<void> {
+  const url = `/api/updates/${request.command}`;
+  const response = await fetch(url, request.command === "install"
+    ? { method: "POST", headers: { "x-herdr-update": "1", "content-type": "application/json" }, body: JSON.stringify({ expected_revision: request.expected_revision } satisfies UpdateInstallRequest) }
+    : { method: "POST", headers: { "x-herdr-update": "1" } });
   if (!response.ok) throw await errorFrom(url, response);
 }
 
@@ -193,7 +203,7 @@ export async function changeTelemetry(change: TelemetryChange): Promise<Telemetr
 }
 
 /**
- * A non-2xx answer from the herdr-web-ui API. `code` is the server's error-envelope
+ * A non-2xx answer from the Ovis API. `code` is the server's error-envelope
  * code when it sent one, so callers can branch on `status` (401 = the token gate)
  * without parsing the message.
  */
@@ -219,6 +229,15 @@ export class ApiError extends Error {
  */
 export const routeMissing = (error: unknown): boolean => error instanceof ApiError && error.status === 404 && error.code === "not_found";
 
+/**
+ * The PC proxy's fixed words for another PC's answer it would not pass on (server/remote-json.ts),
+ * in the UI language: they are the detail every error surface shows beside its own sentence.
+ */
+const UNUSABLE_ANSWER: Readonly<Record<string, () => string>> = {
+  remote_response_too_large: () => t("The other PC's answer was larger than this app accepts"),
+  remote_response_invalid: () => t("The other PC's answer could not be read"),
+};
+
 async function errorFrom(url: string, response: Response): Promise<ApiError> {
   let detail = response.statusText;
   let code: string | null = null;
@@ -229,6 +248,7 @@ async function errorFrom(url: string, response: Response): Promise<ApiError> {
   } catch {
     /* non-JSON error body */
   }
+  if (code !== null && Object.hasOwn(UNUSABLE_ANSWER, code)) detail = UNUSABLE_ANSWER[code]!();
   return new ApiError(url, response.status, detail, code);
 }
 
@@ -708,6 +728,25 @@ export async function openWorktree(request: OpenWorktreeRequest, machineId = "lo
   return (await response.json()) as WorktreeOpened;
 }
 
+/** GET /api/sessions/history: the earlier sessions of `agent` in the workspace's folder, newest first; never cached. */
+export function fetchSessionHistory(workspaceId: string, agent: SessionHistoryAgent, machineId = "local"): Promise<SessionHistoryResponse> {
+  const query = new URLSearchParams({ workspace_id: workspaceId, agent });
+  return getJson<SessionHistoryResponse>(`${machinePath(machineId, "sessions/history")}?${query.toString()}`, { cache: "no-store" });
+}
+/**
+ * Whether the PC's bridge has the session history route, asked without a query so no session is
+ * listed: a bridge that has it refuses the query (400), one from before it answers not_found (404).
+ * Any other refusal (403 for a device that only watches) still says the route is there; a PC that
+ * could not be asked rejects, so the caller asks again when it comes back.
+ */
+export async function sessionHistoryOffered(machineId = "local"): Promise<boolean> {
+  try { await getJson(machinePath(machineId, "sessions/history")); return true; }
+  catch (error) {
+    if (routeMissing(error)) return false;
+    if (error instanceof ApiError && error.status < 500) return true;
+    throw error;
+  }
+}
 /** POST /api/tab/create: another tab in an existing workspace, with the same agent launch. */
 export async function createTab(request: CreateTabRequest, machineId = "local"): Promise<TabCreated> {
   const response = await sendJson(machinePath(machineId, "tab/create"), "POST", request);
@@ -735,9 +774,13 @@ export async function renameWorkspace(workspaceId: string, label: string, machin
   await sendJson(machinePath(machineId, "workspace/rename"), "POST", { workspace_id: workspaceId, label });
 }
 
-/** POST /api/workspace/move: places the workspace at `insertIndex` in herdr's order (the sidebar order). */
-export async function moveWorkspace(workspaceId: string, insertIndex: number, machineId = "local"): Promise<void> {
-  await sendJson(machinePath(machineId, "workspace/move"), "POST", { workspace_id: workspaceId, insert_index: insertIndex });
+/**
+ * POST /api/workspace/move: places the workspace at `insertIndex` in herdr's order (the sidebar order).
+ * The receipt says which move this was in that PC's server's order (lib/workspaceOrder.ts).
+ */
+export async function moveWorkspace(workspaceId: string, insertIndex: number, machineId = "local"): Promise<WorkspaceMoved> {
+  const response = await sendJson(machinePath(machineId, "workspace/move"), "POST", { workspace_id: workspaceId, insert_index: insertIndex });
+  return (await response.json().catch(() => ({ ok: true }))) as WorkspaceMoved;
 }
 
 /** closeGroup takes the repository's open worktree workspaces with it; herdr refuses to close over them otherwise. */
@@ -754,6 +797,16 @@ export async function removeWorktree(request: RemoveWorktreeRequest, machineId =
 /** GET /api/pane/commands: the slash commands the pane's agent understands (built-in + custom). */
 export async function fetchPaneCommands(paneId: string, machineId = "local"): Promise<SlashCommand[]> {
   return (await getJson<{ commands: SlashCommand[] }>(machinePath(machineId, `pane/commands?pane_id=${encodeURIComponent(paneId)}`))).commands;
+}
+
+/**
+ * GET /api/agent/commands?agent=&cwd=: the commands `agent` would offer in `cwd` before any pane runs it
+ * (the new workspace and tab dialogs list its skills), read from the bridge's tables and the folder; no
+ * process is started for it. A folder of null asks for the agent's own and the user's skills alone.
+ */
+export async function fetchAgentCommands(agent: string, cwd: string | null, machineId = "local"): Promise<SlashCommand[]> {
+  const query = new URLSearchParams({ agent, ...(cwd === null || cwd.trim() === "" ? {} : { cwd }) });
+  return (await getJson<{ commands: SlashCommand[] }>(`${machinePath(machineId, "agent/commands")}?${query.toString()}`)).commands;
 }
 
 /** GET /api/pane/omo-tasks: the background tasks and workflows the pane's OmO session started, and that PC's clock. */
@@ -780,13 +833,14 @@ export async function fetchPanePrompt(paneId: string, machineId = "local"): Prom
   return (await fetchPanePromptState(paneId, machineId)).prompt;
 }
 
-/** The waiting prompt, and with none, the next prompt the agent suggests; restored is a send the agent put back in its input box when it was cancelled (older servers send neither). */
-export async function fetchPanePromptState(paneId: string, machineId = "local"): Promise<{ prompt: InteractivePrompt | null; suggestion: string | null; restored: string | null }> {
-  const body = await getJson<{ prompt: InteractivePrompt | null; suggestion?: string | null; restored?: string | null }>(machinePath(machineId, `pane/prompt?pane_id=${encodeURIComponent(paneId)}`));
+/** The waiting prompt, and with none, the next prompt the agent suggests; restored is a send the agent put back in its input box when it was cancelled; outcomes are the pane's tracked command sends (older servers send none of the three). */
+export async function fetchPanePromptState(paneId: string, machineId = "local"): Promise<{ prompt: InteractivePrompt | null; suggestion: string | null; restored: string | null; outcomes: CommandOutcome[] }> {
+  const body = await getJson<PanePromptResponse>(machinePath(machineId, `pane/prompt?pane_id=${encodeURIComponent(paneId)}`));
   return {
     prompt: body.prompt,
     suggestion: typeof body.suggestion === "string" && body.suggestion !== "" ? body.suggestion : null,
     restored: typeof body.restored === "string" && body.restored !== "" ? body.restored : null,
+    outcomes: Array.isArray(body.outcomes) ? body.outcomes : [],
   };
 }
 
@@ -820,6 +874,31 @@ export async function fetchMachines(signal?: AbortSignal): Promise<Machine[]> {
   if (!response.ok) throw await errorFrom("/api/machines", response);
   return ((await response.json()) as { machines: Machine[] }).machines;
 }
+/**
+ * GET /api/machines?verify_source_boot: the roster, and the boot id of the server behind `machineId`
+ * proved during this very request (shared/protocol.ts). Null when the server proves nothing: a
+ * refusal, or an older server that ignored the query. Bounded to 20 s, and ended by `signal`.
+ */
+export async function verifySourceBoot(machineId: string, signal: AbortSignal): Promise<{ machines: Machine[]; boot_id: string } | null> {
+  const path = `/api/machines?verify_source_boot=${encodeURIComponent(machineId)}`;
+  // joined by hand: AbortSignal.any needs Safari 17.4, and without this check a PC's order never
+  // leaves an old epoch after its server restarts
+  const bounded = new AbortController();
+  const end = () => bounded.abort();
+  const timer = setTimeout(end, 20_000);
+  if (signal.aborted) end();
+  else signal.addEventListener("abort", end, { once: true });
+  try {
+    const response = await fetch(path, { signal: bounded.signal, cache: "no-store" });
+    if (!response.ok) return null;
+    const body = (await response.json()) as MachineRoster;
+    const proof = body.verified_source_boot;
+    return proof?.machine_id === machineId && typeof proof.boot_id === "string" && proof.boot_id !== "" ? { machines: body.machines, boot_id: proof.boot_id } : null;
+  } finally {
+    clearTimeout(timer);
+    signal.removeEventListener("abort", end);
+  }
+}
 export async function machineRequest<T>(path: string, method = "GET", body?: unknown): Promise<T> {
   const response = await fetch(`/api/machines${path}`, { method, headers: { "content-type": "application/json", "x-herdr-machine": "1" }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
   if (!response.ok) throw await errorFrom("/api/machines", response);
@@ -836,7 +915,7 @@ export async function fetchVoiceStatus(): Promise<VoiceStatus> {
   return (await response.json()) as VoiceStatus;
 }
 
-/** PUT /api/voice/config: ApiError 409 `key_from_env` when the key comes from HERDR_WEB_OPENAI_API_KEY. */
+/** PUT /api/voice/config: ApiError 409 `key_from_env` when the key comes from OVIS_OPENAI_API_KEY. */
 export async function saveVoiceConfig(update: VoiceConfigUpdate): Promise<VoiceStatus> {
   const response = await fetch("/api/voice/config", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify(update) });
   if (!response.ok) throw await errorFrom("/api/voice/config", response);

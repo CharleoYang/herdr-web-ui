@@ -1,10 +1,17 @@
 /**
- * herdr-web-ui's own HTTP/WebSocket contract, shared by the Bun server and the React client.
+ * Ovis's own HTTP/WebSocket contract, shared by the Bun server and the React client.
  *
  * The herdr WIRE types are NOT hand-written here: they are generated from herdr's
  * published API schema into ./herdr-api.generated.ts and re-exported below, so a
  * herdr upgrade shows up as a failing `bun run generate:types --check` instead of
  * types that quietly disagree with the server.
+ *
+ * HTTP responses and successful WebSocket handshakes carry X-Request-Id, a fresh
+ * server UUID. A client's optional X-Request-Id (1-64 ASCII letters, digits, dot,
+ * underscore or hyphen) is correlation data only, never the response's identity.
+ * Same-origin API calls generate a client UUID unless explicitly supplied.
+ * X-Content-Type-Options: nosniff and Referrer-Policy: no-referrer are absent-only
+ * defaults; route CSP, framing, MIME, caching and compression policies still win.
  */
 
 export type {
@@ -44,7 +51,21 @@ export type SessionSnapshot = Omit<HerdrSnapshot, "panes"> & {
   panes: HerdrPane[];
   /** Random per bridge start and observed herdr socket/marker replacement, independently per PC. */
   finish_epoch?: string;
+  /**
+   * Workspace-order evidence of the server that read this snapshot (server/order-sequence.ts):
+   * `order_epoch` is that server's `web_ui.boot_id`, and `read_seq` the number of workspace moves
+   * it had confirmed when this read started. Both or neither; a snapshot without them comes from an
+   * older server. Relays, caches and status patches carry the pair unchanged and never make one.
+   */
+  order_epoch?: string;
+  read_seq?: number;
 };
+/**
+ * POST /api/workspace/move's answer. `order_epoch` and `moved_seq` (from 1) say which move this was
+ * in the server's order: a snapshot of the same epoch with `read_seq >= moved_seq` was read after
+ * it. Absent from an older server.
+ */
+export interface WorkspaceMoved { ok: true; order_epoch?: string; moved_seq?: number }
 
 export interface OmpModelChoice {
   provider: string;
@@ -55,12 +76,22 @@ export interface OmpModelChoice {
 
 export interface OmpModelsResponse { models: OmpModelChoice[] }
 
-export type { Machine, MachineEvent, PaneTarget, SetupJob, SetupRequest, SetupAction, BridgeIdentity, BridgeHealth } from "./machines.ts";
+export type { Machine, MachineEvent, MachineRoster, PaneTarget, SetupJob, SetupRequest, SetupAction, BridgeIdentity, BridgeHealth } from "./machines.ts";
 
 /** Machine API (same token gate; mutations require X-Herdr-Machine: 1 + same origin)
  * GET /api/health?scope=bridge -> BridgeHealth, never waits for herdr
  * GET /api/bridge -> authenticated BridgeIdentity (socket + runtime compatibility)
- * GET /api/machines -> { machines: Machine[] }; GET /api/machines/events -> MachineEvent SSE
+ * GET /api/machines -> MachineRoster { machines: Machine[] }; GET /api/machines/events -> MachineEvent SSE
+ * GET /api/machines?verify_source_boot=:id -> MachineRoster with verified_source_boot { machine_id, boot_id }:
+ *   the boot id of the server behind that PC, asked for during this request (the local one directly,
+ *   a remote one by the manager's authenticated GET /api/health over its connection), never a cached
+ *   answer. 400 for an empty or repeated query, 404 for an unknown PC, 503 source_unverified when no
+ *   fresh proof came (failed, superseded, or a call already running when the request came), and 503
+ *   with Retry-After: 1 when that PC's last health call started under a second ago. The manager runs
+ *   at most one such call per PC at a time and starts them at least 1000 ms apart: that, not the
+ *   client's coalescing or the 15 s deadline, is what bounds the load on a remote PC. The browser asks
+ *   only after a workspace move's receipt when a roster names another epoch (src/lib/workspaceOrder.ts).
+ *   An older server ignores the query and sends no verified_source_boot, which proves nothing.
  * Machine action_required=connect: a saved herdr PC awaits explicit POST /api/machines/setup before SSH.
  * Connection permission survives successful setup; installation/startup approval remains separate.
  * SetupJob/Machine action_required=bridge_conflict: align app versions, then retry setup without update_remote.
@@ -75,7 +106,8 @@ export type { Machine, MachineEvent, PaneTarget, SetupJob, SetupRequest, SetupAc
  *  GET    /api/health                    -> { ok: true, herdr: HerdrIdentity (shared/machines.ts; terminal_attach false on a
  *                                          Windows herdr and on a bridge that cannot run the PTY sidecar; terminal_mirror: its
  *                                          terminal lens is the pane's screen, repainted; /api/bridge tells the same herdr), auth: HealthAuth,
- *                                          web_ui: { boot_id: string | null, revision: string | null } }
+ *                                          web_ui: { boot_id: string, revision: string | null } } (boot_id: this server
+ *                                          lifetime's id, the supervisor's when managed; older servers sent null unmanaged)
  *  GET    /api/session                   -> { snapshot: SessionSnapshot }
  *  GET    /api/access                    -> RemoteAccess (how a phone can reach this server: what
  *         Tailscale on this PC already serves, or the command to run), no-store
@@ -91,7 +123,11 @@ export type { Machine, MachineEvent, PaneTarget, SetupJob, SetupRequest, SetupAc
  *         unreadable saved state or unverifiable cleanup fails closed with 500 internal_error.
  *  GET    /api/updates                   -> UpdateStatus (shared/update.ts), no-store
  *  POST   /api/updates/check             -> 202 { accepted: true }
- *  POST   /api/updates/install           -> 202 { accepted: true }
+ *  POST   /api/updates/install           -> 202 { accepted: true }; UpdateInstallRequest JSON body
+ *         (at most 1 KiB): 400 invalid_update_install for a missing or malformed revision,
+ *         409 update_restart_required where the supervisor does not advertise
+ *         revision_bound_install, 409 update_offer_changed when the offer is no longer that
+ *         revision. A release that moves after the 202 ends in UpdateStatus.error_code.
  *         Update POSTs require X-Herdr-Update: 1, same-origin browser requests,
  *         and the usual token gate. Managed starts only; status is polled during restart.
  *  POST   /api/connection-diagnostics    -> 204; ClientConnectionTrace, metadata only, same-origin
@@ -126,7 +162,18 @@ export type { Machine, MachineEvent, PaneTarget, SetupJob, SetupRequest, SetupAc
  *         plugin_log_not_found once herdr's log no longer holds it)
  *  GET    /api/omp/models                -> OmpModelsResponse (chat models from this PC's
  *         `omp models --json`, cached for 60 seconds; selection uses terminal submit)
+ *  GET    /api/sessions/history?workspace_id=&agent= -> SessionHistoryResponse (earlier sessions of
+ *         one agent in the workspace's folder, newest first, from the agent's own store; at most 50.
+ *         First messages are prompt text: a watch-only device gets 403 read_only. 400
+ *         missing_workspace_id / invalid_agent, 404 workspace_not_found, 409 no_folder)
  *  GET    /api/pane/read?pane_id=&source=&format=&lines=  -> { read: PaneReadResult }
+ *         (pane.read. `lines` is herdr's uint32: an integer from 0 to 4294967295 written in
+ *         plain decimal digits (leading zeros allowed). Left out it is left out of the RPC, and 0
+ *         is sent as 0: herdr decides what either reads, the server adds no default or cap. Any
+ *         other spelling (blank, signed, fractional such as 0.99999999999999999, exponent such
+ *         as 1e3, non-finite) or a larger value is 400 invalid_lines before any RPC, whatever the
+ *         pane; 400 missing_pane_id / invalid_source / invalid_format; an unknown pane is herdr's
+ *         pane_not_found)
  *  GET    /api/pane/scroll?pane_id=      -> { scroll: PaneScrollInfo | null } (where the
  *         viewport sits: its top row in the history is max_offset_from_bottom - offset_from_bottom)
  *  POST   /api/pane/scroll { pane_id, offset_from_bottom } -> { scroll } (pane.scroll; herdr
@@ -176,9 +223,15 @@ export type { Machine, MachineEvent, PaneTarget, SetupJob, SetupRequest, SetupAc
  *  POST   /api/layout/ratio { tab_id, path: boolean[], ratio } -> { ok: true }
  *         (layout.set_split_ratio: a split in that tab, root at [], false follows the first child,
  *         true the second; finite ratio in 0.1..0.9; an absent split answers split_not_found)
- *  POST   /api/pane/image  { pane_id, content_type, data_base64 } -> { ok: true, path }
- *         pasted image -> file under <pane cwd>/.herdr-web-ui/ (under HERDR_WEB_PASTE_DIR when the
- *         server's environment sets it), path for the prompt
+ *  POST   /api/pane/image  { pane_id, content_type, data_base64, name? } -> { ok: true, path }
+ *         pasted image -> file under <pane cwd>/.ovis/ (under OVIS_PASTE_DIR when the
+ *         server's environment sets it), path for the prompt. An image/png, image/jpeg, image/gif or
+ *         image/webp upload is named paste-<stamp>.<png|jpg|gif|webp> after the signature of its
+ *         bytes, whichever of the four it claims; bytes with none of those signatures answer 400
+ *         invalid_image ("file does not contain a supported raster image", never the upload's name
+ *         or content) before the pane is looked up or anything is written. A signature check, not
+ *         a decode. Any other type keeps its sanitised `name` (.bin without a usable extension).
+ *         empty_image 400 and image_too_large 413 are checked first.
  *  GET    /api/pane/commands?pane_id=   -> { commands: SlashCommand[] } (the agent's slash
  *         commands: built-ins per agent kind + the user's and the project's custom commands)
  *  GET    /api/pane/omo-tasks?pane_id=  -> OmoActivity (the background tasks and workflows the
@@ -213,7 +266,7 @@ export type { Machine, MachineEvent, PaneTarget, SetupJob, SetupRequest, SetupAc
  *  POST   /api/workspace/create { cwd?, label?, agent?: { kind, name?, args? } }
  *         -> WorkspaceCreated (workspace.create, then agent.start in the root pane when `agent` is given;
  *         omo and gjc, which herdr cannot start, are typed into the root pane's shell)
- *  POST   /api/tab/create { workspace_id, cwd?, label?, agent?: { kind, name?, args? } }
+ *  POST   /api/tab/create { workspace_id, cwd?, label?, agent?: { kind, name?, args? }, first_message?, first_message_connection? }
  *         -> TabCreated (tab.create in that workspace, then the same agent launch in the tab's root
  *         pane; without cwd herdr uses the workspace's folder, without label the tab's number)
  *         Both creates trim `label`; a blank one counts as not given, one over MAX_LABEL_CHARS
@@ -227,7 +280,8 @@ export type { Machine, MachineEvent, PaneTarget, SetupJob, SetupRequest, SetupAc
  *         a workspace's last tab takes the workspace with it)
  *  POST   /api/workspace/rename { workspace_id, label } -> { ok: true } (trimmed; empty: 400
  *         missing_label, over MAX_LABEL_CHARS: 400 label_too_long)
- *  POST   /api/workspace/move   { workspace_id, insert_index } -> { ok: true } (sidebar reorder)
+ *  POST   /api/workspace/move   { workspace_id, insert_index } -> WorkspaceMoved (sidebar reorder; the receipt's
+ *         order_epoch/moved_seq let the browser keep its order until a snapshot read after the move arrives)
  *  POST   /api/workspace/close  { workspace_id, close_group? } -> { ok: true } (close_group takes the
  *         repository's open worktree workspaces with it; without it herdr refuses: workspace_group_close_required)
  *  POST   /api/worktree/create { workspace_id, branch, base?, label?, path?, agent?: { kind, name?, args? } } -> WorktreeOpened
@@ -241,12 +295,12 @@ export type { Machine, MachineEvent, PaneTarget, SetupJob, SetupRequest, SetupAc
  *  POST   /api/worktree/remove { workspace_id, force? } -> WorktreeRemoved (worktree.remove: deletes the
  *         checkout and closes its workspace, keeps the branch; a dirty checkout is refused without force:
  *         dirty_worktree_requires_force)
- *  POST   /api/auth        { token }     -> 204 + Set-Cookie herdr_web_token (401 invalid_token on mismatch)
+ *  POST   /api/auth        { token }     -> 204 + Set-Cookie ovis_token (401 invalid_token on mismatch)
  *  DELETE /api/auth                      -> 204, clears the token and the device cookies
  *  GET    /api/devices                   -> { devices: PairedDevice[] } (the paired devices; `current` marks the caller's)
  *  POST   /api/devices/pair/start        -> PairingCode: a six-digit code good for ten minutes, replacing any pending one
  *         (X-Herdr-Machine: 1 + same origin, from a client with full access)
- *  POST   /api/devices/pair { code, label? } -> 204 + Set-Cookie herdr_web_device (public, like /api/auth;
+ *  POST   /api/devices/pair { code, label? } -> 204 + Set-Cookie ovis_device (public, like /api/auth;
  *         401 invalid_code when the code is wrong, spent after five tries, or expired)
  *  PATCH  /api/devices/:id  { label }    -> PairedDevice;  DELETE /api/devices/:id -> 204 (revoked at its next request)
  *  GET    /api/push                      -> PushKey (the VAPID application server key)
@@ -261,9 +315,9 @@ export type { Machine, MachineEvent, PaneTarget, SetupJob, SetupRequest, SetupAc
  *  Access: every route above except /api/health, /api/auth and /api/devices/pair, plus the
  *  /ws upgrade, needs the request to be one of: from this PC itself (no proxy in front);
  *  the PC's own Tailscale login, as `tailscale serve` states it — or, where
- *  HERDR_WEB_TAILSCALE_SERVE_ONLY=1 declares serve the only ingress on a tailnet one login
+ *  OVIS_TAILSCALE_SERVE_ONLY=1 declares serve the only ingress on a tailnet one login
  *  owns with no tagged node, a serve request that states no login; a paired device's cookie;
- *  the shared token (HERDR_WEB_TOKEN) as cookie or `Authorization: Bearer <token>`. With a
+ *  the shared token (OVIS_TOKEN) as cookie or `Authorization: Bearer <token>`. With a
  *  token configured, only the last two count, this PC and its Tailscale login included. Without one, and while no
  *  device is paired, anything that reaches the server is let in as before (the startup
  *  warning says so). Refusals answer 401 `unauthorized` (403 `other_user` for another Tailscale
@@ -348,21 +402,7 @@ export interface UsageReport {
   readonly providers: readonly ProviderUsage[];
 }
 
-/** CLIProxyAPI management configuration: the management key never leaves the server. */
-export interface CLIProxyStatus {
-  readonly configured: boolean;
-  readonly url: string;
-  readonly ok: boolean;
-  readonly problem: string | null;
-}
-export type CLIProxyProvider = "claude" | "codex";
-export interface CLIProxyLogin {
-  readonly url: string;
-  readonly state: string;
-}
-export interface CLIProxyLoginStatus {
-  readonly status: "wait" | "ok" | "error";
-}
+export type { CLIProxyStatus, CLIProxyProvider, CLIProxyLogin, CLIProxyLoginStatus } from "./cliproxy.ts";
 
 /** How a request got in, when it did. */
 export type AccessVia = "local" | "tailscale" | "device" | "token" | "open";
@@ -388,7 +428,7 @@ export interface HealthAuth {
  * reach that address is let in (`open` in `server/access.ts`). It is a warning, never a gate:
  * nothing about who is let in changes because this field exists.
  *
- * Never sent to a request that did not get in. "This host runs herdr-web-ui with no token"
+ * Never sent to a request that did not get in. "This host runs Ovis with no token"
  * is reconnaissance for whoever is asking, not help.
  */
 export interface LanExposure {
@@ -427,37 +467,13 @@ export interface TailscaleAccess {
   readonly dns_name: string | null;
   /** the HTTPS address Tailscale already proxies to this server, when there is one */
   readonly serving_url: string | null;
-  /** otherwise, the command that publishes it on the first free of the usual HTTPS ports, or on the one HERDR_WEB_TAILSCALE_HTTPS_PORT names while it is free ... */
+  /** otherwise, the command that publishes it on the first free of the usual HTTPS ports, or on the one OVIS_TAILSCALE_HTTPS_PORT names while it is free ... */
   readonly serve_command: string | null;
   /** ... and the address that command gives, when the DNS name is known */
   readonly serve_url: string | null;
 }
 
-/**
- * GET /api/portal: a public HTTPS address for this server through the Portal on its PC
- * (gosuda/portal-tunnel), which the app starts and stops (Settings → Phone & devices).
- */
-export interface PortalStatus {
-  /** false on a server started without Portal (tests, the demo): the section stays hidden */
-  readonly supported: boolean;
-  /** what `portal version` says of the `portal` on PATH; null when there is none or it does not answer */
-  readonly version: string | null;
-  /** the oldest Portal that can run this app's tunnel */
-  readonly min_version: string;
-  /** `version` is `min_version` or later: Start is offered */
-  readonly usable: boolean;
-  readonly phase: "idle" | "starting" | "running" | "stopping" | "error";
-  /** the relay the tunnel uses, or used last; an https origin */
-  readonly relay: string | null;
-  /** the public address while it runs, without the default port */
-  readonly url: string | null;
-  /** why a start would be refused now: no token set, or tailscale serve declared the only way in */
-  readonly blocked: "token_required" | "serve_only" | null;
-  /** what went wrong last; null after a success */
-  readonly error: string | null;
-  /** the tail of what Portal printed, for when the error alone does not say enough */
-  readonly output: string | null;
-}
+export type { PortalStatus } from "./portal.ts";
 
 /** GET /api/push: base64url VAPID public key, the `applicationServerKey` a browser subscribes with. */
 export interface PushKey {
@@ -538,74 +554,9 @@ export interface ConversationMetadata {
   context?: { used: number; window: number | null };
 }
 
-/** One background task of an OmO session, or one subagent of a Claude Code session (GET /api/pane/omo-tasks), from OmO's task record or the subagent's files. */
-export interface OmoTask {
-  id: string;
-  /** the task's summary, else its description or name */
-  title: string;
-  /** the category or agent type it ran as */
-  category: string | null;
-  model: string | null;
-  /** `lost`: OmO's process that ran it is gone, or the pane no longer runs the Claude Code session that started it */
-  status: "running" | "completed" | "failed" | "cancelled" | "lost";
-  started_at: string | null;
-  ended_at: string | null;
-  turns: number | null;
-  tool_calls: number | null;
-  tokens: number | null;
-}
+export type { OmoTask, OmoRunNode, OmoRun, OmoActivity } from "./tasks.ts";
 
-/** One step of an OmO workflow (a DAG node); `error` is why a failed one failed. */
-export interface OmoRunNode {
-  id: string;
-  label: string;
-  state: "pending" | "scheduled" | "running" | "blocked" | "completed" | "failed" | "skipped" | "cancelled";
-  error: string | null;
-}
-
-/** One OmO workflow (a DAG run): its steps by wave, a wave's steps able to run side by side. */
-export interface OmoRun {
-  id: string;
-  name: string;
-  /** `pending` and `paused` have not ended either */
-  status: "pending" | "running" | "paused" | "completed" | "failed" | "cancelled";
-  started_at: string | null;
-  ended_at: string | null;
-  waves: OmoRunNode[][];
-}
-
-/** GET /api/pane/omo-tasks */
-export interface OmoActivity {
-  tasks: OmoTask[];
-  runs: OmoRun[];
-  /** the PC's clock, which the times are on */
-  server_time: string;
-}
-
-/**
- * One step of the plan an agent keeps for its session (GET /api/pane/plan): a task of Claude
- * Code's task list (`TaskCreate`/`TaskUpdate`), Codex's `update_plan` checklist, or OmO's `todo` list.
- */
-export interface PlanStep {
-  id: string;
-  label: string;
-  /** what it does now, in the agent's own words (Claude's `activeForm`), when it gave some */
-  active: string | null;
-  status: "pending" | "in_progress" | "completed";
-  /** the steps it waits on: Claude's `blockedBy`, or for Codex the step before it */
-  blocked_by: string[];
-  /** the teammate it was given to, in a Claude Code agent team */
-  owner: string | null;
-  started_at: string | null;
-  ended_at: string | null;
-}
-
-/** GET /api/pane/plan: the plan the pane's agent keeps now, null when it keeps none. */
-export interface PanePlan {
-  plan: { steps: PlanStep[] } | null;
-  /** the PC's clock, which the times are on */
-  server_time: string;
-}
+export type { PlanStep, PanePlan } from "./plans.ts";
 
 /** How far a pane's plan has got, for the sidebar: `current` names the step in progress. */
 export interface PlanSummary {
@@ -653,121 +604,11 @@ export interface ConversationResponse {
   abandoned?: { count: number; branches: number; summary: string | null };
 }
 
-/** Where a plugin manifest says an action applies. herdr may add more, so it stays open. */
-export type PluginActionContext = "global" | "workspace" | "tab" | "pane" | "selection" | (string & {});
+export type { PluginActionContext, PluginAction, PluginActions, PluginActionsResponse, PluginActionRequest, PluginActionResult } from "./plugins.ts";
 
-/** One manifest action of a herdr plugin. Its command line stays on the server. */
-export interface PluginAction {
-  /** local to its plugin: herdr's global name is `<plugin_id>.<action_id>` */
-  action_id: string;
-  title: string;
-  description: string | null;
-  /** empty when the manifest names none */
-  contexts: PluginActionContext[];
-}
+export type { DirectoryListing, CreateDirectoryRequest, DirectoryCreated } from "./directories.ts";
 
-/** GET /api/plugins/actions: one installed plugin and the actions this PC can run. */
-export interface PluginActions {
-  plugin_id: string;
-  name: string;
-  version: string;
-  description: string | null;
-  /** herdr refuses a disabled plugin's actions (`plugin_disabled`) */
-  enabled: boolean;
-  actions: PluginAction[];
-}
-
-export interface PluginActionsResponse {
-  plugins: PluginActions[];
-}
-
-/** POST /api/plugin/action. Without `pane_id` herdr runs the action in its own focus. */
-export interface PluginActionRequest {
-  plugin_id: string;
-  action_id: string;
-  pane_id?: string;
-}
-
-/** POST /api/plugin/action: what herdr's plugin command log said by the time the server answered. */
-export interface PluginActionResult {
-  /** herdr's log entry of this run: what GET /api/plugin/action is asked about while it is `running` */
-  log_id: string;
-  /** `running`: the command had not ended when the wait ran out */
-  status: "running" | "succeeded" | "failed";
-  exit_code: number | null;
-  /** a failed command's own words (spawn error, else the end of stderr, else of stdout); null otherwise */
-  output: string | null;
-  /**
-   * The pane this run's own output says it opened with focus (the answer of `herdr plugin pane
-   * open --focus`), while that pane still exists. Null for everything else: a command that
-   * printed no such answer, a popup (it has no pane ID), and a pane that merely appeared while
-   * the command ran, which nothing ties to it.
-   */
-  opened_pane_id: string | null;
-}
-
-/** GET /api/agents: one agent kind herdr can start (`agent.start` kind), with a display label. */
-/** GET /api/workspace/directories: the folders inside one directory, for the folder browser. */
-export interface DirectoryListing {
-  /** the directory listed, absolute */
-  path: string;
-  /** its parent, or null at the root */
-  parent: string | null;
-  /** the user's home, so the browser can show `~` and offer a way back */
-  home: string;
-  /** folder names, sorted; hidden ones only when asked for */
-  directories: string[];
-  /** more folders than the list holds */
-  truncated: boolean;
-  /** the files beside the folders, when asked for (`files=1`), sorted, within the same cap */
-  files?: { name: string; size: number }[];
-}
-
-/**
- * POST /api/workspace/directories: makes one folder `name` directly inside `path` (absolute,
- * `~` or `~/…`), for the folder browser's New folder. 201 with the folder made; 400
- * invalid_cwd / invalid_name (empty, `.`, `..`, a separator, over 255 bytes), 403
- * permission_denied, 409 folder_exists. Nothing is made recursively or overwritten.
- */
-export interface CreateDirectoryRequest {
-  path: string;
-  name: string;
-}
-
-export interface DirectoryCreated {
-  /** the folder made, absolute */
-  path: string;
-}
-
-/** How the file viewer shows a file. */
-export type FileKind = "image" | "video" | "audio" | "pdf" | "text" | "binary";
-
-/**
- * GET /api/fs/stat: a file the viewer can open (GET /api/fs/file streams it). An HTML page is
- * `text` with `mime` "text/html": `/api/fs/file` serves it as plain text, and as the page itself
- * only with `render=1`, in a sandbox with no origin and no network of its own.
- */
-export interface FileInfo {
-  path: string;
-  name: string;
-  size: number;
-  /** ISO time of the last change */
-  modified: string;
-  mime: string;
-  kind: FileKind;
-}
-
-/**
- * GET /api/fs/favicon?root=: the icon the project in folder `root` keeps, or null. The PC looks
- * through every place a project keeps one (`FAVICON_CANDIDATES` in server/project-favicon.ts),
- * best first, each read as /api/fs/stat reads `<root>/<place>`, and answers once: a folder with
- * no icon is `{ icon: null }`, never a 404. 400 missing_root; the access rules of /api/fs/stat
- * (no watching device, no other site's page).
- */
-export interface ProjectFavicon {
-  /** the image found; `path` opens it through /api/fs/file */
-  icon: FileInfo | null;
-}
+export type { FileKind, FileInfo, ProjectFavicon } from "./files.ts";
 
 /** Which two states of a repository are compared. */
 export type RepoDiffScope = "workspace" | "staged" | "commit";
@@ -839,38 +680,28 @@ export interface RepoDiffFilePatch {
   limits: { max_patch_bytes: number; context_lines: number };
 }
 
-export interface AgentKind {
-  kind: string;
-  label: string;
-  /** whether the server finds the agent's command (its kind) on its PATH; absent from an older bridge */
-  installed?: boolean;
-}
+export type { AgentKind } from "./agents.ts";
 
-/**
- * GET /api/integrations: one of herdr's built-in agent integrations (`integration.list`, herdr
- * 0.9.3; the saved schema predates it, so the shape is written out here). `state` widens like the
- * generated enums: a newer herdr may report one this build does not know.
- */
-export interface AgentIntegration {
-  /** herdr's integration target, e.g. `claude`, `antigravity_cli` */
-  target: string;
-  /** the name herdr shows, also the argument `herdr integration install` takes */
-  label: string;
-  /** the agent's executable */
-  command: string;
-  /** whether that executable is on the PATH of the PC herdr runs on */
-  available: boolean;
-  state: "not_installed" | "current" | "outdated" | (string & {});
-}
-
-export interface IntegrationsResponse {
-  integrations: AgentIntegration[];
-}
+export type { AgentIntegration, IntegrationsResponse } from "./integrations.ts";
 
 export interface CreateWorkspaceRequest {
   cwd?: string | null;
   label?: string | null;
   agent?: { kind: string; name?: string; args?: string[] } | null;
+  /**
+   * the user's first message for the agent, sent by this request: the bridge queues it for the
+   * agent's first ready turn through its pending path (server/core/pending.ts), where the pane's
+   * connections see it as a pending message and may discard or send it now; needs `agent`, at most
+   * 20000 characters without terminal control characters (shared/launch-rules.ts). Leave it out when there
+   * is none: a bridge that predates it answers without `first_message`, which tells the page it was not taken.
+   */
+  first_message?: string | null;
+  /**
+   * the `connection` of this page's socket to the PC (its first snapshot): the one connection that types
+   * the first message on its own, while it has the pane attached. Without it, or once that connection
+   * closes before the message went, the message is held for an explicit Send now or Discard.
+   */
+  first_message_connection?: string;
 }
 
 /** POST /api/tab/move: the boundary is counted BEFORE removing the source tab. */
@@ -963,6 +794,12 @@ export interface WorkspaceCreated {
   agent_started: boolean;
   /** The workspace still exists when its requested agent could not start. */
   error?: { code: string; message: string };
+  /**
+   * with `first_message` in the request: the pending message it was queued as; null when the agent did
+   * not start; `error` when the agent started but the message could not be queued (the page keeps its
+   * text). Absent from a bridge that predates `first_message`.
+   */
+  first_message?: { id: string } | { error: { code: string; message: string } } | null;
 }
 
 /**
@@ -1113,8 +950,14 @@ export interface CommandOutcome {
   }[];
   /** a passing view of the result, never merged into history */
   preview?: string;
+  /** what the command printed, verbatim with its line breaks, when a registered result reader recognized it (evidence `recognized-result`); bounded like `preview`, withheld from observers like it, never merged into history */
+  result_text?: string;
   /** the command changed the agent's command list: refetch it */
   catalog_changed?: true;
+  /** why the bridge knows the command needs the terminal, such as a skill the agent did not attach */
+  note?: string;
+  /** the skills the agent did not attach, so the command went as plain text: the chip names them in the user's language */
+  unattached_skills?: string[];
   /** when the outcome was created (ISO time) */
   created_at: string;
   /** when the outcome last changed (ISO time) */
@@ -1362,6 +1205,10 @@ export interface ClientConnectionEvent {
   attempt?: number;
   result?: "ok" | "refused";
 }
+/** POST /api/updates/install: the full commit id of the release the person was offered (UpdateStatus.latest_revision). */
+export interface UpdateInstallRequest {
+  expected_revision: string;
+}
 export interface ClientConnectionTrace {
   client_id: string;
   target: "local" | "remote";
@@ -1395,9 +1242,15 @@ export interface ConversationPageDelta {
 }
 
 export type ServerMessage =
-  | { type: "snapshot"; snapshot: SessionSnapshot; features?: ServerFeature[] }
+  /** `connection`: this socket's id on the PC, for a create request's `first_message_connection`; older bridges send none */
+  | { type: "snapshot"; snapshot: SessionSnapshot; features?: ServerFeature[]; connection?: string }
   /** raw PTY bytes: append to the terminal, never repaint over it. A mirrored pane (HerdrIdentity.terminal_mirror) sends whole screens the same way. */
-  | { type: "pty-data"; pane_id: string; data: string; flow?: { stream_id: string; offset: number } }
+  /**
+   * `replay`: these bytes are the screen from before this client attached (the first frame of a new
+   * attach), drawn but never asked again for side effects such as a clipboard write. Live output and
+   * older bridges omit it.
+   */
+  | { type: "pty-data"; pane_id: string; data: string; flow?: { stream_id: string; offset: number }; replay?: true }
   | { type: "pty-exit"; pane_id: string; code: number | null }
   /** a pane that waited for another web bridge to let go of its terminal (error `attach_held`) is attached again */
   | { type: "attach-resumed"; pane_id: string }
@@ -1428,7 +1281,7 @@ export type ServerMessage =
   /** Newest-page replacement for a snapshot that lists "conversation-delta". Not a turn patch, and not a substitute for conversation-changed. */
   | { type: "conversation-delta"; pane_id: string; signature: string; delta: ConversationPageDelta }
   /** Prompt menu for a snapshot that lists "prompt-push". Same body as GET /api/pane/prompt, plus pane_id. null prompt means the menu is gone. */
-  | { type: "prompt-push"; pane_id: string; prompt: InteractivePrompt | null; suggestion: string | null; restored: string | null }
+  | { type: "prompt-push"; pane_id: string; prompt: InteractivePrompt | null; suggestion: string | null; restored: string | null; outcomes?: CommandOutcome[] }
   /** a pane's process exited (pushed even when nobody is attached to it) */
   | { type: "pane-exited"; pane_id: string }
   /** session structure changed (pane created/closed): refetch /api/session */
@@ -1445,6 +1298,28 @@ export type ServerMessage =
   | { type: "pong"; id: number }
   /** `pane_id` names the pane an error is about, when it is about one (`attach_held`) */
   | { type: "error"; code: string; message: string; pane_id?: string };
+
+/** The agents whose own stores GET /api/sessions/history reads. */
+export type SessionHistoryAgent = "claude" | "codex" | "pi" | "omp" | "gjc" | "cmd" | "omo" | "opencode" | "hermes" | "grok" | "agy" | "devin";
+
+/** One earlier session. `resume.argv` is the agent kind and its arguments; null where its syntax is not verified. */
+export interface SessionHistoryRow {
+  id: string;
+  title: string | null;
+  /** prompt text: only for a connection that may drive */
+  firstMessage: string | null;
+  startedAt: string | null;
+  updatedAt: string;
+  resume: { argv: string[] } | null;
+}
+
+export interface SessionHistoryResponse {
+  workspace_id: string;
+  agent: SessionHistoryAgent;
+  cwd: string;
+  /** newest first, at most 50 */
+  sessions: SessionHistoryRow[];
+}
 
 /** herdr's default socket, under XDG_CONFIG_HOME when set, as herdr itself resolves it. */
 export const HERDR_SOCKET_PATH = `${process.env["XDG_CONFIG_HOME"] || `${process.env["HOME"] ?? ""}/.config`}/herdr/herdr.sock`;

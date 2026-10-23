@@ -7,6 +7,7 @@ import { useT } from "../lib/i18n.ts";
 import { Markdown } from "./Markdown.tsx";
 import { TurnTime } from "./TurnTime.tsx";
 import "./BtwPanel.css";
+import { ApiError } from "../lib/api.ts";
 
 function BtwTopicRow({ topic }: { topic: BtwTopic }) {
   const t = useT();
@@ -50,6 +51,7 @@ export function BtwPanel({ paneId, visible }: { paneId: string; visible: boolean
     const controller = new AbortController();
     let timer: ReturnType<typeof setTimeout>;
     let request: AbortController | undefined;
+    let unsupported = false;
     const read = async (): Promise<void> => {
       request = new AbortController();
       const deadline = setTimeout(() => request?.abort(), 10_000);
@@ -62,10 +64,12 @@ export function BtwPanel({ paneId, visible }: { paneId: string; visible: boolean
         if (controller.signal.aborted) return;
         // Never retain another session's saved answer when the current read cannot prove its owner.
         setTopics([]);
+        // a PC running a bridge without this route (upstream's published runtime) has nothing to show: no error, no more polls
+        if (cause instanceof ApiError && cause.status === 404) { unsupported = true; setError(null); return; }
         setError(cause instanceof Error ? cause.message : String(cause));
       } finally {
         clearTimeout(deadline);
-        if (!controller.signal.aborted) timer = setTimeout(read, 2000);
+        if (!controller.signal.aborted && !unsupported) timer = setTimeout(read, 2000);
       }
     };
     void read();

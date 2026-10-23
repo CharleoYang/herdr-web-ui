@@ -345,6 +345,28 @@ function parseOmpModel(screen: string): ParsedPrompt | null {
   });
 }
 
+const OMP_HANDOFF_RE = /^\S\s+(Generating handoff…)\s+\((?:⎋|esc|escape)\s+to cancel\)$/i;
+
+/**
+ * omp's /handoff (18.8.7, same in 18.12.3) shows no dialog: one status line while it writes the
+ * handoff document, which Esc cancels. Read only while that line is the live status, right above
+ * omp's status bar and editor; a line left in the transcript above them is history.
+ */
+function parseOmpHandoff(screen: string): ParsedPrompt | null {
+  const lines = screen.replace(ANSI_RE, "").split(/\r?\n/).map((line) => line.trim());
+  const index = findLastIndex(lines, (line) => OMP_HANDOFF_RE.test(line));
+  if (index < 0) return null;
+  const below = lines.slice(index + 1).filter(Boolean);
+  if (below.length < 2 || !below[0]!.startsWith("π >") || !below.slice(1).every((line) => line.startsWith("╰─"))) return null;
+  return finishPrompt("omp", {
+    kind: "menu", title: "Handoff", question: OMP_HANDOFF_RE.exec(lines[index]!)![1]!, body: null,
+    options: [{ label: "Cancel", description: null }], multi_select: false, custom_option_index: null,
+  }, {
+    responder: "omp-handoff", menuLabels: ["Cancel"], selectedIndex: 0,
+    checkedOptionIndices: [], customMenuIndex: null, rejectWithEscapeIndex: 0,
+  });
+}
+
 export const readers: readonly DialogReader[] = [
   {
     id: "omp-question", agents: ["omp"], priority: 10,
@@ -384,5 +406,11 @@ export const readers: readonly DialogReader[] = [
       const parsed = parseOmpModel(screen);
       return parsed?.responder === "omp-model" ? parsed : null;
     },
+  },
+  {
+    // Esc only while the handoff is still being written: the loop reads the screen again first
+    id: "omp-handoff", agents: ["omp"], priority: 40,
+    reread: "before-commit", list: "none",
+    parse: parseOmpHandoff,
   },
 ];

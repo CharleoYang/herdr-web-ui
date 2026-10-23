@@ -36,9 +36,16 @@ export function parseOmpModels(text: string): OmpModelChoice[] {
 
 let cached: { at: number; models: OmpModelChoice[] } | null = null;
 const CACHE_MS = 60_000;
+/** One `omp models` at a time: every device asking during a run shares its answer (listing can touch omp's credentials). */
+let inFlight: Promise<OmpModelChoice[]> | null = null;
 
-export async function listOmpModels(): Promise<OmpModelChoice[]> {
-  if (cached && Date.now() - cached.at < CACHE_MS) return cached.models;
+export function listOmpModels(): Promise<OmpModelChoice[]> {
+  if (cached && Date.now() - cached.at < CACHE_MS) return Promise.resolve(cached.models);
+  inFlight ??= runOmpModels().finally(() => { inFlight = null; });
+  return inFlight;
+}
+
+async function runOmpModels(): Promise<OmpModelChoice[]> {
   const proc = Bun.spawn(["omp", "models", "--json"], { stdout: "pipe", stderr: "pipe" });
   const timer = setTimeout(() => proc.kill(), 20_000);
   const [stdout, stderr, code] = await Promise.all([
