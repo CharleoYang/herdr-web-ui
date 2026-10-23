@@ -9,11 +9,23 @@ import { delimiter, dirname, join } from "node:path";
 import { randomBytes } from "node:crypto";
 import { homedir } from "node:os";
 
+import { ASSETS_FILE, readAssetArchive } from "./asset-archive.ts";
+import { REMOTE_BUNDLE_VERSION } from "../shared/machines.ts";
+
 process.env["HERDR_WEB_REMOTE"] = "1";
 const windows = process.platform === "win32";
 // the transcript readers find agent stores under $HOME, which Windows does not set
 if (windows && !process.env["HOME"]) process.env["HOME"] = homedir();
 const bundle = join(import.meta.dir, "..");
+// The install's own smoke test, before anything is activated: this runtime runs the bridge, and
+// the client archive beside it parses (asset-archive.ts - one file where dist/ had fourteen
+// hundred, so a security suite never sees a mass extraction).
+if (process.argv.includes("--version")) {
+  const files = readAssetArchive(join(bundle, ASSETS_FILE));
+  if (!files?.has("index.html")) throw new Error(`The client archive beside this bridge is missing or unreadable (${ASSETS_FILE})`);
+  console.log(`herdr-web-ui bridge ${REMOTE_BUNDLE_VERSION} (${files.size} client files)`);
+  process.exit(0);
+}
 process.env["PATH"] = `${join(bundle, "bin")}${delimiter}${process.env["PATH"] ?? "/usr/bin:/bin"}`;
 const session = process.env["HERDR_REMOTE_SESSION"];
 // herdr puts its sockets under XDG_CONFIG_HOME when it is set (GitHub's Linux runners and some

@@ -7,6 +7,17 @@ between releases do not reach them. Remote-PC runtime bundles are versioned sepa
 
 ## [Unreleased]
 
+### Changed
+- A Windows PC's runtime bundle is five files instead of 22,989: Bun, the server as one bundled
+  `server/bridge.js`, the browser client as one `assets.bin`, and a manifest. The install no longer
+  unpacks a tree of ~21k files (frontend dependencies the built client already contains), which a
+  security suite treats as dropper behaviour and rolls back; that extraction was also the slowest,
+  most fragile step of connecting a PC (nine minutes, unfinished, before the SSH link gave out).
+  The archive is read into memory (`server/asset-archive.ts`) and still answers with the same
+  headers, precompressed sidecars, `HERDR_WEB_APP_NAME` rewrites and 404/406 rules as a checkout's
+  `dist/`. The install's smoke test now runs the bridge itself (`--version`), so a runtime without
+  its client cannot be activated. Remote runtime `remote-v33`; PCs on an older runtime reinstall once.
+
 ### Added
 - **Settings → Phone & devices → Portal** gives this PC a public HTTPS address through
   [Portal](https://github.com/gosuda/portal-tunnel), with no account and no domain of your own.
