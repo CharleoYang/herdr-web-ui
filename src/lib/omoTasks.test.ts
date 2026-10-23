@@ -39,6 +39,9 @@ test("a task call reads as the tasks it starts: OmO's one and batch, omp's batch
     { title: "Check the login", agent: "task", prompt: "read auth.ts" },
     { title: "#2", agent: "task", prompt: "untitled" },
   ]);
+  expect(taskCallItems({ tasks: [{ name: "MenuMock", agent: "task", task: "Implement the real menu API" }] })).toEqual([
+    { title: "MenuMock", agent: "task", prompt: "Implement the real menu API" },
+  ]);
   expect(taskCallItems({ run_in_background: true })).toBeNull();
 });
 

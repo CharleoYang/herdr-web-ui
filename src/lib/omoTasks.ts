@@ -41,7 +41,7 @@ export interface TaskCallItem { title: string; agent: string | null; prompt: str
 /**
  * The tasks one `task` call starts: OmO's single call (`task_summary`, `description`, `prompt`,
  * `subagent_type` or `category`) or batch (`tasks`, each item taking the call's agent unless it
- * names its own), and omp's batch (`agent`, items with `description` and `assignment`). Null when
+ * names its own), and omp's batch (`agent`, items with `name` and `task`). Null when
  * the input is no such call.
  */
 export function taskCallItems(input: Record<string, unknown>): TaskCallItem[] | null {
@@ -55,7 +55,7 @@ export function taskCallItems(input: Record<string, unknown>): TaskCallItem[] | 
   const items = rows.flatMap((value, index): TaskCallItem[] => {
     if (typeof value !== "object" || value === null || Array.isArray(value)) return [];
     const row = value as Record<string, unknown>;
-    const prompt = str(row, "prompt", "assignment") ?? "";
+    const prompt = str(row, "task", "prompt", "assignment") ?? "";
     const title = str(row, "task_summary", "description", "name", "id");
     if (title === null && prompt.length === 0) return [];
     return [{ title: title ?? `#${index + 1}`, agent: agentOf(row) ?? shared, prompt }];

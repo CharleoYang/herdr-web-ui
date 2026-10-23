@@ -3,6 +3,7 @@ import type { SeenFinish } from "../../shared/seen.ts";
 import { resumeConnectionTraces } from "./connectionTrace.ts";
 import { machinePath, type BridgeHealth, type HerdrIdentity, type Machine, type SetupAction, type SetupJob, type SetupRequest } from "../../shared/machines.ts";
 import type { BtwHistory } from "../../shared/omp-btw.ts";
+import type { OmpAgents } from "../../shared/omp-agents.ts";
 import type {
   AgentKind,
   AgentRenameRequest,
@@ -106,6 +107,10 @@ export function cliProxyRequest<T>(path = "", init: RequestInit = {}): Promise<T
 /** OMP's saved side conversations; the transcript and its update stream stay independent. */
 export function fetchPaneBtw(paneId: string, machineId = "local", signal?: AbortSignal): Promise<BtwHistory> {
   return getJson<BtwHistory>(machinePath(machineId, `pane/btw?pane_id=${encodeURIComponent(paneId)}`), { cache: "no-store", signal });
+}
+
+export function fetchPaneOmpAgents(paneId: string, machineId = "local", signal?: AbortSignal): Promise<OmpAgents> {
+  return getJson<OmpAgents>(machinePath(machineId, `pane/omp-agents?pane_id=${encodeURIComponent(paneId)}`), { cache: "no-store", signal });
 }
 
 export function fetchUpdateStatus(): Promise<UpdateStatus> {

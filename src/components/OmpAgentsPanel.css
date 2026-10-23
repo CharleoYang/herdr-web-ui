@@ -1,0 +1,46 @@
+.chat-subagents {
+  flex: 0 0 auto;
+  min-width: 0;
+  width: min(calc(100% - 2 * var(--space-4)), var(--chat-w));
+  margin: 0 auto var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-elevated);
+  font-size: var(--fs-xs);
+}
+.chat-subagents-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 7px 14px;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+  text-align: left;
+}
+.chat-subagents-summary { margin-left: auto; color: var(--text-dim); }
+.chat-subagents-list { max-height: min(35vh, 340px); overflow: auto; padding: 0 14px 8px; }
+.chat-subagents-note { color: var(--text-dim); margin: 2px 0 7px; }
+.chat-subagent { border-top: 1px solid var(--border); }
+.chat-subagent > summary {
+  display: flex;
+  align-items: baseline;
+  gap: 6px 12px;
+  flex-wrap: wrap;
+  padding: 7px 0;
+  cursor: pointer;
+  overflow-wrap: anywhere;
+}
+.chat-subagent > summary::before { content: "▸"; }
+.chat-subagent[open] > summary::before { content: "▾"; }
+.chat-subagent-model { color: var(--text-dim); font-family: var(--font-mono); font-size: var(--fs-2xs); }
+.chat-subagent-activity { flex-basis: 100%; color: var(--text-dim); padding-left: 14px; }
+.chat-subagent-status { color: var(--text-dim); }
+.chat-subagent-status.is-submitted { color: var(--success); }
+.chat-subagent-status.is-failed { color: var(--danger-text); }
+.chat-subagent-body { padding: 0 14px 10px; overflow-wrap: anywhere; }
+.chat-subagent-body > p { margin: 4px 0; color: var(--text-dim); }
+.chat-subagent-body h4 { margin: 10px 0 5px; }
+.chat-subagent-body details > summary { cursor: pointer; padding: 6px 0; }

@@ -38,9 +38,10 @@ describe("workStartsOpen", () => {
   const commentary = (value: string) => ({ ...text(value), phase: "commentary" as const });
   const final = (value: string) => ({ ...text(value), phase: "final_answer" as const });
 
-  it("is open while the turn runs, whatever it holds", () => {
-    expect(workStartsOpen(true, [tool("read"), text("done")])).toBe(true);
-    expect(workStartsOpen(true, [tool("bash")])).toBe(true);
+  it("starts running turns folded even while prose and tools stream", () => {
+    expect(workStartsOpen(true, [tool("read"), text("done")])).toBe(false);
+    expect(workStartsOpen(true, [tool("bash")])).toBe(false);
+    expect(workStartsOpen(true, [commentary("Checking"), tool("bash")])).toBe(false);
   });
 
   it("folds a settled turn: its answer stays outside the fold", () => {

@@ -212,7 +212,7 @@ export function toolSummary(name: string, input: Record<string, unknown>): strin
   // an OmO or omp `task` call: the summary it gave the person, one per task of a batch
   if (name === "task") {
     const items = Array.isArray(input["tasks"]) ? input["tasks"].map(record) : [input];
-    const titles = items.map((item) => label(item["task_summary"]) ?? label(item["description"])).filter((title) => title !== null);
+    const titles = items.map((item) => label(item["task_summary"]) ?? label(item["description"]) ?? label(item["name"])).filter((title) => title !== null);
     if (titles.length > 0) return titles.join(" · ").slice(0, 120);
   }
   // what the agent itself said the call is for: OmO's eval `summary`, the `description` Claude

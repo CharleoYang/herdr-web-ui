@@ -31,8 +31,8 @@ export function splitTurn(parts: ConversationPart[]): SplitTurn {
 }
 
 /**
- * A work block is open while its turn runs and folded once the turn settles: the answer stays
- * outside the fold, so a finished turn reads as its answer under one "Worked for" row.
+ * A running work block starts folded; the reader can expand it explicitly. Settled turns keep
+ * the answer outside the fold under one "Worked for" row.
  *
  * A settled turn keeps its block open when the work holds words the answer does not end on:
  * prose with no answer at all (an action came after the last words, or Codex commentary had no
@@ -40,7 +40,7 @@ export function splitTurn(parts: ConversationPart[]): SplitTurn {
  * thing the agent said, or all of it. It takes the turn's parts, not the split: the order decides.
  */
 export function workStartsOpen(live: boolean, parts: ConversationPart[]): boolean {
-  if (live) return true;
+  if (live) return false;
   const lastAnswer = splitTurn(parts).answer.at(-1);
   const after = lastAnswer === undefined ? 0 : parts.lastIndexOf(lastAnswer) + 1;
   // everything readable after the last answer part is work: it is inside the fold

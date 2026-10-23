@@ -29,6 +29,7 @@ import { SHELL_AGENTS, shellAgentExecutable } from "./shell-agent.ts";
 import { claudeSessionTempDir } from "./claude-store.ts";
 import { fileResponse, findFile, crossSiteFileRead, forgetPageMedia, pageMediaResponse, pageMediaSource, PAGE_MEDIA_PATH } from "./file-view.ts";
 import { findProjectFavicon } from "./project-favicon.ts";
+import { readOmpAgents } from "./omp-agents.ts";
 import {
   agentManifests,
   HerdrError,
@@ -638,6 +639,16 @@ export function createServer(
         } catch (error) {
           return errorResponse(error);
         }
+      }
+
+      if (pathname === "/api/pane/omp-agents") {
+        if (request.method !== "GET") return badRequest("method_not_allowed", "use GET");
+        const paneId = url.searchParams.get("pane_id");
+        if (!paneId) return badRequest("missing_pane_id", "pane_id query parameter is required");
+        try {
+          const transcript = await paneTranscript(paneId, options.codexHome, undefined, options.devinDbPath, options.opencodeDb, options.hermesHome, options.grokHome);
+          return jsonResponse(transcript.source === "omp-transcript" ? await readOmpAgents(transcript.path) : { agents: [] });
+        } catch (error) { return errorResponse(error); }
       }
 
       if (pathname === "/api/pane/omo-tasks") {

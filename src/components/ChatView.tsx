@@ -19,6 +19,7 @@ import { RenderBoundary } from "./RenderBoundary.tsx";
 import { loadChatTimeline, loadedChatTimeline, useChatTimeline } from "./chatTimelineLoader.ts";
 import { ChatMinimap } from "./ChatMinimap.tsx";
 import { BtwPanel } from "./BtwPanel.tsx";
+import { OmpAgentsPanel } from "./OmpAgentsPanel.tsx";
 import { minimapTurns } from "../lib/chatMinimap.ts";
 import type { LegendListRef } from "@legendapp/list/react";
 import { appendChatRowSlots, createChatRowSlots, prependChatRowSlots } from "../lib/chatRows.ts";
@@ -43,7 +44,7 @@ import { PAGE_OVERLAP_ROWS, pageScrollDistance } from "../lib/pageScroll.ts";
 import { followGlides } from "../lib/followScroll.ts";
 import { useMediaQuery } from "../lib/useMediaQuery.ts";
 import { statusEdgeRead } from "../lib/status.ts";
-import { askedQuestions } from "../lib/askQuestions.ts";
+import { askedQuestions } from "../../shared/askQuestions.ts";
 import { ConversationRefresh, type ConversationUpdate } from "../lib/conversationRefresh.ts";
 import { teammateMessageParts, type TeammateMessage } from "../lib/teammateMessage.ts";
 import { usePageVisible } from "../lib/visibility.ts";
@@ -1715,7 +1716,7 @@ export const ChatView = memo(function ChatView({ paneId, presentationKey, finish
     }
     return null;
   }, [turns]);
-  const [todosOpen, setTodosOpen] = useState(true);
+  const [todosOpen, setTodosOpen] = useState(false);
   // a tick takes the reader to its turn: reading there, follow left off
   const jumpToTurn = useCallback((index: number) => {
     pagingAway.current = true; stickToBottom.current = false; setAway(true);
@@ -1825,6 +1826,7 @@ export const ChatView = memo(function ChatView({ paneId, presentationKey, finish
     {jump}
     </div>
     {state.conversationSource === "omp-transcript" && <BtwPanel key={`${machineId}:${paneId}:${historyId}`} paneId={paneId} visible={visible} />}
+    {state.conversationSource === "omp-transcript" && <OmpAgentsPanel key={`agents:${machineId}:${paneId}:${historyId}`} paneId={paneId} visible={visible} />}
     {/* the agent's own list: the chat's last row, just above the input card */}
     {state.source === "conversation" && currentTodos !== null && <TodoPanel items={currentTodos} open={todosOpen} onToggle={setTodosOpen} />}
     </div>

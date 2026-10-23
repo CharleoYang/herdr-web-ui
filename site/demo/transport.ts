@@ -763,6 +763,7 @@ async function route(url: URL, method: string, init: RequestInit | undefined, in
     return json(result);
   }
   if (path === "/api/pane/omo-tasks") return json({ tasks: [], runs: [] });
+  if (path === "/api/pane/omp-agents") return json({ agents: [] });
   if (path === "/api/pane/files") {
     const q = (query.get("q") ?? "").toLowerCase();
     return json({ files: DEMO_FILES.filter((file) => file.toLowerCase().includes(q)).slice(0, Number(query.get("limit") ?? 20)) });

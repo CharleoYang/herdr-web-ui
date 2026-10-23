@@ -9,6 +9,14 @@ between releases do not reach them. Remote-PC runtime bundles are versioned sepa
 
 ### Added
 
+- OMP Chat projects direct subagent journals into a separate, collapsible Subagents dock above
+  the composer. It shows names, recorded models, assignments, recent tool activity and submitted
+  results, refreshed every three seconds while visible, independently of the main transcript.
+  `yield` checkpoints, cancellation markers and saved errors/exits determine the displayed state;
+  missing terminal evidence is explicitly unknown, not proof of a running process. Reads are
+  bounded and cached (newest 64 direct children, 24,000 characters per assignment/result).
+  Current `tasks[].task` assignments also render in the original dispatch cards. This is read-only;
+  it neither starts nor controls agents and leaves the existing Claude/OmO task endpoint unchanged.
 - OMP Chat shows persisted `/btw` topics in a separate collapsible panel, including Markdown
   answers, follow-ups and saved completion/cancellation/error states. Visible panes refresh the
   sidecar independently every two seconds; the main transcript and Todo remain unchanged.
@@ -44,6 +52,16 @@ between releases do not reach them. Remote-PC runtime bundles are versioned sepa
   default and adjust its code/control contrast to the upstream AA checks.
 
 ### Fixed
+- Running work blocks start collapsed; an explicit user expansion remains open as new work arrives.
+- The pinned Todo drawer starts collapsed, preserving manual expansion when its progress updates.
+- The OMP Subagents dock hides submitted, failed, cancelled and interrupted children, disappearing
+  when no unfinished children remain; unknown children remain visible without claiming they are running.
+- Live OMP Ask dialogs accept the native model/directory status footer below the question instead
+  of falling back to raw terminal output. Actual output after a menu still invalidates stale prompts.
+- Live OMP Ask questions, option descriptions and expandable previews retain their original
+  Markdown from the matching unfinished native Ask call. Render tables, code, emphasis and
+  opt-in dollar-delimited inline math without changing ordinary chat or terminal-only prompts.
+  Preview links and copy controls stay outside answer buttons; native answer indices are unchanged.
 - Historical native Ask calls show every question and option as readable, read-only transcript
   content instead of clipped JSON, preserving descriptions, previews and cancellation output.
 - The bottom-pinned Todo panel points its caret up when collapsed and down when expanded,

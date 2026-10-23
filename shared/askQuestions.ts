@@ -1,8 +1,8 @@
 /**
  * The questions an agent asked the user with its question tool, read from the call's recorded
  * arguments: omp's `ask`, OmO's `ask_user_question` (`request_user_input` under a Codex model) and
- * Claude Code's `AskUserQuestion`. The chat shows a past call as the questions and options it
- * offered instead of their JSON; it is a record, never another way to answer.
+ * Claude Code's `AskUserQuestion`. History displays the recorded questions; a live OMP card
+ * may use the same source only after matching the active terminal menu's choices.
  */
 
 export interface AskedOption {
