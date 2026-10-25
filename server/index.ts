@@ -100,6 +100,7 @@ export interface ServerInstance {
   port: number;
   hostname: string;
   statusReady: Promise<void>;
+  focusReady: Promise<void>;
   alertsSettled: () => Promise<void>;
   /**
    * queues a create request's first message for a pane's agent, as POST /api/workspace/create and /api/tab/create do with
@@ -603,6 +604,7 @@ export function createServer(
     hostname,
     // both subscriptions live: a test may create a workspace and wait for its session-changed
     statusReady: Promise.all([collector.ready, collector.structureReady]).then(() => undefined),
+    focusReady: collector.focusReady,
     /** a create request's first message for a pane's agent, as the create routes queue it (server/core/pending.ts); for tests that run no agent */
     queueFirstMessage,
     alertsSettled: () => push.settled(),

@@ -110,6 +110,8 @@ To see two panes side by side, drag a workspace row, an **Agents** row, a tab, a
 a half's bar onto the left or right half of the pane area. A pick in the sidebar or the **Agents**
 list then opens in the active half only, and the focus stays there. Both halves can show the same
 tab, and you type in whichever half is active; the other half shows that tab at the active half's size.
+To rearrange a split tab instead, drop a pane's title on another pane's title in the same tab: the
+two panes trade places.
 
 
 **3. Take it with you.** Scan the installer's QR code with a phone signed in to the same Tailscale account, then install the app from the browser. See [On your phone](#on-your-phone).
