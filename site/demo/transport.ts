@@ -15,7 +15,7 @@
  * What does not: files, images, push and remote PCs, which need a real machine.
  */
 import type { AgentIntegration, AgentStatus, CommandForm, CommandOutcome, ConversationTurn, IntegrationsResponse, Machine, MachineEvent, OmoActivity, OmoTask, PaneBackgroundAgentDetail, PaneDirection, PaneFindMatch, PaneFindRequest, PanePlan, PaneResized, PaneSplit, PaneSwapped, PaneZoomed, PendingMessage, PlanStep, PluginActionResult, PluginActions, PluginActionsResponse, PortalStatus, SecuritySummary, ServerMessage, SessionSnapshot, SlashCommand, TabMoved, TabMovedToWorkspace, UsageReport, WorkspaceCreated, WorkspaceInfo, WorktreeEntry, WorktreeListing, WorktreeOpened, WorktreeRemoved } from "../../shared/protocol.ts";
-import type { RepoBranchComparison, RepoDiffFile, RepoDiffFileList, RepoDiffFilePatch, RepoDiffRefs, RepoDiffRepository, RepoDiffScope, SessionHistoryAgent, SessionHistoryResponse, SessionResumeResponse } from "../../shared/protocol.ts";
+import type { PushSubscriptionStatus, RepoBranchComparison, RepoDiffFile, RepoDiffFileList, RepoDiffFilePatch, RepoDiffRefs, RepoDiffRepository, RepoDiffScope, SessionHistoryAgent, SessionHistoryResponse, SessionResumeResponse } from "../../shared/protocol.ts";
 import { normalizeThemeChange, sharedPreferencesBody, type SharedPreferences } from "../../shared/preferences.ts";
 import { VOICE_DEFAULTS, type VoiceStatus } from "../../shared/voice.ts";
 import { isAgentName } from "../../shared/agent-name.ts";
@@ -26,7 +26,7 @@ import { neighborPane } from "../../src/lib/layoutMap.ts";
 import { closeLayoutPane, resizeLayout, setLayoutSplitRatio, splitLayout, swapLayoutPanes } from "../../src/lib/layoutTree.ts";
 import { rollupStatus } from "../../src/lib/status.ts";
 import { movedTabOrder } from "../../src/lib/tabOrder.ts";
-import { agentSkillRows, CHATS, PROMPT, SESSION_HISTORY_AGENTS, sessionHistoryRows, SPECS, type DemoSpec } from "./fixtures.ts";
+import { agentSkillRows, CHATS, DEMO_PUSH, PROMPT, SESSION_HISTORY_AGENTS, sessionHistoryRows, SPECS, type DemoSpec } from "./fixtures.ts";
 import { DemoHistory } from "./history.ts";
 import { screenAgent, screenCommand, screenFrame } from "./agentScreens.ts";
 import machinesFixture from "./fixtures/machines.json";
@@ -1138,7 +1138,7 @@ async function route(url: URL, method: string, init: RequestInit | undefined, in
     return error("demo", "Connect CLIProxyAPI from an installed server, not the public demo.", 409);
   }
   if (path === "/api/cliproxy/login" || path === "/api/cliproxy/callback") return error("demo", "Sign in from an installed server, not the public demo.", 409);
-  if (path === "/api/push" || path.startsWith("/api/push/")) return error("push_unavailable", "the demo sends no alerts", 404);
+  if (path === "/api/push" || path.startsWith("/api/push/")) return pushRoute(path, method, init);
   if (path === "/api/machines/settings") return json({ auto_update_bridges: true });
   if (path.startsWith("/api/machines/")) return error("demo", "remote PCs need a real machine", 404);
 
@@ -1790,6 +1790,67 @@ async function route(url: URL, method: string, init: RequestInit | undefined, in
   }
   if (path.startsWith("/api/fs/")) return error("not_found", "the demo has no files to open", 404);
   return error("demo", `${method} ${path} is not part of the demo`, 404);
+}
+
+// ---- web push -----------------------------------------------------------------------------------
+
+/**
+ * The workstation's push state, as a server keeps it (server/push.ts): the subscriptions this
+ * browser registered and how the last push to each went. The public demo has no PushManager, so
+ * the app never asks; a browser script that lends one (scripts/push-health-demo-regression.ts)
+ * hands over the fixtures of site/demo/fixtures.ts and sees the notice and its repair. No push
+ * ever goes out: a test push is answered as delivered and recorded as the last success.
+ */
+interface DemoSubscription { endpoint: string; keys: { p256dh: string; auth: string } }
+const pushRegistry = new Map<string, { keys: DemoSubscription["keys"]; status: PushSubscriptionStatus }>();
+const FIXTURE_STATUS = new Map([DEMO_PUSH.retired, DEMO_PUSH.refused].map((fixture) => [fixture.subscription.endpoint, fixture]));
+const sameKeys = (a: DemoSubscription["keys"], b: DemoSubscription["keys"]): boolean => a.p256dh === b.p256dh && a.auth === b.auth;
+
+function parseDemoSubscription(value: unknown): DemoSubscription | null {
+  const { endpoint, keys } = (value ?? {}) as { endpoint?: unknown; keys?: { p256dh?: unknown; auth?: unknown } };
+  if (typeof endpoint !== "string" || !endpoint.startsWith("https://") || typeof keys?.p256dh !== "string" || typeof keys.auth !== "string") return null;
+  return { endpoint, keys: { p256dh: keys.p256dh, auth: keys.auth } };
+}
+
+async function pushRoute(path: string, method: string, init: RequestInit | undefined): Promise<Response> {
+  if (path === "/api/push") return method === "GET" ? json({ public_key: DEMO_PUSH.publicKey }) : error("method_not_allowed", `${method} is not supported on ${path}`, 400);
+  if (path !== "/api/push/subscribe" && path !== "/api/push/test" && path !== "/api/push/status") return error("demo", `${method} ${path} is not part of the demo`, 404);
+  const body = (typeof init?.body === "string" ? JSON.parse(init.body) : {}) as { subscription?: unknown; endpoint?: unknown };
+  const gone = () => error("subscription_gone", "the push service retired this subscription; subscribe again", 410);
+  const notFound = () => error("subscription_not_found", "this device is not subscribed", 404);
+  if (path === "/api/push/subscribe" && method === "POST") {
+    const subscription = parseDemoSubscription(body.subscription);
+    if (!subscription) return error("invalid_subscription", "subscription needs an https endpoint and p256dh/auth keys", 400);
+    if (subscription.endpoint === DEMO_PUSH.retired.subscription.endpoint) return gone();
+    const fixture = FIXTURE_STATUS.get(subscription.endpoint);
+    const known = pushRegistry.get(subscription.endpoint);
+    pushRegistry.set(subscription.endpoint, { keys: subscription.keys, status: known && sameKeys(known.keys, subscription.keys) ? known.status
+      : fixture && sameKeys(fixture.subscription.keys, subscription.keys) ? fixture.status : { registered: true, last_success_at: null, last_failure_at: null, last_failure: null } });
+    return new Response(null, { status: 204 });
+  }
+  if (path === "/api/push/subscribe" && method === "DELETE") {
+    if (typeof body.endpoint === "string") pushRegistry.delete(body.endpoint);
+    return new Response(null, { status: 204 });
+  }
+  if (path === "/api/push/test" && method === "POST") {
+    if (typeof body.endpoint !== "string") return error("missing_endpoint", "endpoint is required", 400);
+    if (body.endpoint === DEMO_PUSH.retired.subscription.endpoint) return gone();
+    const known = pushRegistry.get(body.endpoint);
+    if (!known) return notFound();
+    known.status = { ...known.status, registered: true, last_success_at: new Date().toISOString() };
+    return new Response(null, { status: 204 });
+  }
+  if (path === "/api/push/status" && method === "POST") {
+    const subscription = parseDemoSubscription(body.subscription);
+    if (!subscription) return error("invalid_subscription", "subscription needs an https endpoint and p256dh/auth keys", 400);
+    const known = pushRegistry.get(subscription.endpoint);
+    if (known) return sameKeys(known.keys, subscription.keys) ? json(known.status, 200, { "cache-control": "no-store" }) : notFound();
+    // the retired fixture answers like a server's tombstone: its owner, holding its keys, and nobody else
+    const fixture = FIXTURE_STATUS.get(subscription.endpoint);
+    if (fixture && !fixture.status.registered && sameKeys(fixture.subscription.keys, subscription.keys)) return json(fixture.status, 200, { "cache-control": "no-store" });
+    return notFound();
+  }
+  return error("method_not_allowed", `${method} is not supported on ${path}`, 400);
 }
 
 const realFetch = window.fetch.bind(window);

@@ -50,6 +50,7 @@ import type {
   ProjectFavicon,
   PromptAnswer,
   PushKey,
+  PushSubscriptionStatus,
   PortalStatus,
   RemoteAccess,
   RemoveWorktreeRequest,
@@ -906,6 +907,21 @@ export async function unregisterPushSubscription(endpoint: string): Promise<void
 /** One confirmation push to this device only; ApiError 502 `push_failed` when the push service refused it. */
 export async function sendTestPush(endpoint: string): Promise<void> {
   await sendJson("/api/push/test", "POST", { endpoint });
+}
+
+/**
+ * POST /api/push/status: what the server knows of this browser's own subscription (the one its
+ * PushManager holds, never the selected PC's), once it has proven the keys. `null` when the
+ * server does not know it: another owner's, a stranger's or never registered are one answer.
+ * A server from before the route throws its 404 `not_found` (`routeMissing`).
+ */
+export async function fetchPushSubscriptionStatus(subscription: PushSubscriptionJSON): Promise<PushSubscriptionStatus | null> {
+  try {
+    return await (await sendJson("/api/push/status", "POST", { subscription })).json() as PushSubscriptionStatus;
+  } catch (error) {
+    if (error instanceof ApiError && error.code === "subscription_not_found") return null;
+    throw error;
+  }
 }
 
 export function fetchBridgeHealth(): Promise<BridgeHealth> { return getJson("/api/health?scope=bridge"); }

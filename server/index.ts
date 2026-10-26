@@ -344,9 +344,10 @@ export function createServer(
       // Signing a device's own alerts in is a preference of that device, so `watch` keeps
       // it. The endpoint it registers is https-only (server/push.ts), and that is the
       // protection: a watch device's subscription is delivered every status change anyway.
-      // /api/push/test stays with a session that can drive only because it is a mutation.
+      // /api/push/test stays with a session that can drive only because it is a mutation; /api/push/status
+      // is a POST only to keep the subscription out of the address, and answers the device about its own.
       // A watch device may report its own connection metadata, never terminal input or file data.
-      const ownPreferences = pathname === "/api/auth" || pathname === "/api/push/subscribe" || pathname === "/api/connection-diagnostics";
+      const ownPreferences = pathname === "/api/auth" || pathname === "/api/push/subscribe" || pathname === "/api/push/status" || pathname === "/api/connection-diagnostics";
       // a repository's changes are file contents too: the patch of a credential file is that file
       const repositoryDiff = /^\/api\/(?:machines\/[^/]+\/)?workspace\/diff\//.test(pathname);
       // earlier sessions carry their first prompts
