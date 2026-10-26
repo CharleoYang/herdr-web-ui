@@ -40,6 +40,7 @@ const BASE: Record<string, string> = {
   "Chat": "チャット",
   "Agent default": "エージェントの既定",
   "Phone & devices": "スマートフォンとデバイス",
+  "Access token": "アクセストークン",
   "Install app": "アプリをインストール",
 
   // ---- shortcuts (lib/shortcuts.ts labels) ----

@@ -2654,7 +2654,8 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   speed, input mode, Key bar, Clipboard from a pane, Use alongside herdr's own window, Follow
   herdr's focus), **Alerts**, **Voice input**, **Subscription usage**,
   **Shortcuts** (the platform-resolved global bindings), **Phone & devices** (the phone address,
-  Keep screen on, Install; then Portal, where the server offers it; then paired devices),
+  Keep screen on, Install; then Portal, where the server offers it; then paired devices; then
+  Access),
   **Remote PCs** (Add PC, Update PC bridges automatically; then **Show in sidebar**), **About** (Updates, herdr, the repository links). A button that points at
   Updates opens the dialog on About.
 - Every page is built from the same parts (`components/SettingsControls.tsx`). A group is an
@@ -2709,6 +2710,20 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   ([`Restart=on-failure`](https://github.com/cloudflare/cloudflared/blob/733bfb93/cmd/cloudflared/linux_service.go)),
   without limit. This differs on purpose: one restart, in the existing status row with no new
   control or setting, so a tunnel that keeps failing says so instead of looping.
+- Access, the last group of Phone & devices, is read-only: one row per fact the server reports
+  (`security` on `/api/health`), each a label, its dim sentence and the value in place of a
+  control (`.settings-fact`: `--fs-md`, `--fw-medium`, `--text-strong`, end-aligned, at most 45%
+  of the line). Access token Set or Not set; Pairing gate Not yet closed, Closed or Unavailable;
+  Listens on Loopback, Tailscale address or Other address; This connection No proxy seen (with a line saying a proxy that adds nothing looks the same), Through a proxy,
+  Through Tailscale, Through Tailscale Funnel or Unknown; Public internet Reachable (only seen on a
+  Funnel request) or Unknown. No colour, icon or summary line carries a meaning, and nothing reads
+  "safe", "secure" or "local only": a proxy or router in front can expose any bind, and only this
+  request's own path is known. Before the server answers the group is one Loading line; a server
+  that answers without the facts (an older one) and a check that failed are one sentence each, and
+  neither shows an earlier answer or rebuilds one from `auth` or a missing LAN warning. The open-LAN
+  warning stays where and as it was. Neither the Codex nor the Claude app shows such a summary, so
+  there is no app to follow; Agent of Empires' security page was the prompt, but its short summary
+  calls a loopback bind local-only, which this group does not.
 - The running versions are always written, since the sidebar carries none. Updates opens with
   **Running vX.Y.Z (commit)**: the server's version and commit, or the client's own build version
   before the server answers and where it names neither. While the server runs another version than

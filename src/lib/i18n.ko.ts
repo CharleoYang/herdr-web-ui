@@ -38,6 +38,7 @@ const BASE: Record<string, string> = {
   "Chat": "채팅",
   "Agent default": "에이전트 기본값",
   "Phone & devices": "폰 및 기기",
+  "Access token": "접속 토큰",
   "Install app": "앱 설치",
 
   // ---- shortcuts (lib/shortcuts.ts labels) ----
