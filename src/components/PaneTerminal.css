@@ -46,12 +46,15 @@
   overflow: auto;
 }
 
-/* a mirror wider than the screen, drawn folded to its width (lib/terminalFold.ts). The grid stays
-   under the folded rows for its input and its readers, unseen and clipped to the mount, so only the
-   folded rows pan, up and down. The helper textarea is not hidden: typing still reaches xterm */
+/* a grid wider than the screen that this browser does not size (a mirror, a watched pane, one held
+   under the keyboard at another device's size), drawn folded to its width (lib/terminalFold.ts). The
+   grid stays under the folded rows for its input and its readers, unseen and clipped to the mount, so
+   only the folded rows pan, up and down (a held grid is not adopted, so its mount scrolls from here).
+   The helper textarea is not hidden: typing still reaches xterm */
 .pane-terminal[data-folded] {
   position: relative;
   overflow-x: hidden;
+  overflow-y: auto;
 }
 
 .pane-terminal[data-folded] > .xterm {

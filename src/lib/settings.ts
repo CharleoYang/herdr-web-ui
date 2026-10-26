@@ -97,10 +97,12 @@ export interface Settings {
    *  Stored under this key, not 0.4.1's `terminalOsc52`: settings are saved whole, so a `false` there
    *  was written by any change at all, not chosen, and is ignored. */
   paneClipboard: boolean;
-  /** a mirrored pane (a Windows PC: no terminal attach) whose grid is wider than this screen is drawn
-   *  folded to the screen's width (lib/terminalFold.ts); false draws the grid at its original width, panned
-   *  sideways. Chosen from the pane menu, for this device; null until then: folded on a narrow screen
-   *  (MIRROR_WRAP_QUERY), the original width elsewhere. */
+  /** a pane whose grid this device does not size and is wider than this screen (a mirrored pane: a Windows
+   *  PC, no terminal attach; an attached pane it only watches, or holds under the keyboard, at the grid
+   *  another device gave the pty) is drawn folded to the screen's width (lib/terminalFold.ts); false draws
+   *  the grid at its original width, panned sideways. Chosen from the pane menu, for this device; null
+   *  until then: folded on a narrow screen (MIRROR_WRAP_QUERY), the original width elsewhere. The name and
+   *  its `ovis:mirror-wrap` key are kept from when only mirrors folded, so a choice made then still holds. */
   terminalMirrorWrap: boolean | null;
   /** a desktop tab out of use for a moment detaches its pane (PaneTerminal's release) and only watches it, so herdr's own
    *  window keeps the pane at its size; paused where the server cannot watch. Off: the tab keeps the pane and its size. */

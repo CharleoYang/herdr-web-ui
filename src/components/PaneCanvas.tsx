@@ -12,7 +12,7 @@ import { layoutCells, zoomMode } from "../lib/layoutMap.ts";
 import { layoutTopology, paneContextPress, paneFieldTarget, SOLO_PANE_QUERY, soloPane, splitPath, splitRatioAt } from "../lib/paneCanvas.ts";
 import { useT } from "../lib/i18n.ts";
 import { useSettings } from "../lib/settings.ts";
-import { MIRROR_WRAP_QUERY } from "../lib/terminalFold.ts";
+import { MIRROR_WRAP_QUERY, wideGridKey, wideGrids } from "../lib/terminalFold.ts";
 import { userErrorMessage, type UserError } from "../lib/userError.ts";
 import { useFocusTrap } from "../lib/useFocusTrap.ts";
 import { usePhoneSheetBack } from "../lib/sheetHistory.ts";
@@ -64,6 +64,8 @@ export function PaneCanvas({ snapshot, pane, selectedPaneId, onSelect, onChanged
   const { settings, update: updateSettings } = useSettings();
   const narrowScreen = useMediaQuery(MIRROR_WRAP_QUERY);
   const mirrorWraps = settings.terminalMirrorWrap ?? narrowScreen;
+  // attached panes drawn here at a grid this device does not size, wider than the screen (watched, or held under the keyboard)
+  const wideGrid = useSyncExternalStore(wideGrids.subscribe, wideGrids.snapshot, wideGrids.snapshot);
   const machineId = useMachineId();
   const apple = /Mac|iPhone|iPad/.test(navigator.platform);
   const coarse = useMediaQuery("(pointer: coarse)");
@@ -174,9 +176,10 @@ export function PaneCanvas({ snapshot, pane, selectedPaneId, onSelect, onChanged
         await api.zoomPane(target.pane_id, layout ? zoomMode(layout, target.pane_id) : "on");
         if (alive.current && latest.current.tabId === tabId && latest.current.selection === selection) onSelect(target.pane_id);
       }) },
-    // a mirror wider than the screen is folded to it (lib/terminalFold.ts); a full-screen program reads
-    // better at its own width, panned sideways. This device's choice, for every mirrored pane
-    ...(mirrored ? [{ id: "mirror-width", label: t(mirrorWraps ? "Original width" : "Wrap to screen"),
+    // a mirror, or a pane watched at another device's grid, wider than the screen is folded to it
+    // (lib/terminalFold.ts); a full-screen program reads better at its own width, panned sideways.
+    // This device's choice, for every such pane
+    ...(mirrored || wideGrid.has(wideGridKey(machineId, target.pane_id)) ? [{ id: "mirror-width", label: t(mirrorWraps ? "Original width" : "Wrap to screen"),
       icon: mirrorWraps ? MoveHorizontal : TextWrap,
       run: () => updateSettings({ terminalMirrorWrap: !mirrorWraps }) }] : []),
     { id: "close", label: t("Close pane"), icon: X, danger: true, run: () => requestClose(target) },

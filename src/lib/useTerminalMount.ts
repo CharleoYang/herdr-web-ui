@@ -28,7 +28,7 @@ import { narrowPaneFontSize } from "./narrowPaneFont.ts";
 import { finalStep, HERDR_MOUSE_SCROLL_LINES, wheelSteps } from "./wheelSteps.ts";
 import { createTouchWheelPacer } from "./touchWheelPacer.ts";
 import { attachTerminalWheel, canPanTerminalGrid } from "./terminalWheel.ts";
-import { createTerminalFold, hyperlinkAt } from "./terminalFold.ts";
+import { createTerminalFold, hyperlinkAt, wideGridKey, wideGrids } from "./terminalFold.ts";
 import { visibleTerminalInputBounds } from "./terminalViewport.ts";
 import type { PaneSubmitRetention } from "./paneSubmitRetention.ts";
 import type { ShortcutOverrides } from "./shortcutBindings.ts";
@@ -79,7 +79,7 @@ export interface TerminalMountDeps {
   machineId: string;
   machineSessions: MachineSessionRegistry | null;
   mirroredRef: RefObject<boolean | null>;
-  /** a mirrored grid wider than the screen is drawn folded to it (Settings.terminalMirrorWrap) */
+  /** a grid this browser does not size, wider than the screen, is drawn folded to it (Settings.terminalMirrorWrap) */
   mirrorWrapRef: RefObject<boolean>;
   modifiersRef: RefObject<StickyModifiers>;
   modifyOtherKeysRef: RefObject<number>;
@@ -390,17 +390,29 @@ export function useTerminalMount(deps: TerminalMountDeps): void {
       /** a fit the keyboard held back was to re-assert the grid (force): the catch-up fit does so */
       let heldForce = false;
       let panned = false;
-      // A mirror wider than the screen is drawn folded to its width (lib/terminalFold.ts): a Windows
-      // PC's pane keeps its size there and a phone cannot change it. The pane menu's "Original width"
-      // draws the grid as it is again. A watching phone folds it too: a mirror's grid is the PC's either way.
+      // A grid wider than the screen that this browser does not size is drawn folded to its width
+      // (lib/terminalFold.ts): a mirror (a Windows PC's pane keeps its size there and a phone cannot
+      // change it), an attached pane this device only watches (the pty's grid, which another device
+      // sized), or one held under the soft keyboard at another device's size until the keyboard goes.
+      // A phone that drives the pty is never folded: the program redraws at its width. Nor is a split's
+      // following half. A tap on folded rows opens a link or focuses the terminal, as on a mirror; it is
+      // no mouse click for the program (herdr's attach always reports the mouse, so that cannot tell a
+      // program that wants clicks): the pane menu's "Original width" draws the grid as it is again.
       // The folded rows keep the cursor's row in view, as the grid does: at the top while it fits there,
       // else at the bottom of the view (a cleared shell's prompt on the first row stays in sight).
       const followFold = (): void => {
         const bottom = fold.cursorBottom();
         if (bottom !== null) host.scrollTop = bottom <= host.clientHeight ? 0 : bottom - host.clientHeight;
       };
+      // this terminal's entry in the panes the pane menu offers the choice for
+      const wideOwner = {};
       const fold = createTerminalFold(term, host, {
-        wanted: () => mirrorWrapRef.current && fixedGridRef.current && !followRef.current,
+        foreign: () => (fixedGridRef.current || observeRef.current || keyboardHeld) && !followRef.current,
+        wrap: () => mirrorWrapRef.current,
+        onWide: (wide) => {
+          const current = paneRef.current;
+          wideGrids.set(wideOwner, wide && current ? wideGridKey(machineId, current) : null);
+        },
         onDrawn: () => {
           if (!panned) followFold();
           // the grid moved under the folded rows (lib/terminalFold.ts align): the input stays at its cursor
@@ -451,14 +463,15 @@ export function useTerminalMount(deps: TerminalMountDeps): void {
         if (!keyboardHoldsGrid(keyboardUp(), host.clientWidth, fittedWidth)) return false;
         keyboardHeld = true;
         heldForce ||= force;
-        // the pane may be at another device's grid: drawn as it is until the keyboard goes, when the
-        // catch-up fit takes the pane back (as a tap or key in the grid would)
+        // the pane may be at another device's grid: drawn as it is (folded, when wider than the screen)
+        // until the keyboard goes, when the catch-up fit takes the pane back (as a tap or key in the grid would)
         const shared = sharedGridRef.current;
         if (shared && !adopted() && (term.cols !== shared.cols || term.rows !== shared.rows)) {
           term.resize(shared.cols, shared.rows);
           heldForce = true;
         }
         panned = false;
+        fold.sync();
         followCursor();
         return true;
       };
@@ -471,6 +484,8 @@ export function useTerminalMount(deps: TerminalMountDeps): void {
         // scrollable: a view panned under the keyboard would stay panned past the grid's top
         host.scrollTop = 0;
         if (!adopted()) host.scrollLeft = 0;
+        // the grid is this browser's again: a grid held under the keyboard unfolds
+        fold.sync();
         syncInputViewport();
       };
       keyboardHoldsRef.current = keyboardHolds;
@@ -1107,7 +1122,7 @@ export function useTerminalMount(deps: TerminalMountDeps): void {
             if (pane && sizesPty()) socket.resize(pane, term.cols, term.rows, true);
           }
           panned = false;
-          // a mirror stays folded for a watching phone; an attached pty's grid is never folded
+          // watching, the pty's grid (another device's) folds when wider than the screen; interacting, it is fitted
           fold.sync();
           followCursor();
         } else if (message.type === "pane-geometry") {
@@ -1613,9 +1628,14 @@ export function useTerminalMount(deps: TerminalMountDeps): void {
         const across = touchX - first.clientX;
         touchX = first.clientX;
         touchY = first.clientY;
-        if (adopted() && (!scrollableMirror() || canPanTerminalGrid(host, delta))) {
-          // the pan owns the swipe now: history travel left from before it is not sent at the lift
+        // folded rows pan in the browser too; under the keyboard (a grid this phone drives, held at another
+        // device's size) only up to their edges, past which the swipe scrolls the program as before
+        const edged = scrollableMirror() || (fold.active && !adopted());
+        if ((adopted() || fold.active) && (!edged || canPanTerminalGrid(host, delta))) {
+          // the pan owns the swipe now: history travel left from before it is not sent at the lift, nor are
+          // the reports of it still queued
           touchPixels = 0;
+          touchPacer.cancel();
           panned = true;
           // folded rows already fit the width: only the rows pan
           host.scrollBy(fold.active ? 0 : across, delta);
@@ -1934,6 +1954,7 @@ export function useTerminalMount(deps: TerminalMountDeps): void {
         window.clearInterval(poll);
         observer.disconnect();
         fold.dispose();
+        wideGrids.set(wideOwner, null);
         if (resizeTimer !== null) window.clearTimeout(resizeTimer);
         host.removeEventListener("touchstart", onTouchStart, { capture: true });
         document.removeEventListener("touchstart", onPageTouchStart, { capture: true });

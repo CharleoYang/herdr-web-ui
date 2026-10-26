@@ -2,18 +2,45 @@ import type { IBufferCell, IBufferLine, ITheme, Terminal } from "@xterm/xterm";
 import { canPanTerminalGrid, forwardWheel } from "./terminalWheel.ts";
 
 /*
- * The folded view of a mirrored grid wider than its screen. A Windows PC's herdr has no terminal
- * attach, so the bridge repaints the pane at the pane's own size on that PC (server/mirror.ts) and
- * a phone cannot resize it: drawn as it is, every row ran off the right edge. The grid stays as it
- * is, unseen, so whatever reads it (the masked prompt, the agent's input row, Find) still reads what
- * herdr drew; this view draws its rows again as text that wraps at the screen's width, the way
- * Collie draws a pane read (AltanS/collie, web/src/components/ansi-output.tsx: SGR runs in a
- * pre-wrap block; no code is taken from it). A full-screen program's boxes and right-aligned bars
- * fold with the text: the pane menu's "Original width" draws the grid as it is again.
+ * The folded view of a grid wider than its screen that this browser does not size. A Windows PC's
+ * herdr has no terminal attach, so the bridge repaints the pane at the pane's own size on that PC
+ * (server/mirror.ts) and a phone cannot resize it; an attached pane a phone only watches, or holds
+ * under its keyboard, is drawn at the pty's grid, which another device sized. Drawn as it is, every
+ * row ran off the right edge. The grid stays as it is, unseen, so whatever reads it (the masked
+ * prompt, the agent's input row, Find) still reads what herdr drew (for an attached pane, what the
+ * attach stream drew: never a pane read); this view draws its rows again as text that wraps at the
+ * screen's width, the way Collie draws a pane read (AltanS/collie, web/src/components/ansi-output.tsx:
+ * SGR runs in a pre-wrap block; no code is taken from it). A full-screen program's boxes and
+ * right-aligned bars fold with the text: the pane menu's "Original width" draws the grid as it is again.
  */
 
 /** "Wrap to screen" until the user chooses: a touch screen, or a window as narrow as a phone's layout */
 export const MIRROR_WRAP_QUERY = "(pointer: coarse), (max-width: 768px)";
+
+/** A pane of a PC, as the wide grids below name it. */
+export const wideGridKey = (machineId: string, paneId: string): string => `${machineId}\n${paneId}`;
+const wideOwners = new Map<object, string>();
+let wideKeys: ReadonlySet<string> = new Set();
+const wideListeners = new Set<() => void>();
+/**
+ * The panes this page draws at a grid it does not size and that is wider than their mount (wideGridKey), one
+ * entry per terminal: the pane menu offers Wrap to screen / Original width for them, as for every mirrored pane.
+ */
+export const wideGrids = {
+  subscribe(listener: () => void): () => void {
+    wideListeners.add(listener);
+    return () => { wideListeners.delete(listener); };
+  },
+  snapshot: (): ReadonlySet<string> => wideKeys,
+  /** what `owner`'s terminal draws wide now: a pane's key, or null for nothing */
+  set(owner: object, key: string | null): void {
+    if ((wideOwners.get(owner) ?? null) === key) return;
+    if (key === null) wideOwners.delete(owner);
+    else wideOwners.set(owner, key);
+    wideKeys = new Set(wideOwners.values());
+    for (const listener of wideListeners) listener();
+  },
+};
 
 const ANSI = ["black", "red", "green", "yellow", "blue", "magenta", "cyan", "white",
   "brightBlack", "brightRed", "brightGreen", "brightYellow", "brightBlue", "brightMagenta", "brightCyan", "brightWhite"] as const;
@@ -128,18 +155,44 @@ const run = (text: string, style: string): string => !text ? "" : style ? `<span
 /** a cell that draws nothing: a space (or nothing) on the default background */
 const blank = (cell: IBufferCell): boolean => (cell.getChars() === "" || cell.getChars() === " ") && cell.isBgDefault() && cell.isInverse() === 0;
 
+/** The grid's cursor on a row, as xterm draws it: its column, and the shape ("none" draws nothing). */
+export interface FoldCursor { x: number; shape: "block" | "outline" | "bar" | "underline" | "none" }
+
+/** The class of the folded cell the cursor is on (one at most): the input stands under it. */
+export const FOLD_CURSOR_CLASS = "terminal-fold-cursor";
+
+/** The cursor's shape as xterm's DOM renderer drew it on `cell` (its xterm-cursor-* classes). */
+export function cursorShape(cell: Element): FoldCursor["shape"] {
+  for (const shape of ["block", "outline", "bar", "underline"] as const) if (cell.classList.contains(`xterm-cursor-${shape}`)) return shape;
+  return "none";
+}
+
+/** The inline CSS that draws the cursor over a cell's own: the theme's cursor colours, as the grid draws it. */
+const cursorStyle = (shape: FoldCursor["shape"], theme: ITheme): string => {
+  const color = theme.cursor ?? theme.foreground ?? "currentColor";
+  if (shape === "block") return `background:${color};color:${theme.cursorAccent ?? theme.background ?? "inherit"};`;
+  if (shape === "outline") return `box-shadow:inset 0 0 0 1px ${color};`;
+  if (shape === "bar") return `box-shadow:inset 2px 0 0 ${color};`;
+  if (shape === "underline") return `box-shadow:inset 0 -2px 0 ${color};`;
+  return "";
+};
+
 /**
  * One grid row as HTML, its cells grouped in runs drawn alike, without the blank cells it ends with:
  * herdr pads every row to the grid's width, and folded those would add an empty line to each row.
- * `scratch` is a cell to read into (xterm reuses it for every getCell).
+ * `scratch` is a cell to read into (xterm reuses it for every getCell). `cursor`, on the cursor's row:
+ * its cell is drawn on its own (FOLD_CURSOR_CLASS), the blank cells up to it included; past the last
+ * column (a write that filled the row, waiting to wrap) it stands on the last cell, as xterm draws it.
  */
-export function rowHtml(line: IBufferLine, cols: number, theme: ITheme, scratch: IBufferCell, minimumContrast = 1): string {
+export function rowHtml(line: IBufferLine, cols: number, theme: ITheme, scratch: IBufferCell, minimumContrast = 1, cursor: FoldCursor | null = null): string {
   let end = 0;
   for (let x = 0; x < cols; x++) {
     const cell = line.getCell(x, scratch);
     if (!cell) break;
     if (!blank(cell)) end = x + Math.max(1, cell.getWidth());
   }
+  const at = cursor === null || cursor.x < 0 ? -1 : Math.min(cursor.x, cols - 1);
+  if (at >= 0) end = Math.max(end, at + 1);
   let html = "";
   let text = "";
   let style = "";
@@ -149,6 +202,15 @@ export function rowHtml(line: IBufferLine, cols: number, theme: ITheme, scratch:
     // the second half of a wide glyph: the glyph itself was the cell before
     if (cell.getWidth() === 0) continue;
     const next = cellStyle(cell, theme, minimumContrast);
+    // the cursor's cell (or the wide glyph it is on), alone in a span of its own
+    if (cursor !== null && x <= at && at < x + Math.max(1, cell.getWidth())) {
+      html += run(text, style);
+      const drawnStyle = next + cursorStyle(cursor.shape, theme);
+      html += `<span class="${FOLD_CURSOR_CLASS}"${drawnStyle ? ` style="${drawnStyle}"` : ""}>${escapeHtml(cell.getChars() || " ")}</span>`;
+      text = "";
+      style = next;
+      continue;
+    }
     if (next !== style) {
       html += run(text, style);
       text = "";
@@ -219,8 +281,12 @@ export interface TerminalFold {
 export type FoldLinkTarget = { url: string } | { row: number; col: number };
 
 export interface TerminalFoldOptions {
-  /** the grid may be folded: a mirror this browser does not drive, and the user's choice is to wrap it */
-  wanted: () => boolean;
+  /** the grid is not this browser's to size: a mirror, a grid it watches, or one held at another device's size */
+  foreign: () => boolean;
+  /** the user's choice: Wrap to screen (true) or Original width */
+  wrap: () => boolean;
+  /** after each decision: whether the grid is foreign and wider than the host, folded or not (the menu offers the choice) */
+  onWide: (wide: boolean) => void;
   /** after each drawing: the caller keeps the prompt in view */
   onDrawn: () => void;
   /** a tap on the view, which xterm under it no longer receives: it focuses the terminal, as xterm's own tap does */
@@ -243,8 +309,8 @@ const caretAt = (x: number, y: number): { node: Node; offset: number } | null =>
   return range ? { node: range.startContainer, offset: range.startOffset } : null;
 };
 
-/** Folds `term`'s grid inside `host` while `wanted()` holds and the grid is wider than the host. */
-export function createTerminalFold(term: Terminal, host: HTMLElement, { wanted, onDrawn, onTap, onLink, onPan }: TerminalFoldOptions): TerminalFold {
+/** Folds `term`'s grid inside `host` while the grid is foreign, wider than the host, and the user wraps it. */
+export function createTerminalFold(term: Terminal, host: HTMLElement, { foreign, wrap, onWide, onDrawn, onTap, onLink, onPan }: TerminalFoldOptions): TerminalFold {
   const view = document.createElement("div");
   view.className = "terminal-fold";
   // the grid under it stays the terminal's accessible text; this is the same text drawn again
@@ -270,19 +336,45 @@ export function createTerminalFold(term: Terminal, host: HTMLElement, { wanted, 
   // cursor, and the input bounds keep them inside the part of the grid in view. Folded rows are taller
   // than the grid, so the grid moves down with them until its cursor row lies on the folded cursor row:
   // a preedit is drawn where the text it adds will show. It never reaches past the folded rows' end.
+  // A cursor the grid shows (an attached pane's: a mirror hides it) is drawn in the folded rows, and the
+  // grid moves down to the folded line it is on and sideways to its column, so the input stands on it even
+  // in an earlier part of a long folded row. Sideways it scrolls within .xterm (overflow hidden, as wide as
+  // the mount) as far as that goes, and moves by `left` for the rest: moved by `left` alone, .xterm's box
+  // would leave the input outside its own clip, and the browser would scroll it back.
   // It moves by `top` (.xterm is relative), not a transform: a transform would make the grid a stacking
   // context, and the preedit (xterm's helpers, z-index 5) would go under the folded rows drawn after it.
   const align = (): void => {
     const xterm = term.element;
     const grid = screen();
     const row = cursorRow();
-    if (!xterm || !grid || !row || term.rows === 0) return;
-    const gridCursorBottom = grid.getBoundingClientRect().top - xterm.getBoundingClientRect().top + (term.buffer.active.cursorY + 1) * grid.offsetHeight / term.rows;
+    if (!xterm || !grid || !row || term.rows === 0 || term.cols === 0) return;
+    const gridRect = grid.getBoundingClientRect();
+    const line = grid.offsetHeight / term.rows;
+    const gridCursorBottom = gridRect.top - xterm.getBoundingClientRect().top + (term.buffer.active.cursorY + 1) * line;
+    // the bottom of the folded line the cursor is on: the row's last one, or the caret's
+    let target = view.offsetTop + row.offsetTop + row.offsetHeight;
+    let scroll = 0;
+    let left = 0;
+    const caret = row.querySelector<HTMLElement>(`.${FOLD_CURSOR_CLASS}`);
+    if (caret) {
+      const rect = caret.getBoundingClientRect();
+      const foldLine = parseFloat(view.style.getPropertyValue("--fold-line")) || line;
+      const segment = Math.max(0, Math.floor((rect.top + rect.height / 2 - row.getBoundingClientRect().top) / foldLine));
+      target = view.offsetTop + row.offsetTop + Math.min(row.offsetHeight, (segment + 1) * foldLine);
+      // how far the grid's cursor cell is right of the caret with the grid unmoved (gridRect counts what this set last time)
+      // xterm's input stands on the last column while the cursor waits to wrap past it
+      const column = Math.min(term.buffer.active.cursorX, term.cols - 1);
+      const needed = gridRect.left - (parseFloat(xterm.style.left) || 0) + xterm.scrollLeft + column * grid.offsetWidth / term.cols - rect.left;
+      scroll = Math.max(0, Math.min(needed, xterm.scrollWidth - xterm.clientWidth));
+      left = scroll - needed;
+    }
     // where the grid stands unmoved: offsetTop counts the offset this set last time
     const base = xterm.offsetTop - (parseFloat(xterm.style.top) || 0);
     const most = view.offsetTop + view.offsetHeight - (base + xterm.offsetHeight);
-    const shift = Math.max(0, Math.min(most, view.offsetTop + row.offsetTop + row.offsetHeight - (base + gridCursorBottom)));
+    const shift = Math.max(0, Math.min(most, target - (base + gridCursorBottom)));
     xterm.style.top = shift > 0 ? `${Math.round(shift)}px` : "";
+    if (Math.abs(xterm.scrollLeft - scroll) >= 1) xterm.scrollLeft = scroll;
+    xterm.style.left = Math.round(left) !== 0 ? `${Math.round(left)}px` : "";
   };
   const draw = (start: number, end: number): void => {
     const theme = term.options.theme ?? {};
@@ -305,9 +397,13 @@ export function createTerminalFold(term: Terminal, host: HTMLElement, { wanted, 
       drawn.pop();
     }
     const buffer = term.buffer.active;
+    // the cursor where the grid draws one (its DOM renderer marks the cell, in the shape it has now)
+    const shown = term.element?.querySelector(".xterm-rows .xterm-cursor");
+    const cursorY = buffer.baseY + buffer.cursorY - buffer.viewportY;
     for (let y = Math.max(0, start); y <= Math.min(end, term.rows - 1); y++) {
       const line = buffer.getLine(buffer.viewportY + y);
-      const html = line ? rowHtml(line, term.cols, theme, scratch, term.options.minimumContrastRatio ?? 1) : "";
+      const cursor = shown && y === cursorY ? { x: buffer.cursorX, shape: cursorShape(shown) } : null;
+      const html = line ? rowHtml(line, term.cols, theme, scratch, term.options.minimumContrastRatio ?? 1, cursor) : "";
       if (html === drawn[y]) continue;
       drawn[y] = html;
       rows[y]!.innerHTML = html;
@@ -316,7 +412,9 @@ export function createTerminalFold(term: Terminal, host: HTMLElement, { wanted, 
     onDrawn();
   };
   const sync = (): void => {
-    const next = wanted() && wider();
+    const wide = foreign() && wider();
+    onWide(wide);
+    const next = wide && wrap();
     if (next === active) {
       if (active) draw(0, term.rows - 1);
       return;
@@ -333,13 +431,13 @@ export function createTerminalFold(term: Terminal, host: HTMLElement, { wanted, 
     view.replaceChildren();
     rows.length = 0;
     drawn.length = 0;
-    if (term.element) term.element.style.top = "";
+    if (term.element) { term.element.style.top = ""; term.element.style.left = ""; term.element.scrollLeft = 0; }
   };
   // xterm draws only the rows a write changed: those are redrawn here too, after it
   const rendered = term.onRender(({ start, end }) => {
     if (!active) return;
-    // the grid stopped being a mirror this browser folds (a pane switch, a role) since the last sync
-    if (!wanted()) sync();
+    // the grid became this browser's to size (a pane switch, a role, the keyboard gone) since the last sync
+    if (!foreign() || !wrap()) sync();
     else draw(start, end);
   });
   const resized = term.onResize(() => sync());
@@ -422,7 +520,7 @@ export function createTerminalFold(term: Terminal, host: HTMLElement, { wanted, 
       view.removeEventListener("wheel", wheel);
       view.remove();
       host.removeAttribute("data-folded");
-      if (term.element) term.element.style.top = "";
+      if (term.element) { term.element.style.top = ""; term.element.style.left = ""; term.element.scrollLeft = 0; }
     },
   };
 }
