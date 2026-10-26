@@ -28,6 +28,12 @@ const openSettings = async (page: Page): Promise<void> => {
   await page.keyboard.press("ControlOrMeta+Shift+Comma");
   await page.locator(".settings-dialog").waitFor();
 };
+/** Closes Settings by its X and waits for its step back off the history to land. */
+const closeSettings = async (page: Page): Promise<void> => {
+  await page.getByRole("button", { name: "Close settings", exact: true }).click();
+  await page.locator(".settings-dialog").waitFor({ state: "detached" });
+  await page.waitForFunction(() => (history.state as Record<string, unknown> | null)?.["ovis:settings"] === undefined);
+};
 /** The Settings entry of the current history state, as the app wrote it. */
 const entryOf = (page: Page): Promise<{ page: string | null; keyBar: boolean; depth: number } | null> =>
   page.evaluate(() => (history.state as Record<string, unknown> | null)?.["ovis:settings"] as never ?? null);
@@ -239,6 +245,103 @@ async function settingsSearch(browser: import("playwright-core").Browser, url: s
   assert.deepEqual(results.filter((result) => !result.pass), [], "every matrix row opens its page and group from the first Settings result");
   assert.deepEqual(stale.filter((result) => !result.pass), [], "no search steers a later opening of Settings");
   console.log(`PASS ${MATRIX.length} settings searches at 1440 and 390px land on their page and group; no stale request in en, ko, ja, zh`);
+}
+
+interface HeldSteps { holdSteps: (timers?: boolean) => void; releaseSteps: () => void; releaseTimers: () => void; heldSteps: () => number; landed: number }
+
+/**
+ * Settings closed and opened again before the browser lands the step back off the closed one's entry,
+ * as on a slow phone or a loaded runner (#2000): the app's address bar writes its address on that
+ * entry meanwhile, and the step is still Settings' own when it lands. The dialog stays open, and its
+ * entry is made again. The step is held here until Settings is open again, and the timers the page
+ * sets meanwhile start only once it has landed: a step that lands after Settings' landing deadline is
+ * no longer known for its own, and a slow runner must not reach that deadline before the step lands.
+ */
+async function lateCloseStep(browser: import("playwright-core").Browser, url: string): Promise<void> {
+  for (const width of [1440, 390] as const) {
+    const context = await browser.newContext(width === 390 ? { viewport: { width, height: 844 }, isMobile: true, hasTouch: true } : { viewport: { width, height: 900 } });
+    try {
+      await context.addInitScript((settings) => {
+        localStorage.setItem("ovis:settings", settings);
+        const go = history.go.bind(history), back = history.back.bind(history);
+        const held: (() => void)[] = [];
+        let holding = false;
+        const setTimer = window.setTimeout.bind(window), clearTimer = window.clearTimeout.bind(window);
+        // a timer set while held: its arguments until it starts, then the id it started with
+        const timers = new Map<number, Parameters<typeof setTimeout> | number>();
+        let holdingTimers = false, heldId = 0;
+        window.setTimeout = ((...args: Parameters<typeof setTimeout>) => {
+          if (!holdingTimers) return setTimer(...args);
+          timers.set(--heldId, args);
+          return heldId;
+        }) as typeof setTimeout;
+        window.clearTimeout = (id?: number) => {
+          const timer = id === undefined ? undefined : timers.get(id);
+          if (timer === undefined) clearTimer(id);
+          else { timers.delete(id!); if (typeof timer === "number") clearTimer(timer); }
+        };
+        const steps = window as unknown as HeldSteps;
+        steps.holdSteps = (timers = true) => { holding = true; holdingTimers = timers; };
+        steps.releaseSteps = () => { holding = false; for (const step of held.splice(0)) step(); };
+        steps.releaseTimers = () => {
+          holdingTimers = false;
+          for (const [id, timer] of timers) if (typeof timer !== "number") timers.set(id, setTimer(...timer));
+        };
+        steps.heldSteps = () => held.length;
+        steps.landed = 0;
+        addEventListener("popstate", () => { steps.landed += 1; });
+        // a browser picks a traversal's entry when it is asked for, and lands on it later: the held
+        // step goes to the entry it named then, whatever was pushed meanwhile
+        const navigation = (window as unknown as { navigation: { currentEntry: { index: number } | null; entries: () => { key: string }[]; traverseTo: (key: string) => { committed: Promise<unknown>; finished: Promise<unknown> } } }).navigation;
+        const later = (delta: number): void => {
+          const target = navigation.entries()[(navigation.currentEntry?.index ?? 0) + delta];
+          if (target) held.push(() => { const step = navigation.traverseTo(target.key); step.committed.catch(() => undefined); step.finished.catch(() => undefined); });
+        };
+        history.go = (delta?: number) => { if (holding) later(delta ?? 0); else go(delta); };
+        history.back = () => { if (holding) later(-1); else back(); };
+      }, JSON.stringify(SETTINGS));
+      const page = await context.newPage();
+      const errors: string[] = [];
+      page.on("pageerror", (error) => errors.push(error.message));
+      await page.goto(url);
+      await page.locator(".conn-live").waitFor({ state: "attached" });
+      await page.locator(".composer-text").focus();
+      await openSettings(page);
+      await page.evaluate(() => (window as unknown as HeldSteps).holdSteps());
+      await page.getByRole("button", { name: "Close settings", exact: true }).click();
+      await page.locator(".settings-dialog").waitFor({ state: "detached" });
+      await page.waitForFunction(() => (window as unknown as HeldSteps).heldSteps() === 1);
+      await openSettings(page);
+      const landed = await page.evaluate(() => (window as unknown as HeldSteps).landed);
+      await page.evaluate(() => (window as unknown as HeldSteps).releaseSteps());
+      await page.waitForFunction((before) => (window as unknown as HeldSteps).landed > before, landed);
+      await historyHolds(page, `the late step back at ${width}px`, () => (history.state as Record<string, { depth: number }> | null)?.["ovis:settings"]?.depth === 1);
+      assert.equal(await page.locator(".settings-dialog").count(), 1, `a Settings opened before the step back landed stays open (${width}px)`);
+      await page.evaluate(() => (window as unknown as HeldSteps).releaseTimers());
+      await closeSettings(page);
+      if (width === 390) {
+        // a phone's palette is a sheet: closed, it steps back off its own entry, and Settings opened
+        // before that step lands is no Back of the user's either
+        await page.keyboard.press("ControlOrMeta+Shift+K");
+        await page.locator(".command-palette input[type='search']").waitFor();
+        await page.evaluate(() => (window as unknown as HeldSteps).holdSteps(false));
+        await page.keyboard.press("Escape");
+        await page.locator(".command-palette").waitFor({ state: "detached" });
+        await page.waitForFunction(() => (window as unknown as HeldSteps).heldSteps() === 1);
+        await openSettings(page);
+        const before = await page.evaluate(() => (window as unknown as HeldSteps).landed);
+        await page.evaluate(() => (window as unknown as HeldSteps).releaseSteps());
+        await page.waitForFunction((count) => (window as unknown as HeldSteps).landed > count, before);
+        await historyHolds(page, "the palette's late step back", () => (history.state as Record<string, { depth: number }> | null)?.["ovis:settings"]?.depth === 1);
+        assert.equal(await page.locator(".settings-dialog").count(), 1, "a Settings opened before the palette's step back landed stays open");
+        await closeSettings(page);
+      }
+      assert.deepEqual(errors, []);
+    } finally {
+      await context.close();
+    }
+  }
+  console.log("PASS a Settings opened again before its closing step back lands stays open, at 1440 and 390px");
 }
 
 /**
@@ -902,6 +1005,7 @@ try {
         await desktop.close();
       }
 
+      await lateCloseStep(browser, url);
       await settingsSearch(browser, url);
       await heldGroupLanding(browser, devUrl);
     } finally {

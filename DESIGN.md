@@ -2665,6 +2665,10 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   an edge swipe) takes one step out and never leaves the app from inside Settings; the Back
   control, the X, Escape and the scrim take the same entries off. Beside the list, turning pages
   replaces the one entry. A reload steps out of the entries it finds; Forward reopens the page.
+  Settings opened before the step back off its own closed entries lands, or off a phone sheet's
+  closed entry (the palette's), stays open: those steps, and the address the app writes on the entry
+  left, are no Back of the user's. Its own step that lands over a second after it was asked for is
+  taken for one, as Back then may be the user's.
 - Pages, in order: **Appearance** (theme, dark theme, light theme, density, language, sidebar rows; then
   **Typography**: interface font size and interface font), **Chat**
   (panes open in, show thinking, chat width, chat font size and family; then
