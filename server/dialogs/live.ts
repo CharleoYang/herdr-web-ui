@@ -30,7 +30,7 @@ const OMO_EMPTY_BOX_RE = /^[❯›>]$/;
  * omp's status row (18.12.6 with `composer.shape: pi`): a spinner and the elapsed time while the agent waits, or
  * `π` at rest, then its ` · `-separated fields, e.g. ` ⠋ 0s · ⬢ Ask fixture · 🗑 …/home/fixture · ◫ 5.7%/131K ⟲`.
  */
-const OMP_STATUS_ROW_RE = /^(?:[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] \S+|π) · (?:[^·]+ · )+/u;
+const OMP_STATUS_ROW_RE = /^(?:[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] \S+|π) · /u;
 const OMP_PANEL_BOTTOM_RE = /^╰─+╯$/u;
 
 /**
