@@ -698,6 +698,29 @@ export interface InteractivePrompt {
   fallback?: true;
   /** Claude's plan file behind a plan card, whose whole text is then the body: opened in the file viewer */
   plan_file?: string;
+  /**
+   * The card's own words, which the bridge wrote rather than read off the agent's screen (an Esc
+   * offered as Close, a fallback card's title): for each such field above, its English as a key with
+   * its values (shared/card-text.ts), so the client shows it in the user's language. A field not
+   * named here is the agent's own text, shown as it is; an older bridge names none.
+   */
+  own_text?: {
+    title?: CardText;
+    question?: CardText;
+    body?: CardText;
+    /** by index into `options` */
+    labels?: Record<number, CardText>;
+    /** by index into `options` */
+    descriptions?: Record<number, CardText>;
+    /** by index into `steps` */
+    steps?: Record<number, CardText>;
+  };
+}
+
+/** Card text the bridge wrote itself: an English key of the client's dictionaries, and the values of its `{placeholders}`, which may be card text too. */
+export interface CardText {
+  key: string;
+  vars?: Record<string, string | number | CardText>;
 }
 
 export interface InteractivePromptStep {

@@ -21,6 +21,8 @@ import { PALETTE_KO } from "./i18n/palette.ko.ts";
  * braces keep their English names.
  */
 const BASE: Record<string, string> = {
+  "Goal": "목표",
+  "Waiting for your answer": "답변을 기다리는 중",
   "Back": "뒤로",
   "Scroll pane up": "패널 위로 스크롤",
   "Scroll pane down": "패널 아래로 스크롤",

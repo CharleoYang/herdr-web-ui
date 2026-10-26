@@ -290,7 +290,10 @@ To add a reader:
    `wide` (`omp-handoff-18.8.7-done-narrow.txt`). A set of result screens may get its own folder
    (`server/fixtures/hermes-results/help-120.txt`).
 2. Add the reader to `server/dialogs/<agent>.ts`, with an interaction plan if it moves a cursor,
-   or `kind: "result"` if it recognizes a finished result.
+   or `kind: "result"` if it recognizes a finished result. Words the card gets from the bridge
+   rather than from the screen (a title, the Close an Esc is offered as) go in as `own("…")`, with
+   their English key added to `shared/card-text.ts` and translated in `src/lib/i18n/composer.*.ts`:
+   the client shows them in the user's language (`own_text`), and the agent's own text as drawn.
 3. Switch the form to `dialog` with that reader's id.
 4. Test the reader against its fixtures in the agent's test file.
 
