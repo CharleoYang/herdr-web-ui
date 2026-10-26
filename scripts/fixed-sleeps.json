@@ -15,7 +15,6 @@
   "scripts/terminal-copy-regression.ts": 14,
   "scripts/terminal-input-regression.ts": 8,
   "scripts/terminal-pinch-regression.ts": 5,
-  "scripts/touch-long-press-demo-regression.ts": 2,
   "scripts/ui-regression.ts": 14,
   "server/attach-held.contract.test.ts": 5,
   "server/collector.ts": 1,

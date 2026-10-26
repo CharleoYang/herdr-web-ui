@@ -40,7 +40,8 @@ describe("splitTurn", () => {
     const closing = text("The report is ready.");
     const parts = [answer, check, closing];
     expect(splitTurn(parts)).toEqual({ work: [check], answer: [answer, closing] });
-    expect(workStartsOpen(true, parts)).toBe(true);
+    // a running work block starts folded here (d2fa011a), so the live turn opens nothing
+    expect(workStartsOpen(true, parts)).toBe(false);
     expect(workStartsOpen(false, parts)).toBe(false);
   });
 });

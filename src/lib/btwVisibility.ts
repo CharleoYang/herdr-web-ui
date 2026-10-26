@@ -7,15 +7,26 @@ const notify = (): void => { for (const listener of listeners) listener(); };
 
 function subscribe(listener: () => void): () => void {
   listeners.add(listener);
+  bindStorage();
   return () => { listeners.delete(listener); };
 }
 
-if (typeof window !== "undefined") window.addEventListener("storage", (event) => {
-  if (event.key === null) memory.clear();
-  else if (event.key.startsWith(PREFIX)) memory.delete(event.key);
+const onStorage = (event: Event): void => {
+  const key = (event as StorageEvent).key;
+  if (key === null) memory.clear();
+  else if (key.startsWith(PREFIX)) memory.delete(key);
   else return;
   notify();
-});
+};
+
+/** The window this module listens on: a page keeps one, a test file may install its own. */
+let bound: (Window & typeof globalThis) | null = null;
+function bindStorage(): void {
+  if (typeof window === "undefined" || bound === window) return;
+  bound?.removeEventListener("storage", onStorage);
+  window.addEventListener("storage", onStorage);
+  bound = window;
+}
 
 /** Local to this browser and pane. Hiding never deletes the agent's saved answers. */
 export function useBtwVisibility(machineId: string, paneId: string | null) {
