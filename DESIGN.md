@@ -1388,7 +1388,8 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   (`first_message_connection`, its socket's id from the first snapshot) while it has the pane attached,
   with the queued path's own checks (a draft in Claude's box holds it with `input_draft`; another
   agent, or another process or session of the same kind than the one launched for it, holds it with
-  `pending_target_changed`). When that page disconnects, reloads or leaves the pane first, it is held with a note and
+  `pending_target_changed`; the agent launched for it ending before it went holds it with
+  `first_message_launch_ended`). When that page disconnects, reloads or leaves the pane first, it is held with a note and
   waits for someone's Send now or Discard, as any draft does after a disconnect. The page never types
   it itself. When the PC answers that it could not queue the message (`first_message.error`) or
   answers without `first_message` (a bridge before it), the text goes into the new tab's message box

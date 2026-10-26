@@ -16,6 +16,8 @@ export const COMPOSER_ZH: Record<string, string> = {
   "Sent directly to this terminal. Never saved as a draft or queued.": "直接发送到此终端，不会存为草稿或加入待发队列。",
   "Only the first {count} of {total} files were taken.": "{total} 个文件中只取了前 {count} 个。",
   "Not sent: the page that started this agent left before it was ready. Send it now or discard it.": "未发送：启动此代理的页面在其就绪前已离开。请立即发送或丢弃。",
+  "Not sent: the agent started for this message has ended. Review the message before sending it.": "未发送：为这条消息启动的代理已结束。发送前请先检查消息。",
+  "Not sent: the pane's terminal or agent session changed. Review the message before sending it again.": "未发送：窗格的终端或代理会话已更改。再次发送前请先检查消息。",
   "New tab with an agent…": "带代理的新标签页…",
   "Skip question": "跳过问题",
   "Submit ({n})": "提交 ({n})",

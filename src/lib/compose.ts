@@ -65,7 +65,7 @@ export function insertNote(code: string, message: string): string {
 /** The server refused the message before any of it reached the pane: nothing was typed. */
 export function submitNotTyped(code: string): boolean {
   return ["agent_blocked", "read_only", "submit_timeout", "agent_not_ready", "pending_input_unsupported", "invalid_delivery", "invalid_submit_text",
-    "invalid_submit_id", "pending_limit", "pending_not_found", "pending_busy", "invalid_pending_action", "pending_target_changed", "pending_lease_lost", "not_attached", "input_not_ready", "attach_held", "pane_not_found", "retired_submit_id", "input_draft",
+    "invalid_submit_id", "pending_limit", "pending_not_found", "pending_busy", "invalid_pending_action", "pending_target_changed", "first_message_launch_ended", "pending_lease_lost", "not_attached", "input_not_ready", "attach_held", "pane_not_found", "retired_submit_id", "input_draft",
     // Claude Code's rewind dialog was on screen: nothing went into it
     "rewind_dialog_open",
     // refused by this view while the terminal holds input (PaneTerminal), before anything was sent
@@ -123,6 +123,8 @@ export function submitNote(code: string, message: string, agent?: string | null)
   if (code === "not_transmitted") return t("Not sent: the connection dropped before this message left. Send it again.");
   if (code === "capabilities_unknown") return t("Not sent: this PC has not said yet what it supports. Send it again.");
   if (code === "first_message_unattended") return t("Not sent: the page that started this agent left before it was ready. Send it now or discard it.");
+  if (code === "first_message_launch_ended") return t("Not sent: the agent started for this message has ended. Review the message before sending it.");
+  if (code === "pending_target_changed") return t("Not sent: the pane's terminal or agent session changed. Review the message before sending it again.");
   if (code === "disconnected" || code === "timeout") return t("Not confirmed: the pane did not confirm this message. Check the terminal before sending it again.");
   return t("Not sent: {message}", { message });
 }

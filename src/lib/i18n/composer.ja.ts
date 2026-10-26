@@ -16,6 +16,8 @@ export const COMPOSER_JA: Record<string, string> = {
   "Sent directly to this terminal. Never saved as a draft or queued.": "このターミナルに直接送信します。下書きや送信待ちには保存しません。",
   "Only the first {count} of {total} files were taken.": "{total} 個のファイルのうち先頭の {count} 個だけを受け取りました。",
   "Not sent: the page that started this agent left before it was ready. Send it now or discard it.": "未送信: このエージェントを起動したページが準備完了前に閉じられました。今すぐ送信するか破棄してください。",
+  "Not sent: the agent started for this message has ended. Review the message before sending it.": "未送信: このメッセージのために起動したエージェントは終了しました。送信する前にメッセージを確認してください。",
+  "Not sent: the pane's terminal or agent session changed. Review the message before sending it again.": "未送信: ペインのターミナルまたはエージェントセッションが変わりました。再送信する前にメッセージを確認してください。",
   "New tab with an agent…": "エージェント付きの新しいタブ…",
   "Skip question": "質問をスキップ",
   "Submit ({n})": "送信 ({n})",

@@ -782,7 +782,9 @@ export type ClientMessage =
    * that combination returns invalid_delivery before reserving or replaying an ID. No `clear_draft`.
    * Older peers ignore it. */
   | { type: "submit"; id: number; pane_id: string; text: string; payload: string; typed?: boolean; delivery?: "immediate" | "queue" | "hold"; clear_draft?: string; send_anyway?: true; resend_id?: string; resend_generation?: number }
-  | { type: "pending-action"; id: number; pane_id: string; pending_id: string; action: "steer" | "discard"; resend_generation?: number }
+  /** `launch_ended`: the client tells first_message_launch_ended apart; an older one, which would take that
+   * unknown code as maybe typed, is answered pending_target_changed for it */
+  | { type: "pending-action"; id: number; pane_id: string; pending_id: string; action: "steer" | "discard"; resend_generation?: number; launch_ended?: true }
   /** the terminal's input line typed into the pane without Enter (feature "terminal-insert"), answered
    * with an insert-result of the same id once herdr has the bytes. `text` is one line of the draft,
    * as written: a line break is refused (`unsafe_multiline`), since nothing reports whether the pane's

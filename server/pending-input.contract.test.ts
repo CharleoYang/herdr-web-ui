@@ -1728,16 +1728,17 @@ describe("a create request's first message", () => {
     const held = listed(page, pane, tab.first_message.id, "held");
     await page.attach(pane);
     const message = (await held).messages.find((item: PendingMessage) => item.id === tab.first_message.id);
-    expect(message.error.code).toBe("pending_target_changed");
+    // its own reason, apart from a terminal or session that changed
+    expect(message.error.code).toBe("first_message_launch_ended");
     // Send now refuses it, Discard ends it, and nothing was ever typed
-    page.send({ type: "pending-action", id: 21, pane_id: pane, pending_id: tab.first_message.id, action: "steer" });
-    expect(await page.action(21)).toMatchObject({ ok: false, code: "pending_target_changed" });
+    page.send({ type: "pending-action", id: 21, pane_id: pane, pending_id: tab.first_message.id, action: "steer", launch_ended: true });
+    expect(await page.action(21)).toMatchObject({ ok: false, code: "first_message_launch_ended" });
     page.send({ type: "pending-action", id: 22, pane_id: pane, pending_id: tab.first_message.id, action: "discard" });
     expect(await page.action(22)).toMatchObject({ ok: true });
     expect(readFileSync(log, "utf8")).toBe("");
   }, 30_000);
 
-  it("held from the start, still learns its launched agent: once that agent came up and quit, Send now answers pending_target_changed, not that it is not up yet", async () => {
+  it("held from the start, still learns its launched agent: once that agent came up and quit, Send now answers first_message_launch_ended, not that it is not up yet", async () => {
     const created = await herdrRpc<{ workspace: { workspace_id: string } }>("workspace.create", { label: "ovis-test-pending-first-held-quit", cwd: root, focus: false });
     const entry: (typeof active)[number] = { stop: () => {}, sockets: [], workspace: created.workspace.workspace_id }; active.push(entry);
     const server = createServer({ port: 0, stateDir: join(root, "state-first-held-quit") });
@@ -1770,14 +1771,14 @@ describe("a create request's first message", () => {
     globalThis.process.kill(launched.pid, "SIGKILL");
     await quit;
     await herdrRpc("pane.release_agent", { pane_id: pane, source: "manual", agent: "claude" });
-    device.send({ type: "pending-action", id: 31, pane_id: pane, pending_id: tab.first_message.id, action: "steer" });
-    expect(await device.action(31)).toMatchObject({ ok: false, code: "pending_target_changed" });
+    device.send({ type: "pending-action", id: 31, pane_id: pane, pending_id: tab.first_message.id, action: "steer", launch_ended: true });
+    expect(await device.action(31)).toMatchObject({ ok: false, code: "first_message_launch_ended" });
     device.send({ type: "pending-action", id: 32, pane_id: pane, pending_id: tab.first_message.id, action: "discard" });
     expect(await device.action(32)).toMatchObject({ ok: true });
     expect(readFileSync(log, "utf8")).toBe("");
   }, 30_000);
 
-  it("held from the start, says pending_target_changed instead of the page being gone once its launched agent quit, and Send now answers the same", async () => {
+  it("held from the start, says first_message_launch_ended instead of the page being gone once its launched agent quit, and Send now answers the same and keeps that reason", async () => {
     const created = await herdrRpc<{ workspace: { workspace_id: string } }>("workspace.create", { label: "ovis-test-pending-first-held-reason", cwd: root, focus: false });
     const entry: (typeof active)[number] = { stop: () => {}, sockets: [], workspace: created.workspace.workspace_id }; active.push(entry);
     const server = createServer({ port: 0, stateDir: join(root, "state-first-held-reason") });
@@ -1811,12 +1812,18 @@ describe("a create request's first message", () => {
     await herdrRpc("pane.release_agent", { pane_id: pane, source: "manual", agent: "claude" });
     // the card's reason follows the hold's: a connection attaching the pane drains it, as any event of the pane does
     const reason = device.wait((frame) => frame.type === "pending-messages" && frame.pane_id === pane
-      && frame.messages.some((item: PendingMessage) => item.id === tab.first_message.id && item.state === "held" && item.error?.code === "pending_target_changed"));
+      && frame.messages.some((item: PendingMessage) => item.id === tab.first_message.id && item.state === "held" && item.error?.code === "first_message_launch_ended"));
     const probe = new Socket(server.port); entry.sockets.push(probe);
     await probe.attach(pane);
     await reason;
-    device.send({ type: "pending-action", id: 41, pane_id: pane, pending_id: tab.first_message.id, action: "steer" });
-    expect(await device.action(41)).toMatchObject({ ok: false, code: "pending_target_changed" });
+    device.send({ type: "pending-action", id: 41, pane_id: pane, pending_id: tab.first_message.id, action: "steer", launch_ended: true });
+    expect(await device.action(41)).toMatchObject({ ok: false, code: "first_message_launch_ended" });
+    // an older client, which takes a code it does not know as maybe typed, is answered the code it knows
+    device.send({ type: "pending-action", id: 42, pane_id: pane, pending_id: tab.first_message.id, action: "steer" });
+    expect(await device.action(42)).toMatchObject({ ok: false, code: "pending_target_changed" });
+    // and only its answer says so: the card, which every connection sees, still gives the launch's end
+    const latest = device.seen.filter((frame) => frame.type === "pending-messages" && frame.pane_id === pane).at(-1);
+    expect(latest.messages.find((item: PendingMessage) => item.id === tab.first_message.id).error.code).toBe("first_message_launch_ended");
     expect(readFileSync(log, "utf8")).toBe("");
   }, 30_000);
 
@@ -1892,7 +1899,7 @@ describe("a create request's first message", () => {
     expect(f.bytes()).toBe(`${paste("MARKER")}\r`);
   }, 30_000);
 
-  it("queued for a launch that died before any event saw it, is held when an agent of the same kind the user starts comes up, never typed into it", async () => {
+  it("queued for a launch that died before any event saw it, is held as its launched agent having ended, and never typed into an agent of the same kind the user starts", async () => {
     const created = await herdrRpc<{ workspace: { workspace_id: string } }>("workspace.create", { label: "ovis-test-pending-first-launch-died", cwd: root, focus: false });
     const entry: (typeof active)[number] = { stop: () => {}, sockets: [], workspace: created.workspace.workspace_id }; active.push(entry);
     const server = createServer({ port: 0, stateDir: join(root, "state-first-launch-died") });
@@ -1923,7 +1930,8 @@ describe("a create request's first message", () => {
     const held = listed(device, pane, tab.first_message.id, "held");
     await herdrRpc("pane.report_agent", { pane_id: pane, source: "manual", agent: "claude", state: "working" });
     await learned(server, device, pane, "claude", before, entry.sockets);
-    expect((await held).messages.find((item: PendingMessage) => item.id === tab.first_message.id).error.code).toBe("pending_target_changed");
+    // the launch's own process ended before the pane's first event: that is the reason it is held (#1547)
+    expect((await held).messages.find((item: PendingMessage) => item.id === tab.first_message.id).error.code).toBe("first_message_launch_ended");
     // its page attaches and the agent rests: nothing is typed into the user's agent
     await page.attach(pane);
     await herdrRpc("pane.report_agent", { pane_id: pane, source: "manual", agent: "claude", state: "idle" });

@@ -50,6 +50,19 @@ describe("a pending row's refusal note", () => {
     }
   });
 
+  it("tells a first message whose launched agent ended apart from a changed terminal or session, in the reader's language (#1547)", () => {
+    for (const language of ["ko", "ja", "zh"] as const) {
+      const ended = translate(language, "Not sent: the agent started for this message has ended. Review the message before sending it.");
+      const changed = translate(language, "Not sent: the pane's terminal or agent session changed. Review the message before sending it again.");
+      const endedHtml = render("first_message_launch_ended", "The agent started for this message has ended; review the message before sending it", [language]);
+      expect(endedHtml).toContain(ended);
+      expect(endedHtml).not.toContain("has ended; review the message");
+      const changedHtml = render("pending_target_changed", "The pane's terminal or agent session changed; review the message before sending it again", [language]);
+      expect(changedHtml).toContain(changed);
+      expect(changedHtml).not.toContain("agent session changed; review the message");
+    }
+  });
+
   it("shows the still-open note as the composer wrote it, once", () => {
     const note = translate("ko", "Not sent: {command} is still open in the terminal.", { command: "/btw" });
     const html = render("still_open", note, ["ko"]);

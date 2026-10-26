@@ -16,6 +16,8 @@ export const COMPOSER_KO: Record<string, string> = {
   "Sent directly to this terminal. Never saved as a draft or queued.": "이 터미널로 바로 보냅니다. 초안이나 전송 대기열에 저장하지 않습니다.",
   "Only the first {count} of {total} files were taken.": "파일 {total}개 중 앞의 {count}개만 가져왔습니다.",
   "Not sent: the page that started this agent left before it was ready. Send it now or discard it.": "보내지 않음: 이 에이전트를 시작한 페이지가 준비되기 전에 떠났습니다. 지금 보내거나 버리세요.",
+  "Not sent: the agent started for this message has ended. Review the message before sending it.": "보내지 않음: 이 메시지를 위해 시작한 에이전트가 종료되었습니다. 보내기 전에 메시지를 확인하세요.",
+  "Not sent: the pane's terminal or agent session changed. Review the message before sending it again.": "보내지 않음: 패널의 터미널이나 에이전트 세션이 바뀌었습니다. 다시 보내기 전에 메시지를 확인하세요.",
   "New tab with an agent…": "에이전트와 함께 새 탭…",
   "Skip question": "질문 건너뛰기",
   "Submit ({n})": "제출 ({n})",
