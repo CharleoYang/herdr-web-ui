@@ -4238,7 +4238,8 @@ describe("PC management API", () => {
     let serve = () => new Response("{}");
     const peer = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => serve() });
     const url = `http://127.0.0.1:${peer.port}`;
-    const manager = { endpoint: (id: string) => id === "capped-remote" ? { url, token: "contract-token" } : undefined, trackTerminal: () => () => {} } as unknown as MachineManager;
+    const retried: string[] = [];
+    const manager = { endpoint: (id: string) => id === "capped-remote" ? { url, token: "contract-token" } : undefined, trackTerminal: () => () => {}, retryNow: (id: string) => { retried.push(id); } } as unknown as MachineManager;
     const ask = (machine: string, path: string, readOnly = false) => handleMachineRequest(new Request(`http://127.0.0.1/api/machines/${machine}/${path}`), manager, undefined, undefined, readOnly);
     const logged: string[] = [];
     const error = spyOn(console, "error").mockImplementation((...args: unknown[]) => { logged.push(args.join(" ")); });
@@ -4263,6 +4264,8 @@ describe("PC management API", () => {
       const offline = await ask("missing", "session");
       expect(offline.status).toBe(503);
       expect((await offline.json() as ApiError).error.code).toBe("machine_offline");
+      // and asked to try connecting now rather than after its retry delay
+      expect(retried).toEqual(["missing"]);
     } finally { error.mockRestore(); peer.stop(true); }
   });
   it("gates PC metadata, setup and SSE behind the existing token", async () => {
