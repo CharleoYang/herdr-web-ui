@@ -76,7 +76,7 @@ function hub() {
   const client = { data: connectionData({ deviceId: undefined, readOnly: false }), getBufferedAmount: () => 0, send: (encoded: string) => { frames.push(JSON.parse(encoded)); return 1; } } as unknown as Client;
   const status = createStatusHub({
     options: { stateDir: join(root, `state${++hubs}`), opencodeDb: store, machines: false },
-    devices: { gated: false, has: () => true } as never, preferences: { get: () => ({ muted_panes: [] }), subscribe: () => () => {} } as never,
+    devices: { gated: false, has: () => true, onPaired: () => {} } as never, preferences: { get: () => ({ muted_panes: [] }), subscribe: () => () => {} } as never,
     clients: new Set([client]), present: new Set(), pending: { status() {}, forget() {} } as never, drainPending() {}, holdPendingPane() {},
     usage: { invalidate() {} } as never, usageLogin: { ended: () => false } as never,
   });
