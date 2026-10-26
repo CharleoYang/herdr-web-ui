@@ -1998,6 +1998,28 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   failure count leave and end in an ellipsis. `· 1 failed` (`.work-block-failed`) is its own item
   and is never cut, because the fold hides the failed row; at the largest chat type on the
   narrowest phone the title wraps to a second line instead.
+- Pictures a tool returned (a Read of a screenshot, a browser screenshot; `tool.images`) sit at the
+  end of their line as small thumbnails (`.work-images`, `.work-image`: 2.5rem by 1.5rem, cover, a
+  hairline and `--radius-sm`), so a reader sees what the agent saw without opening anything.
+  A folded block's line carries every picture of its tools; opened, each row's line carries its
+  own, and an opened row shows them larger in its detail (`.chat-tool-images`) instead.
+  A line carries only pictures the browser keeps once fetched (Claude's and pi's, served
+  immutable), so a folded line never fetches one again; Codex's and OpenCode's are served
+  `no-store` and appear only in their opened row, as before.
+  The line keeps the latest four and puts the rest on one `+N` tile before them, so it never wraps;
+  the words are cut first.
+  On a coarse pointer each thumbnail and the tile is a `--touch-target` square, the line's own
+  height, and the line keeps the latest three.
+  Hovering a thumbnail, or reaching it with the keyboard, shows it larger over the page
+  (`.work-image-preview`: 20rem wide, 16:9, `--shadow-pop`) with the tool's id and its place
+  (`4 of 6`): above the thumbnail where that fits, else under it, else on the roomier side, always
+  inside the viewport, and it follows the thumbnail when the chat scrolls under it.
+  A touch has no hover and opens the viewer at once.
+  A click opens the image viewer on all of the line's pictures at that one, and the tile opens it at
+  the first.
+  A picture that fails to load leaves the line rather than showing a broken icon.
+  This follows the Claude app, whose folded `Read 2 files` line shows its pictures the same three
+  ways (small on the line, larger on hover, the viewer on a click); none of its code is used.
 - An OmO or omp `task` row opens to the tasks it starts (`.chat-task-calls`): each summary in
   `--text`, the agent as a hairline mono pill, the prompt in the bounded mono input box.
 - Todo updates the agent made one after another (`.work-todo-group`) are one row:
