@@ -936,7 +936,9 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   split tab is not offered it. The view follows the pane there, in whichever half of a split shows
   it, and this browser's unsent draft for it goes along (herdr gives the pane a new ID). The
   palette has the same move as one Move tab to {workspace} row per workspace, found by a query
-  only, as Settings pages are.
+  only, as Settings pages are. Rename tab is also a palette action and a rebindable shortcut with
+  no default key, as herdr's own `rename_tab` binding: it opens the same name field on the selected
+  pane's tab, and is not offered where the strip is left out (a lone tab on a cramped screen).
   The `⋯` beside the selected tab holds the same tab actions (the strip's `+` opens a shell tab, so
   New tab with agent… stays here) and also carries the open pane's actions, less Split and Zoom where a phone shows one pane at a time.
   Touch and narrow layouts keep that `⋯` in view; a desktop with a mouse (`hover: hover`,

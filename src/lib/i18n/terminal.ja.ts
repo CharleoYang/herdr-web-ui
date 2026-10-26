@@ -84,7 +84,6 @@ export const TERMINAL_JA: Record<string, string> = {
   "New terminal": "新しいターミナル",
   "New terminal failed: {reason}": "新しいターミナルを開けませんでした: {reason}",
   "Tab {n}": "タブ {n}",
-  "Rename tab": "タブの名前を変更",
   "Close tab": "タブを閉じる",
   "Tab name": "タブ名",
   "Actions for {tab}": "{tab} の操作",

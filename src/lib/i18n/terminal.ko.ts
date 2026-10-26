@@ -84,7 +84,6 @@ export const TERMINAL_KO: Record<string, string> = {
   "New terminal": "새 터미널",
   "New terminal failed: {reason}": "새 터미널 열기 실패: {reason}",
   "Tab {n}": "탭 {n}",
-  "Rename tab": "탭 이름 바꾸기",
   "Close tab": "탭 닫기",
   "Tab name": "탭 이름",
   "Actions for {tab}": "{tab} 작업",
