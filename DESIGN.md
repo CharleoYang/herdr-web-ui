@@ -2794,6 +2794,21 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   resize it to reveal the caret. No terminal pixels or input handling code are copied from Zed.
   Local wheel panning in an oversized mirror survives subsequent output. A tap or a touch movement
   that produces no history step sends no shared scroll request.
+- A mirrored grid wider than its mount (a Windows PC's pane, whose size a phone cannot change) is
+  drawn folded (`lib/terminalFold.ts`): its rows are drawn again as SGR runs in a pre-wrap block at
+  the mount's width, over the grid, which stays at the pane's size for input, the masked prompt, the
+  input row and Find; it moves down under the folded rows until its cursor row lies on theirs, so an
+  IME preedit shows where its text will. The apps this repo compares against all size their terminal
+  to the window, which a mirror cannot; this follows Collie (AltanS/collie, `ansi-output.tsx`), which
+  draws herdr's pane read the same way and never resizes the pane. No code is copied. A full-screen
+  program's boxes fold with the text, so the pane menu offers Original width (`terminalMirrorWrap`,
+  this device's, kept in its own `ovis:mirror-wrap` key so an older tab's save of `ovis:settings` cannot
+  erase it), the grid at its size panned sideways as before, and Wrap to screen back. Until the
+  user chooses, a narrow screen (a touch screen, or 768px and under) folds and a desktop does not. A
+  watching phone folds too; an attached pty and a mirror its mount fits are drawn as they are. Folded
+  rows keep the cursor's row in view and pan only up and down; a tap on a web address, a file path or
+  an OSC 8 hyperlink's label opens it as the grid's links do, any other tap focuses the terminal, and a wheel past their edges
+  scrolls the mirror's history at the chosen speed. Find's boxes are hidden while folded.
 - In Safari, a Hangul syllable being typed and a dictation hypothesis wait in the terminal's
   editor as a preedit, and the next key, paste or blur sends the corrected text once. Dictation
   replaces its hypothesis in place (`thi`, `this`, `this is a test`), so sending each one typed

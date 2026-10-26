@@ -20,7 +20,7 @@ import { measurableFontStack, TERMINAL_FONT_STACK } from "./fontFamily.ts";
 import type { Translate } from "./i18n.ts";
 import { isAppShortcut } from "./shortcuts.ts";
 import { keyboardHoldsGrid, keyboardUp } from "./keyboard.ts";
-import { fileUriPath, hyperlinkFilter, isWebLink, openWebLink, terminalFileLinkProvider } from "./terminalFileLinks.ts";
+import { fileUriPath, hyperlinkFilter, isWebLink, openWebLink, terminalFileLinkProvider, terminalFileLinks } from "./terminalFileLinks.ts";
 import { adjustTerminalGlyphs } from "./terminalGlyphs.ts";
 import { keepDeleteRepeatText, keyboardNeedsText, restoreDeleteRepeatCaret } from "./deleteRepeat.ts";
 import { pinchFontSize } from "./pinchFontSize.ts";
@@ -28,6 +28,7 @@ import { narrowPaneFontSize } from "./narrowPaneFont.ts";
 import { finalStep, HERDR_MOUSE_SCROLL_LINES, wheelSteps } from "./wheelSteps.ts";
 import { createTouchWheelPacer } from "./touchWheelPacer.ts";
 import { attachTerminalWheel, canPanTerminalGrid } from "./terminalWheel.ts";
+import { createTerminalFold, hyperlinkAt } from "./terminalFold.ts";
 import { visibleTerminalInputBounds } from "./terminalViewport.ts";
 import type { PaneSubmitRetention } from "./paneSubmitRetention.ts";
 import type { ShortcutOverrides } from "./shortcutBindings.ts";
@@ -78,6 +79,8 @@ export interface TerminalMountDeps {
   machineId: string;
   machineSessions: MachineSessionRegistry | null;
   mirroredRef: RefObject<boolean | null>;
+  /** a mirrored grid wider than the screen is drawn folded to it (Settings.terminalMirrorWrap) */
+  mirrorWrapRef: RefObject<boolean>;
   modifiersRef: RefObject<StickyModifiers>;
   modifyOtherKeysRef: RefObject<number>;
   narrowFontRef: RefObject<boolean>;
@@ -152,7 +155,7 @@ export interface TerminalMountDeps {
 }
 
 export function useTerminalMount(deps: TerminalMountDeps): void {
-  const { activeRef, barKeyRef, baseFontRef, cachedRef, cachedReleaseRef, cancelLeaveRef, cancelTouchRef, chatMountedRef, chatOutputRef, chatViewRef, clearModifiers, clipboardTimerRef, coarseRef, commitPendingText, composingRef, compositionCommitPendingRef, deferAttachRef, draftHeldForRef, draftPaneRef, endedRef, findOpenRef, fitRef, fittedRef, fixedGridRef, followCursorRef, followRef, frameGateRef, heldRef, hostRef, hyperlinksRef, keyboardHoldsRef, leaveRef, lineScroll, machineId, machineSessions, mirroredRef, modifiersRef, modifyOtherKeysRef, narrowFontRef, noteClipboard, observeRef, onChatSuggestion, onInputRowFrameRef, onRoleAckRef, onServerMessageRef, openFileRef, openWebRef, osc52AllowedRef, outputTargetRef, palette, paneRef, pendingEpochRef, pendingScopeRef, pendingSubmissionsRef, pinchBadgeRef, pinchStatusRef, presentationRef, presentedRef, reassertIfStaleRef, reattachRef, redrawGreeting, releaseAwayRef, releaseRef, releasedRef, retireOutputRef, secretRef, sessionRef, setChatInvalidation, setChatRefresh, setChatSent, setComposing, setConnected, setConnectedBefore, setConversationPushes, setDraft, setEnded, setHeld, setInputError, setInputReady, setObserving, setOutputError, setOutputReady, setParsedTarget, setReleased, setSecret, setSelectionQuote, setTerminal, setUnsupported, setWatching, sharedGridRef, shortcutSettings, shownRef, sizesPty, socketRef, stackRef, stalledRef, stopKeyRef, submitRetention, t, tRef, termRef, terminalFontSize, theme, updateSettings, uploadFileRef, watchingRef, wheelStateRef } = deps;
+  const { activeRef, barKeyRef, baseFontRef, cachedRef, cachedReleaseRef, cancelLeaveRef, cancelTouchRef, chatMountedRef, chatOutputRef, chatViewRef, clearModifiers, clipboardTimerRef, coarseRef, commitPendingText, composingRef, compositionCommitPendingRef, deferAttachRef, draftHeldForRef, draftPaneRef, endedRef, findOpenRef, fitRef, fittedRef, fixedGridRef, followCursorRef, followRef, frameGateRef, heldRef, hostRef, hyperlinksRef, keyboardHoldsRef, leaveRef, lineScroll, machineId, machineSessions, mirroredRef, mirrorWrapRef, modifiersRef, modifyOtherKeysRef, narrowFontRef, noteClipboard, observeRef, onChatSuggestion, onInputRowFrameRef, onRoleAckRef, onServerMessageRef, openFileRef, openWebRef, osc52AllowedRef, outputTargetRef, palette, paneRef, pendingEpochRef, pendingScopeRef, pendingSubmissionsRef, pinchBadgeRef, pinchStatusRef, presentationRef, presentedRef, reassertIfStaleRef, reattachRef, redrawGreeting, releaseAwayRef, releaseRef, releasedRef, retireOutputRef, secretRef, sessionRef, setChatInvalidation, setChatRefresh, setChatSent, setComposing, setConnected, setConnectedBefore, setConversationPushes, setDraft, setEnded, setHeld, setInputError, setInputReady, setObserving, setOutputError, setOutputReady, setParsedTarget, setReleased, setSecret, setSelectionQuote, setTerminal, setUnsupported, setWatching, sharedGridRef, shortcutSettings, shownRef, sizesPty, socketRef, stackRef, stalledRef, stopKeyRef, submitRetention, t, tRef, termRef, terminalFontSize, theme, updateSettings, uploadFileRef, watchingRef, wheelStateRef } = deps;
 
     // Where this terminal is: its pane, and whether it is active, presented, shown and not the chat view.
     // Counted on every commit that changes it: an explicit copy still waiting for herdr's text is
@@ -174,6 +177,13 @@ export function useTerminalMount(deps: TerminalMountDeps): void {
       // xterm activates a link whenever a press and its release land on it: a drag that selects
       // part of a path and a right click do too, and neither means "open this"
       const linkPressed = (event: MouseEvent): boolean => event.button === 0 && !term.hasSelection();
+      // an OSC 8 hyperlink's target: a file opens in the viewer, an http(s) address as a web link, and nothing else
+      const openHyperlink = (event: MouseEvent, uri: string): void => {
+        if (!linkPressed(event)) return;
+        const path = fileUriPath(uri);
+        if (path !== null) openFileRef.current?.(path);
+        else if (isWebLink(uri) && !openWebRef.current(uri, event.shiftKey)) openWebLink(uri);
+      };
       const term = new Terminal({
         convertEol: false,
         // a program's own DECSCUSR still changes the cursor
@@ -194,12 +204,7 @@ export function useTerminalMount(deps: TerminalMountDeps): void {
         // needs half that, and box, block and powerline glyphs keep their color.
         minimumContrastRatio: 4.5,
         linkHandler: {
-          activate: (event, uri) => {
-            if (!linkPressed(event)) return;
-            const path = fileUriPath(uri);
-            if (path !== null) openFileRef.current?.(path);
-            else if (isWebLink(uri) && !openWebRef.current(uri, event.shiftKey)) openWebLink(uri);
-          },
+          activate: openHyperlink,
           allowNonHttpProtocols: true,
         },
         // Option+drag selects on macOS, as Shift+drag does elsewhere; a plain drag is forced below
@@ -385,16 +390,62 @@ export function useTerminalMount(deps: TerminalMountDeps): void {
       /** a fit the keyboard held back was to re-assert the grid (force): the catch-up fit does so */
       let heldForce = false;
       let panned = false;
+      // A mirror wider than the screen is drawn folded to its width (lib/terminalFold.ts): a Windows
+      // PC's pane keeps its size there and a phone cannot change it. The pane menu's "Original width"
+      // draws the grid as it is again. A watching phone folds it too: a mirror's grid is the PC's either way.
+      // The folded rows keep the cursor's row in view, as the grid does: at the top while it fits there,
+      // else at the bottom of the view (a cleared shell's prompt on the first row stays in sight).
+      const followFold = (): void => {
+        const bottom = fold.cursorBottom();
+        if (bottom !== null) host.scrollTop = bottom <= host.clientHeight ? 0 : bottom - host.clientHeight;
+      };
+      const fold = createTerminalFold(term, host, {
+        wanted: () => mirrorWrapRef.current && fixedGridRef.current && !followRef.current,
+        onDrawn: () => {
+          if (!panned) followFold();
+          // the grid moved under the folded rows (lib/terminalFold.ts align): the input stays at its cursor
+          syncInputViewport();
+        },
+        onTap: () => { if (activeRef.current && !findOpenRef.current) term.focus(); },
+        // the grid's own links, read as its link providers read them (the policy of the linkHandler above)
+        onLink: (target, event) => {
+          if (!linkPressed(event)) return false;
+          if ("url" in target) {
+            if (!isWebLink(target.url)) return false;
+            if (!openWebRef.current(target.url, event.shiftKey)) openWebLink(target.url);
+            return true;
+          }
+          const buffer = term.buffer.active;
+          // a labelled OSC 8 hyperlink shows no address of its own: its target is the cell's
+          const uri = hyperlinkAt(term, buffer.viewportY + target.row, target.col);
+          if (uri !== null && (isWebLink(uri) || fileUriPath(uri) !== null)) {
+            openHyperlink(event, uri);
+            return true;
+          }
+          const y = buffer.viewportY + target.row + 1;
+          const x = target.col + 1;
+          const link = terminalFileLinks(buffer, y, (path, pressed) => { if (linkPressed(pressed)) openFileRef.current?.(path); })
+            .find(({ range: { start, end } }) => (y > start.y || (y === start.y && x >= start.x)) && (y < end.y || (y === end.y && x <= end.x)));
+          if (!link) return false;
+          link.activate(event);
+          return true;
+        },
+        onPan: () => { panned = true; },
+      });
       const followCursor = (): void => {
         host.toggleAttribute("data-adopted-grid", adopted());
         const screen = term.element?.querySelector<HTMLElement>(".xterm-screen");
         if (!(adopted() || keyboardHeld) || panned || !screen) return;
+        if (fold.active) {
+          followFold();
+          return;
+        }
         const row = screen.offsetHeight / term.rows;
         const cursorBottom = screen.offsetTop + (term.buffer.active.cursorY + 1) * row;
         const max = host.scrollHeight - host.clientHeight;
         host.scrollTop = cursorBottom <= host.clientHeight ? 0 : cursorBottom - row >= max ? max : cursorBottom - host.clientHeight;
       };
-      followCursorRef.current = () => { panned = false; followCursor(); };
+      followCursorRef.current = () => { panned = false; fold.sync(); followCursor(); };
       /** before a fit: true when the keyboard holds the grid, and the fit waits (`force`: it was to re-assert the grid) */
       const keyboardHolds = (force: boolean): boolean => {
         if (!keyboardHoldsGrid(keyboardUp(), host.clientWidth, fittedWidth)) return false;
@@ -1056,6 +1107,8 @@ export function useTerminalMount(deps: TerminalMountDeps): void {
             if (pane && sizesPty()) socket.resize(pane, term.cols, term.rows, true);
           }
           panned = false;
+          // a mirror stays folded for a watching phone; an attached pty's grid is never folded
+          fold.sync();
           followCursor();
         } else if (message.type === "pane-geometry") {
           // observe clients adopt the pty's grid; interact clients drive it and ignore this,
@@ -1082,6 +1135,8 @@ export function useTerminalMount(deps: TerminalMountDeps): void {
           }
           if (term.cols !== message.cols || term.rows !== message.rows) term.resize(message.cols, message.rows);
           panned = false;
+          // a grid that just became fixed at the size it already had: no resize says so to the fold
+          fold.sync();
           followCursor();
         } else if (message.type === "error") {
           if (message.code === "input_not_ready" || message.code === "input_failed") {
@@ -1386,6 +1441,8 @@ export function useTerminalMount(deps: TerminalMountDeps): void {
           // (a soft keyboard opening must not leave the prompt under it)
           if (adopted()) {
             panned = false;
+            // a rotation may fit the whole mirror, or no longer fit it
+            fold.sync();
             followCursor();
             return;
           }
@@ -1560,10 +1617,11 @@ export function useTerminalMount(deps: TerminalMountDeps): void {
           // the pan owns the swipe now: history travel left from before it is not sent at the lift
           touchPixels = 0;
           panned = true;
-          host.scrollBy(across, delta);
+          // folded rows already fit the width: only the rows pan
+          host.scrollBy(fold.active ? 0 : across, delta);
           return;
         }
-        if (scrollableMirror() && across !== 0) host.scrollBy(across, 0);
+        if (scrollableMirror() && !fold.active && across !== 0) host.scrollBy(across, 0);
         // xterm sends herdr one report per wheel event however far it went, and herdr scrolls a
         // few lines per report: one line-mode wheel per that many rows of finger travel keeps a
         // swipe as far as a slow drag, and the text under the finger
@@ -1875,6 +1933,7 @@ export function useTerminalMount(deps: TerminalMountDeps): void {
         pendingScopeRef.current = null;
         window.clearInterval(poll);
         observer.disconnect();
+        fold.dispose();
         if (resizeTimer !== null) window.clearTimeout(resizeTimer);
         host.removeEventListener("touchstart", onTouchStart, { capture: true });
         document.removeEventListener("touchstart", onPageTouchStart, { capture: true });
