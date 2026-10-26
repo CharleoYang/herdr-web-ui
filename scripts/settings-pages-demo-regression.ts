@@ -6,7 +6,7 @@ import { chromium, type Page } from "playwright-core";
 import panes from "../site/demo/fixtures/panes.json";
 import { buildDemoApp, buildDevelopmentDemoApp } from "./demo-build.ts";
 import { DEMO_FILE_PREVIEW_SCRIPT } from "./demo-file-preview.ts";
-import { openSettingsPage } from "./settings-page.ts";
+import { openSettingsPage, sheetRisen } from "./settings-page.ts";
 import { KO } from "../src/lib/i18n.ko.ts";
 import { JA } from "../src/lib/i18n.ja.ts";
 import { ZH } from "../src/lib/i18n.zh.ts";
@@ -27,9 +27,11 @@ const dialogOf = (page: Page) => page.getByRole("dialog", { name: "Settings", ex
 const openSettings = async (page: Page): Promise<void> => {
   await page.keyboard.press("ControlOrMeta+Shift+Comma");
   await page.locator(".settings-dialog").waitFor();
+  await sheetRisen(page);
 };
 /** Closes Settings by its X and waits for its step back off the history to land. */
 const closeSettings = async (page: Page): Promise<void> => {
+  await sheetRisen(page);
   await page.getByRole("button", { name: "Close settings", exact: true }).click();
   await page.locator(".settings-dialog").waitFor({ state: "detached" });
   await page.waitForFunction(() => (history.state as Record<string, unknown> | null)?.["ovis:settings"] === undefined);
@@ -125,6 +127,8 @@ const openPalette = async (page: Page, query: string): Promise<void> => {
   await input.fill(query);
   // the list drawn for this query: its rows or its empty line, never the last query's
   await page.waitForFunction((query) => document.querySelector<HTMLInputElement>(".command-palette input[type='search']")?.value === query, query);
+  // a phone's palette is a sheet too: its rows are clicked once it has risen
+  await sheetRisen(page, ".command-palette");
 };
 /** The page Settings shows, by the selected tab's id, and the group the focus is on. */
 const landing = async (page: Page, label: (name: string) => string): Promise<{ page: string | null; section: string | null; visible: boolean | null }> => {
@@ -174,8 +178,11 @@ async function settingsSearch(browser: import("playwright-core").Browser, url: s
         await page.locator(".conn-live").waitFor({ state: "attached" });
         await page.locator(".composer-text").focus();
         const close = async (): Promise<void> => {
+          await sheetRisen(page);
           await page.getByRole("button", { name: label("Close settings"), exact: true }).click();
           await page.locator(".settings-dialog").waitFor({ state: "detached" });
+          // the next row opens Settings again: its close's step back lands first
+          await page.waitForFunction(() => (history.state as Record<string, unknown> | null)?.["ovis:settings"] === undefined);
         };
         for (const [rowLanguage, query, expectedPage, expectedSection] of MATRIX) {
           if (rowLanguage !== language) continue;
@@ -899,6 +906,9 @@ try {
         await checkSelectArrows(page);
         await page.keyboard.press("Escape");
         await page.locator(".settings-dialog").waitFor({ state: "detached" });
+        // Settings is opened again below: its close's step back lands first, or, landing over a second late,
+        // it is taken for a Back and closes the Settings opened meanwhile (settingsHistory's landing deadline)
+        await page.waitForFunction(() => (history.state as Record<string, unknown> | null)?.["ovis:settings"] === undefined);
         for (const id of ["dracula", "nord", "vesper"]) {
           await openSettings(page);
           await openSettingsPage(page, "Appearance");
@@ -916,6 +926,7 @@ try {
           if (process.env.UI_EVIDENCE_DIR) await page.screenshot({ path: join(process.env.UI_EVIDENCE_DIR, `${id}-appearance-1280.png`), animations: "disabled" });
           await page.keyboard.press("Escape");
           await page.locator(".settings-dialog").waitFor({ state: "detached" });
+          await page.waitForFunction(() => (history.state as Record<string, unknown> | null)?.["ovis:settings"] === undefined);
           await page.locator(".composer-text").waitFor();
           if (process.env.UI_EVIDENCE_DIR) await page.screenshot({ path: join(process.env.UI_EVIDENCE_DIR, `${id}-chat-1280.png`), animations: "disabled" });
         }
@@ -937,6 +948,8 @@ try {
         await page.waitForFunction(() => document.documentElement.dataset.palette === "codex" && document.documentElement.dataset.theme === "light" && getComputedStyle(document.documentElement).colorScheme === "light");
         if (process.env.UI_EVIDENCE_DIR) writeFileSync(join(process.env.UI_EVIDENCE_DIR, "any-side.txt"), "PASS Light mode with lightTheme=dracula draws data-theme=dark, data-palette=dracula, color-scheme=dark.\nPASS injected lightTheme=not-a-theme reloads codex light, the default.\nPASS Dracula, Nord and Vesper do not pre-fill a sibling.\n");
         console.log("PASS dark-only themes on either side, distinct borders, no siblings, and unknown-id reload");
+        // the reload was made with Settings open: its step out of Settings' entry lands before Settings opens again
+        await historyHolds(page, "the reload with Settings open", () => (history.state as Record<string, unknown> | null)?.["ovis:settings"] === undefined);
         await openSettings(page);
         // beside the list, turning pages is one step however many are turned
         for (const name of ["Chat", "Shortcuts", "About"]) await openSettingsPage(page, name);
