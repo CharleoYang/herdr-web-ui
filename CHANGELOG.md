@@ -45,6 +45,15 @@ between releases do not reach them. Remote-PC runtime bundles are versioned sepa
   alter transcript records, permissions, task execution or agent state.
 
 ### Changed
+- A Windows PC's runtime bundle is five files instead of 22,989: Bun, the server as one bundled
+  `server/bridge.js`, the browser client as one `assets.bin`, and a manifest. The install no longer
+  unpacks a tree of ~21k files (frontend dependencies the built client already contains), which a
+  security suite treats as dropper behaviour and rolls back; that extraction was also the slowest,
+  most fragile step of connecting a PC. The archive is read into memory (`server/asset-archive.ts`)
+  and still answers with the same headers, precompressed sidecars, `OVIS_APP_NAME` rewrites and
+  404/406 rules as a checkout's `dist/`. The install's smoke test now runs the bridge itself
+  (`--version`), so a runtime without its client cannot be activated. Remote runtime `remote-v33`;
+  PCs on `remote-v32` reinstall once.
 - Merge upstream `main` through `c8002a10` (0.4.13, the Ovis rename), keeping the fork's OMP model
   switcher, BTW and Subagents docks, pinned Todo panel, realtime conversation and prompt pushes,
   roster stream gate and Chinese font preferences. The fork's browser storage keys follow the

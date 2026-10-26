@@ -19,6 +19,7 @@ import { REMOTE_BUNDLE_VERSION, type SshTarget } from "../shared/machines.ts";
 import type { BridgeDescriptor } from "./bridge.ts";
 import { shellQuote } from "./machine-security.ts";
 import { bundleFile, type InstallStage } from "./remote-bundle.ts";
+import { ASSETS_FILE } from "./asset-archive.ts";
 import type { SshConnection } from "./ssh.ts";
 import { psQuote } from "./powershell.ts";
 
@@ -224,8 +225,10 @@ export const windowsHost: RemoteHost = {
       "$herdr = \"$env:LOCALAPPDATA\\Programs\\Herdr\\bin\\herdr.exe\"",
       "if (-not (Test-Path $herdr)) { $herdr = (Get-Command herdr.exe -ErrorAction SilentlyContinue).Source }",
       "Write-Output 'Windows'; Write-Output $env:PROCESSOR_ARCHITECTURE; Write-Output $env:USERPROFILE; Write-Output $env:APPDATA; if ($env:XDG_CONFIG_HOME) { Write-Output $env:XDG_CONFIG_HOME } else { Write-Output '' }; Write-Output $env:LOCALAPPDATA; Write-Output \"$herdr\"",
-      `if (Test-Path "${WINDOWS_BUNDLE}\\bin\\bun.exe") { Write-Output 'bundle-ready' }`,
-      `if (Get-ChildItem "${WINDOWS_BUNDLE_BASE}" -Directory -Filter 'remote-v*' -ErrorAction SilentlyContinue | Where-Object { Test-Path "$($_.FullName)\\bin\\bun.exe" }) { Write-Output 'bundle-older' }`,
+      // a runtime is ready only with the bridge's own file set: Bun, its one file of code, and
+      // the client's one archive (asset-archive.ts)
+      `$d = "${WINDOWS_BUNDLE}"; $need = @('bin\\bun.exe','server\\bridge.js','${ASSETS_FILE}'); if ((@($need | Where-Object { Test-Path (Join-Path $d $_) })).Count -eq $need.Count) { Write-Output 'bundle-ready' }`,
+      `if (Get-ChildItem "${WINDOWS_BUNDLE_BASE}" -Directory -Filter 'remote-v*' -ErrorAction SilentlyContinue | Where-Object { $p = $_.FullName; (@('bin\\bun.exe','server\\bridge.js','${ASSETS_FILE}' | Where-Object { Test-Path (Join-Path $p $_) })).Count -eq 3 }) { Write-Output 'bundle-older' }`,
       WINDOWS_DESCRIPTORS,
     ].join("\n"));
     const [os, arch, home, appData, xdgConfigHome, localAppData, herdrPath, ...lines] = inspection.split("\n");
@@ -310,8 +313,18 @@ export const windowsHost: RemoteHost = {
         // Git's GNU tar on PATH interprets a drive-letter archive as a remote host.
         "  & \"$env:SystemRoot\\System32\\tar.exe\" -xzf \"$tmp\\bundle.tgz\" -C \"$tmp\\runtime\"; if ($LASTEXITCODE -ne 0) { throw 'Bundle extraction failed' }",
         "  & \"$tmp\\runtime\\bin\\bun.exe\" --version | Out-Null; if ($LASTEXITCODE -ne 0) { throw 'Bundled Bun does not run on this PC' }",
+        // the bridge's own self-check: its code loads and the client archive beside it parses
+        "  & \"$tmp\\runtime\\bin\\bun.exe\" \"$tmp\\runtime\\server\\bridge.js\" --version | Out-Null; if ($LASTEXITCODE -ne 0) { throw 'Bundled bridge does not run on this PC' }",
         `  $release = "${release}"`,
-        "  if (-not (Test-Path $release)) { Move-Item \"$tmp\\runtime\" $release }",
+        // A runtime that has just run keeps its directory briefly unrenamable on Windows: the image
+        // the smoke test started (and the scanner it wakes) holds it for a moment, and the move
+        // fails once with "Access to the path … is denied". Measured on a live PC: the second
+        // attempt 500 ms later succeeds. So the move is retried, never assumed.
+        "  if (-not (Test-Path $release)) {",
+        "    $moved = $false",
+        "    for ($i = 1; $i -le 40; $i++) { try { Move-Item \"$tmp\\runtime\" $release -ErrorAction Stop; $moved = $true; break } catch { Start-Sleep -Milliseconds 250 } }",
+        "    if (-not $moved) { throw \"Could not move the runtime into place: $($Error[0].Exception.Message)\" }",
+        "  }",
         `  $current = "${WINDOWS_BUNDLE}"`,
         "  if (Test-Path $current) { if ((Get-Item $current).Attributes -band [IO.FileAttributes]::ReparsePoint) { [IO.Directory]::Delete($current) } else { Move-Item $current \"$current-legacy-$([DateTimeOffset]::UtcNow.ToUnixTimeSeconds())\" } }",
         "  New-Item -ItemType Junction -Path $current -Target $release | Out-Null",
@@ -353,7 +366,7 @@ export const windowsHost: RemoteHost = {
       `set "HERDR_REMOTE_SESSION=${cmdValue(session ?? "")}"`,
       `set "OVIS_HERDR_BIN=${cmdValue(herdrPath)}"`,
       `set "HERDR_WEB_HERDR_BIN=${cmdValue(herdrPath)}"`,
-      `"${cmdValue(`${inspection.runtimeDir}\\bin\\bun.exe`)}" "${cmdValue(`${inspection.runtimeDir}\\server\\remote-entry.ts`)}" >> "${cmdValue(`${inspection.registryDir}\\${files.log}`)}" 2>&1`,
+      `"${cmdValue(`${inspection.runtimeDir}\\bin\\bun.exe`)}" "${cmdValue(`${inspection.runtimeDir}\\server\\bridge.js`)}" >> "${cmdValue(`${inspection.registryDir}\\${files.log}`)}" 2>&1`,
     ];
     await ssh.runPowerShell([
       "$ErrorActionPreference = 'Stop'",

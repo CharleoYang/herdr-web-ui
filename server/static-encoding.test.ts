@@ -12,6 +12,8 @@ async function fixture(check: (serve: (path: string, encoding?: string | null) =
   mkdirSync(join(root, "server")); mkdirSync(join(root, "dist", "assets"), { recursive: true });
   const body = 'console.log("synthetic static file");\n';
   writeFileSync(join(root, "server", "static.ts"), readFileSync(join(import.meta.dir, "static.ts")));
+  // static.ts reads the client archive from beside itself; the fixture carries that module too
+  writeFileSync(join(root, "server", "asset-archive.ts"), readFileSync(join(import.meta.dir, "asset-archive.ts")));
   writeFileSync(join(root, "dist", "index.html"), "<html>fixture shell</html>");
   writeFileSync(join(root, "dist", "sw.js"), body);
   writeFileSync(join(root, "dist", "assets", "legacy.js"), body);

@@ -5,9 +5,11 @@
  */
 import { createHash } from "node:crypto";
 import { chmodSync, cpSync, existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { REMOTE_BUNDLE_VERSION } from "../shared/machines.ts";
 import { architectures, NAME as PTY_SIDECAR } from "./pty-sidecar.ts";
+import { archiveFromDirectory, ASSETS_FILE, writeAssetArchive } from "../server/asset-archive.ts";
 
 const root = resolve(import.meta.dir, "..");
 const hostPlatform = `${process.platform}-${process.arch}`;
@@ -57,12 +59,32 @@ rmSync(stage, { recursive: true, force: true });
 mkdirSync(join(stage, "bin"), { recursive: true });
 mkdirSync(downloads, { recursive: true });
 const digest = (bytes: Uint8Array) => createHash("sha256").update(bytes).digest("hex");
+/**
+ * A runtime download, kept by checksum so a rebuild (or a retry after a dropped connection) fetches
+ * nothing twice: the Windows runtime alone is ~40 MB, and one slow link used to fail the whole
+ * build at its two-minute mark with nothing to show for it.
+ */
+const downloadCache = resolve(process.env["HERDR_BUNDLE_DOWNLOAD_CACHE"] ?? join(homedir(), ".cache", "herdr-web-ui", "bundle-downloads"));
 async function download(url: string, sha256: string): Promise<Uint8Array> {
-  const response = await fetch(url, { signal: AbortSignal.timeout(120_000) });
-  if (!response.ok) throw new Error(`Runtime download failed (${response.status}): ${url}`);
-  const bytes = new Uint8Array(await response.arrayBuffer());
-  if (digest(bytes) !== sha256) throw new Error(`Runtime checksum mismatch: ${url}`);
-  return bytes;
+  mkdirSync(downloadCache, { recursive: true });
+  const cached = join(downloadCache, sha256);
+  try {
+    const kept = readFileSync(cached);
+    if (digest(kept) === sha256) return new Uint8Array(kept);
+  } catch { /* not downloaded yet */ }
+  for (let attempt = 1; ; attempt++) {
+    try {
+      const response = await fetch(url, { signal: AbortSignal.timeout(30 * 60_000) });
+      if (!response.ok) throw new Error(`Runtime download failed (${response.status}): ${url}`);
+      const bytes = new Uint8Array(await response.arrayBuffer());
+      if (digest(bytes) !== sha256) throw new Error(`Runtime checksum mismatch: ${url}`);
+      writeFileSync(cached, bytes);
+      return bytes;
+    } catch (error) {
+      if (attempt === 3) throw error;
+      console.log(`${url}: attempt ${attempt} failed (${error instanceof Error ? error.message : String(error)}); retrying`);
+    }
+  }
 }
 function command(argv: string[], cwd = root): void {
   const result = Bun.spawnSync(argv, { cwd, timeout: 120_000 });
@@ -72,7 +94,12 @@ async function archive(): Promise<void> {
   const filename = `herdr-web-ui-${platform}.tgz`;
   const archive = join(output, filename);
   const temporaryArchive = archive + ".tmp";
-  const tar = Bun.spawn(["tar", "czf", temporaryArchive, "-C", stage, "."], { stdout: "inherit", stderr: "inherit" });
+  // macOS tags every file it downloaded with com.apple.provenance, and macOS tar carries that as
+  // AppleDouble `._name` members (or as PAX xattrs, which Windows' bsdtar turns into `._name`
+  // files on the PC): a five-file bundle arrived as ten, the odd names included - the shape a
+  // scanner looks for. COPYFILE_DISABLE stops the members, --no-xattrs stops the headers. The
+  // xattr itself cannot be deleted (provenance is protected), so neither may be left to chance.
+  const tar = Bun.spawn(["tar", "--no-xattrs", "-czf", temporaryArchive, "-C", stage, "."], { env: { ...process.env, COPYFILE_DISABLE: "1" }, stdout: "inherit", stderr: "inherit" });
   if (await tar.exited !== 0) throw new Error("Bundle archive failed");
   const sha256 = digest(readFileSync(temporaryArchive));
   renameSync(temporaryArchive, archive);
@@ -88,22 +115,30 @@ function verifyMachO(path: string): void {
 }
 
 try {
-  for (const dir of ["server", "shared", "integrations", "dist", "node_modules"]) cpSync(join(root, dir), join(stage, dir), { recursive: true, dereference: false, filter: (path) => !path.endsWith(".test.ts") });
-  mkdirSync(join(stage, "scripts"));
-  cpSync(join(root, "scripts", "install-gjc-integration.ts"), join(stage, "scripts", "install-gjc-integration.ts"));
   let bunVersion = Bun.version;
   if (windows) {
+    // Five files, not twenty-two thousand. A PC's security suite treats a mass extraction as
+    // dropper behaviour and rolls it back (asset-archive.ts), and every file it would scan is a
+    // second added to the install: the server is one file of bundled code, the client is one
+    // archive, Bun is one binary, and the integrations registry is two small files.
+    mkdirSync(join(stage, "server"), { recursive: true });
     const bunArchive = join(downloads, "bun.zip");
     writeFileSync(bunArchive, await download("https://github.com/oven-sh/bun/releases/download/bun-v1.4.2/bun-windows-x64.zip", WINDOWS_BUN_SHA));
     command(["unzip", "-qo", bunArchive, "-d", downloads]);
     cpSync(join(downloads, "bun-windows-x64", "bun.exe"), join(stage, "bin/bun.exe"));
-    // nothing native: without Node and node-pty the server finds no PTY sidecar and mirrors panes (server/pty/sidecar.ts)
-    rmSync(join(stage, "node_modules/@lydell"), { recursive: true, force: true });
-    // package-manager symlinks: an account without the symlink privilege cannot extract them, and nothing runs them
-    rmSync(join(stage, "node_modules/.bin"), { recursive: true, force: true });
+    // the entry and every module it imports, dependencies included: nothing reads node_modules
+    command([process.execPath, "build", join(root, "server/remote-entry.ts"), "--target=bun", "--outfile", join(stage, "server/bridge.js")], root);
+    writeAssetArchive(join(stage, ASSETS_FILE), archiveFromDirectory(join(root, "dist")));
+    // herdr's own integrations registry is read from the runtime directory by /api/integrations
+    cpSync(join(root, "integrations"), join(stage, "integrations"), { recursive: true, filter: (path) => !path.endsWith(".test.ts") });
     writeFileSync(join(stage, "package.json"), JSON.stringify({ type: "module", version: REMOTE_BUNDLE_VERSION }));
-    writeFileSync(join(stage, "bundle.json"), JSON.stringify({ version: REMOTE_BUNDLE_VERSION, platform, herdr: null, bun: "1.4.2", node: null, native_smoke_tested: false }));
+    writeFileSync(join(stage, "bundle.json"), JSON.stringify({ version: REMOTE_BUNDLE_VERSION, platform, herdr: null, bun: "1.4.2", node: null, assets: ASSETS_FILE, native_smoke_tested: false }));
   } else {
+    // a POSIX runtime runs the TypeScript tree beside its own Node and node-pty: only a Windows
+    // bundle is folded into one file of code and one archive (see above)
+  for (const dir of ["server", "shared", "integrations", "dist", "node_modules"]) cpSync(join(root, dir), join(stage, dir), { recursive: true, dereference: false, filter: (path) => !path.endsWith(".test.ts") });
+  mkdirSync(join(stage, "scripts"));
+  cpSync(join(root, "scripts", "install-gjc-integration.ts"), join(stage, "scripts", "install-gjc-integration.ts"));
     // Use a reproducible LTS runtime instead of the builder's Node: newer local
     // binaries can require extra system libraries absent on an otherwise supported PC.
     const nodeVersion = "v22.23.2";
@@ -158,6 +193,18 @@ try {
     else console.log(`${platform}: verified binary architecture and checksums; PTY execution is checked on the destination before activation`);
 
   }
+  // What the PC's installer writes, as a number: the point of the layout above is that a security
+  // suite never sees a mass extraction, so the build states it.
+  const staged: string[] = [];
+  const walk = (dir: string): void => {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const path = join(dir, entry.name);
+      if (entry.isDirectory()) walk(path); else staged.push(path.slice(stage.length + 1));
+    }
+  };
+  walk(stage);
+  staged.sort();
+  console.log(`${platform}: ${staged.length} files staged${staged.length <= 12 ? ` (${staged.join(", ")})` : ""}`);
   await archive();
 } finally {
   rmSync(stage, { recursive: true, force: true });

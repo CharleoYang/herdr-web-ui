@@ -8,11 +8,38 @@
  */
 
 import type { BunFile } from "bun";
-import { existsSync } from "node:fs";
+import { existsSync, statSync } from "node:fs";
 import { join, normalize } from "node:path";
+import { ASSETS_FILE, readAssetArchive } from "./asset-archive.ts";
 
 // A URL's pathname is not a file path: on Windows it is `/C:/...`, and spaces come percent-encoded.
 const DIST_DIR = join(import.meta.dir, "..", "dist");
+const ARCHIVE_PATH = join(DIST_DIR, "..", ASSETS_FILE);
+
+/**
+ * The client's files as one archive, when the bundle shipped one (asset-archive.ts). A checkout
+ * has none and is served from dist/. OVIS_ASSETS names another file: a test, or a build staged
+ * somewhere else. Read again when the file changes, so a rebuilt archive needs no restart.
+ */
+let archiveCache: { key: string; files: Map<string, Uint8Array<ArrayBuffer>> | null } | null = null;
+function clientArchive(): Map<string, Uint8Array<ArrayBuffer>> | null {
+  const path = process.env["OVIS_ASSETS"]?.trim() || ARCHIVE_PATH;
+  let key = `absent:${path}`;
+  try {
+    const stat = statSync(path);
+    key = `${path}:${stat.mtimeMs}:${stat.size}`;
+  } catch { /* no archive: the files on disk are the client */ }
+  if (archiveCache?.key === key) return archiveCache.files;
+  let files: Map<string, Uint8Array<ArrayBuffer>> | null = null;
+  try {
+    files = readAssetArchive(path);
+  } catch (error) {
+    // a broken archive must not take the server with it: dist/ is the honest fallback
+    console.error(`client archive ${path}: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  archiveCache = { key, files };
+  return files;
+}
 
 const MIME: Record<string, string> = {
   ".html": "text/html; charset=utf-8",
@@ -196,12 +223,18 @@ export function renameShell(html: string, name: string): string {
   return html.replace(APPLE_TITLE, (_, start: string, end: string) => `${start}${content}${end}`);
 }
 
+/** The manifest and the shell under OVIS_APP_NAME (and the manifest under the request's origin). */
+function rewritten(text: string, kind: "manifest" | "shell" | null, origin?: string): string {
+  if (kind === "manifest" && origin !== undefined) return manifestBody(text, origin);
+  const name = appName();
+  if (!name || !kind) return text;
+  return kind === "manifest" ? renameManifest(text, name) : renameShell(text, name);
+}
+
 /** The file as built, or the manifest and the shell under OVIS_APP_NAME. */
 async function body(file: BunFile, kind: "manifest" | "shell" | null, origin?: string): Promise<BunFile | string> {
-  if (kind === "manifest" && origin !== undefined) return manifestBody(await file.text(), origin);
-  const name = appName();
-  if (!name || !kind) return file;
-  return kind === "manifest" ? renameManifest(await file.text(), name) : renameShell(await file.text(), name);
+  if (kind === null && !appName()) return file;
+  return rewritten(await file.text(), kind, origin);
 }
 
 /** Accepted representations, with a server preference for br over gzip on ties.
@@ -218,16 +251,55 @@ function encodings(header: string | null | undefined): Array<"br" | "gzip" | "id
   return (["br", "gzip", "identity"] as const).filter(coding => weight(coding) > 0).sort((a, b) => weight(b) - weight(a));
 }
 
+const NOT_BUILT = "Ovis server is running, but the browser client has not been built yet.\nRun: bun run build\n";
+
+/** A request's path inside the archive, or null for `/`, a traversal, or nothing there. */
+function archived(archive: Map<string, Uint8Array<ArrayBuffer>>, relative: string): Uint8Array<ArrayBuffer> | null {
+  const key = relative.replace(/^[/\\]+/, "");
+  if (!key || key.startsWith("..")) return null;
+  return archive.get(key) ?? null;
+}
+
+/** The same decisions as the dist/ branch below, over the archive's bytes. */
+function serveArchived(archive: Map<string, Uint8Array<ArrayBuffer>>, pathname: string, relative: string,
+  acceptEncoding?: string | null, origin?: string): Response {
+  const file = archived(archive, relative);
+  if (file) {
+    const name = relative.replace(/^[/\\]+/, "");
+    if (pathname.startsWith("/assets/") && /\.(?:js|css)$/.test(pathname)) {
+      for (const encoding of encodings(acceptEncoding)) {
+        if (encoding === "identity") {
+          return new Response(file, { headers: { "content-type": contentTypeFor(name), "cache-control": IMMUTABLE_CACHE, vary: "Accept-Encoding", ...cspHeader() } });
+        }
+        const sidecar = archived(archive, `${name}.${encoding === "br" ? "br" : "gz"}`);
+        if (!sidecar) continue;
+        return new Response(sidecar, { headers: { "content-type": contentTypeFor(name), "cache-control": IMMUTABLE_CACHE, vary: "Accept-Encoding", ...cspHeader(), "content-encoding": encoding } });
+      }
+      return new Response(null, { status: 406, headers: { vary: "Accept-Encoding", ...cspHeader() } });
+    }
+    const kind = pathname === "/manifest.webmanifest" ? "manifest" : name === "index.html" ? "shell" : null;
+    const bytes = kind === null && !appName() ? file : new TextEncoder().encode(rewritten(new TextDecoder().decode(file), kind, origin));
+    return new Response(bytes, { headers: { "content-type": contentTypeFor(name), "cache-control": cacheControlFor(pathname), ...cspHeader(origin) } });
+  }
+  if (pathname.startsWith("/assets/") || pathname.startsWith("/icons/")) {
+    return new Response(null, { status: 404, headers: { "cache-control": REVALIDATE, ...cspHeader() } });
+  }
+  const index = archived(archive, "index.html");
+  if (!index) return new Response(NOT_BUILT, { status: 200, headers: { "content-type": "text/plain; charset=utf-8" } });
+  return new Response(new TextEncoder().encode(rewritten(new TextDecoder().decode(index), "shell", origin)),
+    { headers: { "content-type": "text/html; charset=utf-8", "cache-control": REVALIDATE, ...cspHeader(origin) } });
+}
+
 /** `origin` is what requestOrigin answers; a caller that has no request (a QA script) may leave it out. */
 export async function serveStatic(pathname: string, acceptEncoding?: string | null, origin?: string): Promise<Response> {
+  const relative = normalize(pathname).replace(/^(\.\.[/\\])+/, "");
+  // a bundle for a PC ships the client as one archive: asset-archive.ts says why
+  const archive = clientArchive();
+  if (archive) return serveArchived(archive, pathname, relative, acceptEncoding, origin);
   const indexPath = join(DIST_DIR, "index.html");
   if (!existsSync(indexPath)) {
-    return new Response(
-      "Ovis server is running, but the browser client has not been built yet.\nRun: bun run build\n",
-      { status: 200, headers: { "content-type": "text/plain; charset=utf-8" } },
-    );
+    return new Response(NOT_BUILT, { status: 200, headers: { "content-type": "text/plain; charset=utf-8" } });
   }
-  const relative = normalize(pathname).replace(/^(\.\.[/\\])+/, "");
   const candidate = join(DIST_DIR, relative);
   if (candidate.startsWith(DIST_DIR) && relative !== "/" && existsSync(candidate)) {
     const file = Bun.file(candidate);

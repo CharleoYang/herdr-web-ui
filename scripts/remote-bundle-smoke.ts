@@ -33,7 +33,10 @@ try {
     assert.equal(host.exitCode, 2, "the bundle's Rust PTY host runs and prints its usage");
     assert.match(host.stderr.toString(), /^pty-sidecar: usage:/);
   }
-  child = Bun.spawn([bun, join(bundle, "server/remote-entry.ts")], { env, stdout: "inherit", stderr: "inherit" });
+  // a bundle built for a PC carries the server as one file (bridge.js); an older one ships the
+  // TypeScript tree, and the smoke has to be able to run either
+  const entry = existsSync(join(bundle, "server/bridge.js")) ? join(bundle, "server/bridge.js") : join(bundle, "server/remote-entry.ts");
+  child = Bun.spawn([bun, entry], { env, stdout: "inherit", stderr: "inherit" });
   const { createHash } = await import("node:crypto");
   const socket = join(xdg, "herdr/sessions/smoke/herdr.sock");
   const described = join(home, ".config/herdr-web-ui/bridges", createHash("sha256").update(socket).digest("hex") + ".json");
