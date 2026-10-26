@@ -54,7 +54,6 @@ const BASE: Record<string, string> = {
   "Search models": "モデルを検索",
   "Couldn't load models": "モデルを読み込めませんでした",
   "No matching models": "一致するモデルがありません",
-  "Wait until the agent is idle to switch models": "エージェントが空くまで待ってから切り替えてください",
   "Switches this session only": "このセッションだけを切り替えます",
   "Back": "戻る",
   "Scroll pane up": "ペインを上にスクロール",

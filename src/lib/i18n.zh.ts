@@ -56,7 +56,6 @@ const BASE: Record<string, string> = {
   "Search models": "搜索模型",
   "Couldn't load models": "无法加载模型",
   "No matching models": "没有匹配的模型",
-  "Wait until the agent is idle to switch models": "等代理空闲后再切换模型",
   "Switches this session only": "只切换当前会话",
   "Back": "返回",
   "Scroll pane up": "向上滚动面板",

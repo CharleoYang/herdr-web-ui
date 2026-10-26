@@ -52,7 +52,6 @@ const BASE: Record<string, string> = {
   "Search models": "모델 검색",
   "Couldn't load models": "모델을 불러오지 못했습니다",
   "No matching models": "일치하는 모델이 없습니다",
-  "Wait until the agent is idle to switch models": "에이전트가 쉴 때까지 기다린 뒤 전환하세요",
   "Switches this session only": "이 세션만 전환합니다",
   "Back": "뒤로",
   "Scroll pane up": "패널 위로 스크롤",
