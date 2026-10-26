@@ -1708,9 +1708,10 @@ export const ChatView = memo(function ChatView({ paneId, presentationKey, finish
     let requested = false;
     const socket = promptSession?.socket;
     const pushes = (): boolean => socket ? socket.promptPushes(paneId) : promptPushes;
-    const sent = sentKeyRef.current;
     const current = (): boolean => !cancelled && document.visibilityState !== "hidden" && shownPane.current === paneId;
-    const showPrompt = (next: { prompt: InteractivePrompt | null; suggestion: string | null; restored: string | null; outcomes?: CommandOutcome[] }): void => {
+    // sentAtRequest: the send counter when the read went out. A read still in flight when the
+    // composer sends answers for the turn before it: its suggestion and outcomes are dropped.
+    const showPrompt = (next: { prompt: InteractivePrompt | null; suggestion: string | null; restored: string | null; outcomes?: CommandOutcome[] }, sentAtRequest: number): void => {
       // Keep one object per on-screen occurrence; a null state ends that occurrence.
       setPrompt((before) => {
         if (before === null || next.prompt === null || before.id !== next.prompt.id) return next.prompt;
@@ -1722,7 +1723,7 @@ export const ChatView = memo(function ChatView({ paneId, presentationKey, finish
       setOutcomes((before) => JSON.stringify(before) === JSON.stringify(nextOutcomes) ? before : nextOutcomes);
       onOutcomesRef.current?.(paneId, nextOutcomes.map((outcome) => outcome.id));
       noteCatalogChanges(nextOutcomes, catalogNoted.current, () => invalidatePaneCommands(paneId, machineId));
-      if (sentKeyRef.current !== sent) return;
+      if (sentKeyRef.current !== sentAtRequest) return;
       onSuggestionRef.current?.(paneId, next.suggestion);
       setRestored(next.restored);
       onRestoredRef.current?.(paneId, next.restored);
@@ -1735,11 +1736,12 @@ export const ChatView = memo(function ChatView({ paneId, presentationKey, finish
       reading = true;
       const started = revision;
       const epoch = promptSession?.epoch;
+      const sentAtRequest = sentKeyRef.current;
       try {
         const next = await fetchPanePromptState(paneId);
         failedReads = 0;
         if (current()) setPromptStale(false);
-        if (current() && revision === started && promptSession?.epoch === epoch) showPrompt(next);
+        if (current() && revision === started && promptSession?.epoch === epoch) showPrompt(next, sentAtRequest);
       } catch {
         failedReads += 1;
         // the card stays as it was (#1335): answering stays safe, the server re-reads the screen first
@@ -1748,7 +1750,9 @@ export const ChatView = memo(function ChatView({ paneId, presentationKey, finish
         reading = false;
         if (current()) {
           if (requested) void readPrompt();
-          else if (!pushes()) timer = window.setTimeout(() => void readPrompt(), PROMPT_POLL_MS);
+          // a push accelerates; it is never the only path: a pane the server keeps no prompt
+          // interest for would wait for a push that never comes
+          else timer = window.setTimeout(() => void readPrompt(), PROMPT_POLL_MS);
         }
       }
     };
@@ -1756,7 +1760,7 @@ export const ChatView = memo(function ChatView({ paneId, presentationKey, finish
       if (!current() || message.pane_id !== paneId || !pushes()) return;
       revision++;
       window.clearTimeout(timer);
-      showPrompt(message);
+      showPrompt(message, sentKeyRef.current);
     };
     onPromptUpdate?.(applyPush);
     const offMessage = socket?.on((message) => {
