@@ -269,6 +269,15 @@ const BASE: Record<string, string> = {
   // t3code ports (d)
   "Change PC": "PCを切り替え",
   "Selected": "選択中",
+  // Recover unsent text (components/UnsentText.tsx)
+  "Unsent text": "未送信のテキスト",
+  "Text you had not sent when herdr restarted. A new herdr gives pane IDs out again, so it waits here rather than in a pane it was not written for. Nothing here is sent.": "herdr が再起動したときに送信していなかったテキストです。新しい herdr はペイン ID を再び割り当てるため、別のペインに出ないようここに保管しています。ここからは何も送信されません。",
+  "Put in message box": "入力欄に入れる",
+  "Adds the text to this pane's message box. Nothing is sent.": "このペインの入力欄にテキストを追加します。送信はしません。",
+  "Message box": "入力欄",
+  "Terminal line": "ターミナルの入力行",
+  "Held message": "保留中のメッセージ",
+  "Held input": "保持した入力",
 };
 
 /** The parts JA is made of; src/lib/i18n.test.ts fails when a key is in two parts, since a spread keeps only the last. */

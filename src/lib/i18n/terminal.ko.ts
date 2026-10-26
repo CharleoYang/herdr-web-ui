@@ -120,4 +120,5 @@ export const TERMINAL_KO: Record<string, string> = {
   "Paste into the input line": "입력창에 붙여넣기",
   "Show keyboard": "키보드 보이기",
   "Hide keyboard": "키보드 숨기기",
+  "Recover unsent text": "보내지 않은 글 복구",
 };

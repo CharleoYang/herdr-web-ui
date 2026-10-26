@@ -88,6 +88,8 @@ const snapshot = (): SessionSnapshot => local.snapshot!;
 // Reloading the demo starts its in-memory server over, so IDs from the previous page cannot match.
 for (const machine of machines) if (machine.snapshot) {
   machine.snapshot.finish_epoch = crypto.randomUUID();
+  // each PC's one fictional herdr, the same on every load: what the demo stores stays its panes'
+  machine.snapshot.herdr_lifetime = `demo-${machine.id}`;
   for (const pane of machine.snapshot.panes) pane.finish_id = pane.agent_status === "done" ? 1 : 0;
 }
 /** pane id -> fixture key ("api", "web", …) */

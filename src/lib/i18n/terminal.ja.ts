@@ -120,4 +120,5 @@ export const TERMINAL_JA: Record<string, string> = {
   "Paste into the input line": "入力行に貼り付け",
   "Show keyboard": "キーボードを表示",
   "Hide keyboard": "キーボードを非表示",
+  "Recover unsent text": "未送信のテキストを復元",
 };

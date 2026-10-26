@@ -57,6 +57,13 @@ export type SessionSnapshot = Omit<HerdrSnapshot, "panes"> & {
   /** Random per bridge start and observed herdr socket/marker replacement, independently per PC. */
   finish_epoch?: string;
   /**
+   * An opaque digest of the herdr this snapshot was read from (server/finishes.ts): the same across
+   * server restarts, new once herdr itself is replaced and gives its pane IDs out again. Absent when
+   * the read could not prove one herdr, and from older servers. A browser keeps each pane's drafts
+   * and lens for the lifetime they were made in (src/lib/paneLifetime.ts).
+   */
+  herdr_lifetime?: string;
+  /**
    * Workspace-order evidence of the server that read this snapshot (server/order-sequence.ts):
    * `order_epoch` is that server's `web_ui.boot_id`, and `read_seq` the number of workspace moves
    * it had confirmed when this read started. Both or neither; a snapshot without them comes from an

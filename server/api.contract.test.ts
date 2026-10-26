@@ -2116,6 +2116,28 @@ describe("GET /api/session", () => {
     expect(body.snapshot.finish_epoch?.length).toBeGreaterThan(0);
     expect(body.snapshot.panes.every((pane) => Number.isSafeInteger(pane.finish_id))).toBe(true);
   });
+
+  it("names the herdr it read: the same from another server on it, another for another herdr, none it cannot prove", async () => {
+    const lifetime = async (origin: string): Promise<string | undefined> =>
+      ((await (await fetch(`${origin}/api/session`)).json()) as { snapshot: SessionSnapshot }).snapshot.herdr_lifetime;
+    const own = await lifetime(base());
+    expect(own).toMatch(/^[0-9a-f]{32}$/);
+    let identity: string | null = "a fake herdr";
+    const dirs = [mkdtempSync(join(tmpdir(), "ovis-lifetime-")), mkdtempSync(join(tmpdir(), "ovis-lifetime-"))];
+    const restarted = createServer({ port: 0, stateDir: dirs[0], machines: false });
+    const other = createServer({ port: 0, stateDir: dirs[1], machines: false, herdrIdentity: () => identity });
+    try {
+      expect(await lifetime(`http://127.0.0.1:${restarted.port}`)).toBe(own);
+      const fake = await lifetime(`http://127.0.0.1:${other.port}`);
+      expect(fake).toMatch(/^[0-9a-f]{32}$/);
+      expect(fake).not.toBe(own);
+      identity = null;
+      expect(await lifetime(`http://127.0.0.1:${other.port}`)).toBeUndefined();
+    } finally {
+      await Promise.all([restarted.stop(), other.stop()]);
+      for (const dir of dirs) rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("POST /api/pane/find viewport results", () => {

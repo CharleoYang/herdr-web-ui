@@ -120,4 +120,5 @@ export const TERMINAL_ZH: Record<string, string> = {
   "Paste into the input line": "粘贴到输入行",
   "Show keyboard": "显示键盘",
   "Hide keyboard": "隐藏键盘",
+  "Recover unsent text": "恢复未发送的文本",
 };
