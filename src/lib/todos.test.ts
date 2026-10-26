@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { parseTodoAnswer, parseTodoInput, todoCallSummary, turnTodos } from "./todos.ts";
+import { parseTodoAnswer, parseTodoInput, todoCallSummary, todoSnapshot, turnTodos } from "./todos.ts";
 
 const call = (name: string, input: unknown, output = "") => ({ kind: "tool" as const, name, summary: name, input: JSON.stringify(input), output });
 
@@ -84,5 +84,24 @@ describe("turnTodos", () => {
   it("lets the latest clear replace an earlier list", () => {
     expect(turnTodos([call("todo", { op: "init", items: ["A"] }), call("todo", { op: "clear" }, "Todo list cleared.")])).toEqual([]);
     expect(turnTodos([call("TodoWrite", { todos: [{ content: "A", status: "pending" }] }), call("TodoWrite", { todos: [] })])).toEqual([]);
+  });
+});
+
+describe("todoSnapshot", () => {
+  it("reads a whole-list tool's input, and an operations tool's answer only", () => {
+    expect(todoSnapshot(call("TodoWrite", { todos: [{ content: "Read", status: "completed" }, { content: "Fix", status: "in_progress" }, { content: "Ship", status: "pending" }] })))
+      .toEqual([{ label: "Read", phase: null, status: "completed" }, { label: "Fix", phase: null, status: "in_progress" }, { label: "Ship", phase: null, status: "pending" }]);
+    expect(todoSnapshot(call("update_plan", { plan: [{ step: "Plan", status: "completed" }] }))).toEqual([{ label: "Plan", phase: null, status: "completed" }]);
+    expect(todoSnapshot(call("todo", { op: "init", list: [{ phase: "Build", items: ["Parser"] }] }, OMP_ANSWER))?.map((item) => item.label)).toEqual(["Parser", "Panel", "Old flow", "E2E check", "Release run"]);
+    // an init's input is one operation, not the list as it stands
+    expect(todoSnapshot(call("todo", { op: "init", list: [{ phase: "Build", items: ["Parser"] }] }))).toBeNull();
+    expect(todoSnapshot(call("TodoWrite", { todos: [] }))).toEqual([]);
+  });
+
+  it("is null for an unreadable list and for other tools", () => {
+    expect(todoSnapshot({ ...call("TodoWrite", {}), input: "{not json" })).toBeNull();
+    expect(todoSnapshot(call("TodoWrite", { todos: "x" }))).toBeNull();
+    expect(todoSnapshot(call("TodoWrite", { todos: [{ status: "completed" }] }))).toBeNull();
+    expect(todoSnapshot(call("Bash", { todos: [] }))).toBeNull();
   });
 });

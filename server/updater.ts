@@ -1,6 +1,6 @@
 /** Build in a private checkout. The source tree and the serving build stay intact. */
 import { spawn } from "node:child_process";
-import { closeSync, constants, fstatSync, lstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, readdirSync, readSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { closeSync, constants, existsSync, fstatSync, lstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, readdirSync, readSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import { CHECKOUT_CHANGED_REASON, noInstalledNotes, noUpdateNotes, unmanagedUpdateStatus, type InstalledNotes, type UpdateCommand, type UpdateNotes, type UpdateStatus } from "../shared/update.ts";
 import { compareVersions, releaseNotes, releaseSummaries, SUMMARIES_FILE } from "./release-notes.ts";
@@ -416,18 +416,24 @@ export class Updater {
         attempted = revision;
         this.patch({ phase: "building", step: "download" });
         stage = mkdtempSync(join(this.options.stateDir, "release-"));
-        const run = (args: string[], timeout?: number) => runCommand(stage!, args, this.controller.signal, timeout);
+        // Network filesystems and low-memory builds can take minutes even without a network fetch.
+        const run = (args: string[], timeout = 10 * 60_000) => runCommand(stage!, args, this.controller.signal, timeout);
         await run(["git", "clone", "--quiet", "--no-checkout", "--no-hardlinks", this.options.root, "."]);
         await run(["git", "fetch", "--quiet", this.options.root, revision]);
         await run(["git", "checkout", "--quiet", "--detach", revision]);
         // The clone's origin must keep pointing at the user's chosen upstream.
         await run(["git", "remote", "set-url", "origin", await this.git("remote", "get-url", "origin")]);
         this.patch({ step: "dependencies" });
-        await run([process.execPath, "install", "--frozen-lockfile"], 180_000);
+        await run([process.execPath, "install", "--frozen-lockfile"]);
         this.patch({ step: "typecheck" });
-        await run([process.execPath, "run", "typecheck"], 120_000);
+        await run([process.execPath, "run", "typecheck"]);
         this.patch({ step: "build" });
-        await run([process.execPath, "run", "build"], 120_000);
+        await run([process.execPath, "run", "build"]);
+        // the release's Rust PTY host, checked against its manifest; without it the release runs the Node sidecar
+        if (existsSync(join(stage, "scripts", "pty-sidecar.ts"))) {
+          try { console.log((await run([process.execPath, "scripts/pty-sidecar.ts", "install"], 120_000))); }
+          catch (error) { console.error("Rust PTY host install failed; the release uses the Node PTY sidecar", error); }
+        }
         const reason = await this.sourceBlock();
         if (reason) throw new Error(reason);
         this.controller.signal.throwIfAborted();

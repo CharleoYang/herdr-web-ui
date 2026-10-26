@@ -30,18 +30,28 @@ export interface AppActions {
    * else the selected pane's. Nothing happens without a workspace to add the tab to.
    */
   openNewTab: (target?: { machineId: string; workspaceId: string }) => void;
+  /** The inline name field of the selected pane's tab, as the tab menu's Rename opens it; nothing while the tab strip is not drawn. */
+  renameTab: () => void;
   /**
    * A shell tab in the same workspace, at once and with no dialog, as herdr's own new tab: the
    * new pane opens unless another one was opened meanwhile. Rejects with herdr's refusal.
    */
   openTerminalTab: (target?: { machineId: string; workspaceId: string }) => Promise<void>;
   /**
+   * A one-pane tab into a new tab at the end of another workspace on its PC, its process running.
+   * Where its pane is shown, in either half of a split, the app follows it there, and what was typed
+   * into it and not sent goes with it. Rejects with herdr's refusal; `notice` also says it over the
+   * pane, for a caller with no line of its own (the palette, which has closed).
+   */
+  moveTabToWorkspace: (target: { machineId: string; tabId: string; workspaceId: string; notice?: boolean }) => Promise<void>;
+  /**
    * The earlier sessions of a workspace's folder (components/SessionHistory.tsx): the named
    * workspace's, listed for `agent` first (a pane's, or the row's), else the selected pane's
    * workspace and agent. A `pane` request lists that agent or opens nothing (lib/sessionHistory.ts
    * sessionHistoryListAgent). Nothing opens without a workspace.
    */
-  openSessionHistory: (target?: { machineId: string; workspaceId: string; agent?: string | null; scope?: "pane" | "workspace" }) => void;
+  /** `paneId`: the pane the list is asked for from (a Claude list is that pane's store); else the selected pane, else the first in tab order */
+  openSessionHistory: (target?: { machineId: string; workspaceId: string; agent?: string | null; scope?: "pane" | "workspace"; paneId?: string }) => void;
   /** the palette, blank or opened on `query` (a `>` prefix keeps the actions alone) */
   openPalette: (query?: string) => void;
   /** A pane this page started an agent in opens in an agent's lens, whatever its first snapshot says. */

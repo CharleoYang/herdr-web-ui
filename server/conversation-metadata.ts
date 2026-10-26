@@ -1,6 +1,8 @@
 import { isContextClear, piMessage } from "./transcript-records.ts";
 import { piContextWindow } from "./pi-models.ts";
 import { cmdContextWindow } from "./cmd.ts";
+import { copilotRecords } from "./copilot.ts";
+import { museModel } from "./muse.ts";
 import type { ConversationMetadata, ConversationResponse } from "../shared/protocol.ts";
 
 type RecordValue = Record<string, unknown>;
@@ -19,13 +21,14 @@ const CLAUDE_LONG_WINDOW = 1_000_000;
  * states no window either, so it is looked up in the catalog pi reads its own providers from
  * (`piContextWindow`); unresolved, no ring is drawn rather than one drawn on a guess.
  *
- * `piProvider` is passed only for pi, and its presence is what asks the catalog.
+ * `piProvider` is passed only for pi, and its presence is what asks the catalog: the one in
+ * `piAgentDir`, the pane's own, or the bridge's when it is not given. A null dir resolves nothing.
  */
-function contextOf(used: number, model: string | null, window: number | null, before: ConversationMetadata["context"], piProvider?: string | null): ConversationMetadata["context"] {
+function contextOf(used: number, model: string | null, window: number | null, before: ConversationMetadata["context"], piProvider?: string | null, piAgentDir?: string | null): ConversationMetadata["context"] {
   if (used === 0) return before;
   if (window !== null) return { used, window };
   if (piProvider !== undefined) {
-    const resolved = model === null ? null : piContextWindow(model, piProvider);
+    const resolved = model === null || piAgentDir === null ? null : piContextWindow(model, piProvider, piAgentDir);
     return resolved === null ? { used, window: null } : { used, window: resolved };
   }
   const long = model?.startsWith("claude") && (used > CLAUDE_STANDARD_WINDOW || before?.window === CLAUDE_LONG_WINDOW);
@@ -33,12 +36,28 @@ function contextOf(used: number, model: string | null, window: number | null, be
 }
 
 /** Read recorded settings, never infer effort from the presence of thinking text.
- * Codex turn_context is a snapshot; omp/omo setting changes are separate events. */
-export function parseConversationMetadata(text: string, source: ConversationResponse["source"], before?: ConversationMetadata): ConversationMetadata {
+ * Codex turn_context is a snapshot; omp/omo setting changes are separate events.
+ * `piAgentDir` is the agent directory of the pi process that writes the transcript (contextOf). */
+export function parseConversationMetadata(text: string, source: ConversationResponse["source"], before?: ConversationMetadata, piAgentDir?: string | null): ConversationMetadata {
   // `before` is what the text preceding this one said: the fold picks up where it stopped
   const metadata: ConversationMetadata = before ? { ...before } : { model: null, reasoning_effort: null };
   // Agy's exported rows do not attest the selected model or reasoning effort.
   if (source === "agy-transcript") return metadata;
+  if (source === "copilot-transcript") {
+    for (const { type, data } of copilotRecords(text)) {
+      const model = type === "session.start" ? label(data.selectedModel)
+        : type === "session.model_change" ? label(data.newModel)
+        : type === "session.resume" ? label(data.selectedModel)
+        : type === "assistant.message" ? label(data.model) : null;
+      if (model) metadata.model = model;
+      if (type === "session.start" || type === "session.model_change" || type === "session.resume") {
+        if ("reasoningEffort" in data) metadata.reasoning_effort = label(data.reasoningEffort);
+      }
+    }
+    return metadata;
+  }
+  // Muse names its model, but no effort or context window; most of its lines are skipped unparsed
+  if (source === "muse-transcript") return { ...metadata, model: museModel(text, metadata.model) };
   // pi states the provider on the same records that state usage, so the window is asked for
   // from what this line says rather than remembered across sources
   let piProvider: string | null = null;
@@ -108,7 +127,7 @@ export function parseConversationMetadata(text: string, source: ConversationResp
           // failed or aborted request out, which filled nothing
           const filled = message.stopReason === "error" || message.stopReason === "aborted" ? 0
             : count(usage.totalTokens) || count(usage.input) + count(usage.output) + count(usage.cacheRead) + count(usage.cacheWrite);
-          metadata.context = contextOf(filled, metadata.model, null, metadata.context, piProvider);
+          metadata.context = contextOf(filled, metadata.model, null, metadata.context, piProvider, piAgentDir);
         }
       }
     } else if (source === "claude-transcript") {

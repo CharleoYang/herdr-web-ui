@@ -4,6 +4,7 @@
  * Register and fixed terms follow ../i18n.ja.ts; a key another feature also uses goes there.
  */
 export const PALETTE_JA: Record<string, string> = {
+  "Move tab to {workspace}": "タブを {workspace} へ移動",
   "Enable notifications": "通知を有効にする",
   "Switch to terminal": "ターミナルに切り替え",
   "Switch to chat": "チャットに切り替え",
@@ -14,7 +15,6 @@ export const PALETTE_JA: Record<string, string> = {
   "All": "すべて",
   "Recent": "最近",
   "Workspace": "ワークスペース",
-  "Selected": "選択中",
   "Unknown workspace": "不明なワークスペース",
   "Actions": "操作",
   "Plugin actions": "プラグインの操作",

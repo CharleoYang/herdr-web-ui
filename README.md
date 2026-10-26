@@ -27,6 +27,8 @@ Ovis, the browser and phone client for herdr.
   <a href="docs/guide.md#on-your-phone"><img src="https://img.shields.io/badge/PWA-installable-666666?labelColor=333333" alt="Installable PWA"></a>
 </p>
 
+**Claude Code and Codex, from your phone.** Read and reply to the agent sessions running on your computer as a chat, with the live terminal when you need it. Formerly herdr web UI.
+
 ---
 
 https://github.com/user-attachments/assets/d854dbb6-64bd-4eba-81c7-fbd3f525726b
@@ -89,7 +91,7 @@ through REST, and periodic authoritative conversation reconciliation remains ena
 
 <p align="center"><sub>Each clip is a live recording of the desktop and a phone at once, in real time with no cuts. Click one for the full video.</sub></p>
 
-- **Chat and terminal, one pane** — native Claude Code, Codex, omp, omo, gjc, pi, Hermes and explicitly identified Devin CLI transcripts, plus OpenCode sessions herdr identifies, Linux Grok sessions and experimental Antigravity (agy) support under the limits below, with the live terminal a click away. Queue a message while the agent works for the next turn, or send it at once with Send now. [Supported agents →](docs/guide.md#supported-agents)
+- **Chat and terminal, one pane** — native Claude Code, Codex, omp, omo, gjc, pi, Hermes and explicitly identified Devin CLI transcripts, plus OpenCode sessions herdr identifies, Grok sessions on Linux and macOS, and experimental Antigravity (agy) support under the limits below, with the live terminal a click away. Queue a message while the agent works for the next turn, or send it at once with Send now. [Supported agents →](docs/guide.md#supported-agents)
 - **Approve with a tap** — supported approvals, questions and plan menus become cards, checked to be current before your answer is sent. Use Terminal for requests without card support.
 - **Know when you're needed** — live status for every pane, an alert that drops in while the app is open, and push alerts when an agent needs input or finishes, even with the app closed.
 - **Install it on your phone** — a PWA with a key bar above the keyboard (Esc, Tab, Ctrl, Alt, Shift, Enter, arrows) that you can rearrange and extend with your own combinations in Settings, and a QR code to your Tailscale address. [Phone setup →](docs/guide.md#on-your-phone)
@@ -105,7 +107,7 @@ through REST, and periodic authoritative conversation reconciliation remains ena
 curl -fsSL https://ovis.sh/install.sh | sh
 ```
 
-Linux with glibc (x64, arm64) or macOS (Intel, Apple Silicon); not Alpine/musl or 32-bit ARM. Have `curl`, Git and `tar` installed; installing a missing Bun also needs Bash and `unzip`. Requires herdr 0.9.0+, Bun 1.4+ and Node 18+. The installer adds missing prerequisites for your user, upgrades an older Bun and installs Node 22 if Node is missing or older than 18, then installs the app as a herdr plugin. If an existing herdr installation is older than 0.9.0, update and restart herdr yourself before rerunning the installer.
+Linux with glibc (x64, arm64) or macOS (Intel, Apple Silicon); not Alpine/musl or 32-bit ARM. Have `curl`, Git and `tar` installed; installing a missing Bun also needs Bash and `unzip`. Requires herdr 0.9.0+ and Bun 1.4+; Node is not needed. The installer adds missing prerequisites for your user, upgrades an older Bun, then installs the app as a herdr plugin. Terminals run on the Rust PTY host each release ships, checked against its SHA-256; a Node 18+ already on the PC is only its fallback. If an existing herdr installation is older than 0.9.0, update and restart herdr yourself before rerunning the installer.
 
 With the default listen address and Tailscale running, successful HTTPS setup provides a tailnet address and QR code. Without a configured token, your devices normally get in without a code when `tailscale serve` reports the same login as this PC's owner. If your own phone is asked to pair anyway, `OVIS_TAILSCALE_SERVE_ONLY=1` allows the no-login path only when Tailscale confirms one login owns the tailnet with no tagged nodes, and serve is the sole route to this port. Never enable it when a public proxy, tunnel or other forwarding server also reaches the port ([Access and safety](docs/guide.md#access-and-safety)).
 
@@ -118,10 +120,10 @@ irm https://ovis.sh/install.ps1 | iex
 Requires [Git for Windows](https://git-scm.com/download/win). Installs missing herdr and Bun for your user, then installs the same plugin. No Node or WSL is needed. Open **Phone setup** in herdr for phone access. Windows terminals use the [screen mirror](docs/remote-pcs.md#windows-pcs), with typing and a fixed grid, until herdr supports terminal attach there.
 
 <p align="center">
-  <img src="docs/screenshots/install.png" width="720" alt="Installer output: Bun, Node and the herdr plugin install, then tailscale serve publishes the app and a QR code for the phone appears.">
+  <img src="docs/screenshots/install.png" width="720" alt="Installer output: Bun and the herdr plugin install, then tailscale serve publishes the app and a QR code for the phone appears.">
 </p>
 
-Already have herdr 0.9.0+, Bun 1.4+ and Node 18+ (Node isn't needed on Windows)? Install just the plugin:
+Already have herdr 0.9.0+ and Bun 1.4+? Install just the plugin:
 
 ```bash
 herdr plugin install devswha/ovis
@@ -141,9 +143,9 @@ Yes. Run the agent in a [herdr](https://github.com/herdrdev/herdr) pane on your 
 
 **Which agents does the chat view support?**
 
-Claude Code, Codex, omp, omo, gjc, pi and Hermes are read from their own session stores. GJC chat needs GJC 0.18.9+, `gjc` and Git on the server PC's PATH, and its SDK broker already running; missing or ambiguous session identity uses Terminal. For OpenCode, chat reads the session herdr reports from its SQLite database, including supported 2.x and 1.x schemas. The home screen, missing session identity or an unsupported, unreadable or over-limit store uses the terminal instead. Devin CLI is a chat when herdr or the running process names its session, as `devin --resume <id>` does; a plain `devin` shows the live terminal.
+Claude Code, Codex, omp, omo, gjc, pi and Hermes are read from their own session stores. GJC chat and done alerts use Ovis's native GJC extension to identify the active session, without an SDK broker or CLI lookup. [Install the extension](docs/guide.md#supported-agents) and restart GJC to enable them; missing or ambiguous session identity uses Terminal and herdr's own status. For OpenCode, chat reads the session herdr reports from its SQLite database, including supported 2.x and 1.x schemas. The home screen, missing session identity or an unsupported, unreadable or over-limit store uses the terminal instead. Devin CLI is a chat when herdr or the running process names its session, as `devin --resume <id>` does; a plain `devin` shows the live terminal.
 
-Grok chat is Linux-only and requires one process-held session matching herdr's session identity; macOS, Windows or ambiguous identity use Terminal. Antigravity (agy) chat is experimental: Linux native-tested, macOS untested, Windows terminal-only. It follows the running process's held conversation lock rather than guessing a session. Any unsupported or unresolved transcript uses the terminal instead. [Supported agents →](docs/guide.md#supported-agents)
+Grok chat runs on Linux and macOS and requires one process-held session matching herdr's session identity; Windows or ambiguous identity use Terminal. Antigravity (agy) chat is experimental: Linux native-tested, macOS untested, Windows terminal-only. It follows the running process's held conversation lock rather than guessing a session. Any unsupported or unresolved transcript uses the terminal instead. [Supported agents →](docs/guide.md#supported-agents)
 
 **Does it replace herdr's own TUI?**
 

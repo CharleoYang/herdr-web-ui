@@ -4,7 +4,7 @@ $installer = Join-Path $PSScriptRoot '..\install.ps1'
 $originalPath = $env:PATH
 $originalLocalAppData = $env:LOCALAPPDATA
 $originalUserProfile = $env:USERPROFILE
-$state = @{ installed = $false; installs = 0; uninstalls = 0; ref = ''; running = $true; started = $false; failInstall = $false; bunVersion = '1.4.2'; failBun = $false; windowsRelease = $true }
+$state = @{ installed = $false; installs = 0; uninstalls = 0; ref = ''; running = $true; started = $false; failInstall = $false; bunVersion = '1.4.2'; failBun = $false; windowsRelease = $true; refId = 'devswha.ovis'; installedId = ''; manifestBlocked = $false; startedLegacy = $false }
 $global:herdrInstallOpened = @()
 # gh is a stand-in .cmd, first on PATH: the installer runs gh as a process, and no real star is read or given.
 # mode.txt beside it is what it answers: starred, not, refuses (the star itself), upstream, signed-out, hangs or
@@ -37,16 +37,18 @@ function herdr {
         '--version' { 'herdr 0.9.3' }
         'plugin list --json' {
             $plugins = @()
-            if ($state.installed) { $plugins = @(@{ plugin_id = 'devswha.ovis'; plugin_root = $pluginRoot }) }
+            if ($state.installed) { $plugins = @(@{ plugin_id = $state.installedId; plugin_root = $pluginRoot }) }
             @{ result = @{ plugins = $plugins } } | ConvertTo-Json -Depth 4 -Compress
         }
         'status server --json' { @{ running = $state.running } | ConvertTo-Json -Compress }
         'plugin action invoke devswha.ovis.start-windows' { $state.started = $true; '{}' }
+        'plugin action invoke devswha.herdr-web-ui.start-windows' { $state.started = $true; $state.startedLegacy = $true; '{}' }
         'plugin uninstall devswha.ovis' { $state.installed = $false; $state.uninstalls++; 'Uninstalled' }
         default {
             if ($args[0] -eq 'plugin' -and $args[1] -eq 'install') {
                 if ($state.failInstall) { $global:LASTEXITCODE = 1; return }
-                $state.installed = $true; $state.installs++; $state.ref = $args[4]
+                # under the id the ref's manifest names
+                $state.installed = $true; $state.installs++; $state.ref = $args[4]; $state.installedId = $state.refId
                 Remove-Item -LiteralPath $pluginRoot -Recurse -Force -ErrorAction SilentlyContinue
                 New-Item -ItemType Directory -Force -Path (Split-Path $launcher) | Out-Null
                 if ($state.windowsRelease) { Set-Content -LiteralPath $launcher -Value '' }
@@ -56,6 +58,11 @@ function herdr {
     }
 }
 function Invoke-WebRequest {
+    # the manifest of the ref being installed: what its id is, or a network that blocks the host
+    if ("$($args[-1])" -like 'https://raw.githubusercontent.com/devswha/ovis/*/herdr-plugin.toml') {
+        if ($state.manifestBlocked) { throw 'Unable to connect to the remote server' }
+        return @{ Content = "name = `"Ovis`"`nid = `"$($state.refId)`"" }
+    }
     # herdr's installer, as the stand-in the test wrote: -OutFile is the last argument
     if ($args[0] -eq 'https://herdr.dev/install.cmd') { Set-Content -LiteralPath $args[-1] -Value $state.herdrInstaller -Encoding Ascii; return }
     if ($args[0] -ne 'https://bun.sh/install.ps1') { throw "Unexpected download: $args" }
@@ -160,6 +167,16 @@ exit /b 1
     & $installer -Ref ''
     Assert ($state.uninstalls -eq 1 -and $state.installs -eq $installs + 1 -and $state.started) 'A copy without Windows support must be replaced and started'
     Write-Host 'PASS native installer release selection, rerun, Bun bootstrap, explicit ref, stopped herdr, install failure and a copy without Windows support'
+
+    # Releases up to 0.4.13 name the plugin by its old id: told by the manifest, or by the version when it cannot be read.
+    foreach ($blocked in $false, $true) {
+        $state.installed = $false; $state.started = $false; $state.startedLegacy = $false
+        $state.refId = 'devswha.herdr-web-ui'; $state.manifestBlocked = $blocked
+        & $installer -Ref 'v0.4.13'
+        Assert ($state.installedId -eq 'devswha.herdr-web-ui' -and $state.startedLegacy) "A release that names the old id must install and start under it (manifest blocked: $blocked)"
+    }
+    $state.installed = $false; $state.started = $false; $state.refId = 'devswha.ovis'; $state.manifestBlocked = $false
+    Write-Host 'PASS a release from before the rename installs under its old id'
 
     # Browser opening is covered through a stand-in; this harness never starts a real browser.
     $savedCi = $env:CI; $savedNoOpen = $env:OVIS_NO_OPEN; $savedSsh = $env:SSH_CONNECTION
@@ -292,7 +309,7 @@ public static class ImmediateGh {
     }
 }
 '@
-    $assignment = '[HerdrWebUi.GhJob]::Assign($job, $process.Handle)'
+    $assignment = '[Ovis.GhJob]::Assign($job, $process.Handle)'
     $orderedSource = $ghApi.Extent.Text.Replace("`r`n", "`n").Replace($assignment, '(Assign-TestGhJob $job $process)')
     Assert ($orderedSource -ne $ghApi.Extent.Text) 'control: interpose at the real job assignment boundary'
     function Assign-TestGhJob($Job, $Process) {
@@ -300,13 +317,13 @@ public static class ImmediateGh {
             Assert ($ready.WaitOne(5000)) 'control: the runnable shim must reach child-ready before assignment'
         }
         Assert (-not $ready.WaitOne(0)) 'regression: shim ran before job assignment'
-        [HerdrWebUi.GhJob]::Assign($Job, $Process.Handle)
+        [Ovis.GhJob]::Assign($Job, $Process.Handle)
     }
     $suspendedLaunch = @'
         if ($job -ne [IntPtr]::Zero) {
-            $process = [HerdrWebUi.GhJob]::StartSuspended($start.FileName, $start.Arguments)
+            $process = [Ovis.GhJob]::StartSuspended($start.FileName, $start.Arguments)
             if (-not (Assign-TestGhJob $job $process)) {
-                $null = [HerdrWebUi.GhJob]::CloseHandle($job); $job = [IntPtr]::Zero
+                $null = [Ovis.GhJob]::CloseHandle($job); $job = [IntPtr]::Zero
             }
             $process.Resume()
         } else {
@@ -316,7 +333,7 @@ public static class ImmediateGh {
     $runnableLaunch = @'
         $process = [Diagnostics.Process]::Start($start)
         if ($job -ne [IntPtr]::Zero -and -not (Assign-TestGhJob $job $process)) {
-            $null = [HerdrWebUi.GhJob]::CloseHandle($job); $job = [IntPtr]::Zero
+            $null = [Ovis.GhJob]::CloseHandle($job); $job = [IntPtr]::Zero
         }
 '@
     # Scratch-source reversion of exactly the pre-fix runnable Start/Assign ordering; no repository file changes.

@@ -2,9 +2,12 @@ import { afterAll, describe, expect, it } from "bun:test";
 import { mkdirSync, mkdtempSync, appendFileSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { pathToFileURL } from "node:url";
 
-import { defaultPiSessionDir, piTranscriptInStore, piTranscriptPath, unwrittenSession } from "./pi.ts";
+import { defaultPiSessionDir, piTranscriptInStore, piTranscriptPath, piUnwrittenHeaderId, unwrittenSession } from "./pi.ts";
+import { piAgentDir } from "./pi-models.ts";
 import { transcriptPage, piTranscriptImage } from "./conversation.ts";
+import { turnStarts } from "./transcript-turns.ts";
 import type { ConversationTurn } from "../shared/protocol.ts";
 
 const root = mkdtempSync(join(tmpdir(), "herdr-pi-store-"));
@@ -66,6 +69,13 @@ describe("pi's session store holds the transcript a pane reads", () => {
     expect(unwrittenSession(join(slug, "fresh.txt"), store)).toBeNull();
     expect(unwrittenSession("fresh.jsonl", store)).toBeNull();
     expect(unwrittenSession(join(root, "no-store", "fresh.jsonl"), join(root, "no-store"))).toBeNull();
+  });
+  it("derives an unwritten Pi header id only from Pi's exact production filename", () => {
+    const id = "12345678-1234-4123-8123-123456789abc";
+    const unwritten = unwrittenSession(join(slug, `2026-10-12T22-06-12-992Z_${id}.jsonl`), store);
+    expect(unwritten).not.toBeNull();
+    expect(piUnwrittenHeaderId(unwritten!.path)).toBe(id);
+    expect(piUnwrittenHeaderId(join(slug, `${id}.jsonl`))).toBeNull();
   });
   it.skipIf(!canSymlink)("refuses a dangling session link", () => {
     const dangling = join(slug, "dangling.jsonl");
@@ -155,6 +165,27 @@ describe("pi transcripts render as chat", () => {
     expect([tool.name, tool.summary, tool.output]).toEqual(["read", "src/app.ts", "export const app = null;"]);
     // the system prompt is hidden context, never an assistant message
     expect(JSON.stringify(page.turns)).not.toContain("instructions the chat must not show");
+  });
+
+  it("reads the window from the agent dir it is given, and answers anew when that dir changes", () => {
+    const dirs = ["agent-a", "agent-b"].map((name, index) => {
+      const dir = join(root, name);
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, "models.json"), JSON.stringify({ providers: { lwsa: { models: [{ id: "qwen-test", contextWindow: (index + 1) * 100_000 }] } } }));
+      return dir;
+    });
+    // the answer that states the usage is in a settled turn; the live one has not been answered
+    const path = session("two-dirs", [
+      { type: "message", id: "u1", parentId: null, timestamp: "2026-09-30T00:00:01.000Z", message: { role: "user", content: "first" } },
+      { type: "message", id: "a1", parentId: "u1", timestamp: "2026-09-30T00:00:02.000Z", message: { role: "assistant", model: "qwen-test", provider: "lwsa", usage: { totalTokens: 50_000 }, content: [{ type: "text", text: "answer" }] } },
+      { type: "message", id: "u2", parentId: "a1", timestamp: "2026-09-30T00:00:03.000Z", message: { role: "user", content: "second" } },
+    ]);
+    const first = transcriptPage("pi-transcript", path, {}, undefined, dirs[0]);
+    const second = transcriptPage("pi-transcript", path, {}, undefined, dirs[1]);
+    expect(first.metadata.context).toEqual({ used: 50_000, window: 100_000 });
+    expect(second.metadata.context).toEqual({ used: 50_000, window: 200_000 });
+    expect(second.version).not.toBe(first.version);
+    expect(transcriptPage("pi-transcript", path, {}, undefined, dirs[0]).metadata.context).toEqual({ used: 50_000, window: 100_000 });
   });
 
   it("shows a failed request instead of a prompt with no answer", () => {
@@ -305,6 +336,122 @@ describe("a pi tool result's images reach the chat", () => {
     // a claude ref is a uuid and index; a pi ref names a tool call. Neither reads the other's file.
     expect(piTranscriptImage(session("claude-shaped", [asked]), "pi:c1:0")).toBeNull();
   });
+
+  it("names only pictures whose bytes are a raster the chat shows", () => {
+    // declared a PNG, but the bytes are an svg: the page names nothing the endpoint would refuse
+    const path = session("image-not-raster", [asked, callingRead("c1"), { ...withImage("c1"), message: { role: "toolResult", toolCallId: "c1", toolName: "read", content: [{ type: "image", mimeType: "image/png", data: "PHN2Zz4=" }] } }]);
+    expect(imageOf(transcriptPage("pi-transcript", path).turns[1]!.parts[0]!)).toBeUndefined();
+    expect(piTranscriptImage(path, "pi:c1:0")).toBeNull();
+  });
+
+  it("serves a tool's picture only from the result the page draws: the first one answering its call", () => {
+    const GIF = "R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7";
+    // a second result for an answered call, which the parser ignores, saying context_clear in its text
+    const again = { type: "message", id: "r2", parentId: "r-c1", timestamp: "2026-09-30T00:00:05.000Z", message: { role: "toolResult", toolCallId: "c1", toolName: "read", content: [{ type: "text", text: "context_clear" }, { type: "image", mimeType: "image/gif", data: GIF }] } };
+    const path = session("image-answered-twice", [asked, callingRead("c1"), withImage("c1"), again]);
+    expect(imageOf(transcriptPage("pi-transcript", path).turns[1]!.parts[0]!)).toEqual([{ media_type: "image/png", ref: "pi:c1:0" }]);
+    expect(piTranscriptImage(path, "pi:c1:0")?.mediaType).toBe("image/png");
+    // a first result with no picture the chat shows names none, and the later one does not stand in
+    const none = { ...withImage("c1"), message: { role: "toolResult", toolCallId: "c1", toolName: "read", content: [{ type: "image", mimeType: "image/png", data: "PHN2Zz4=" }] } };
+    const pathNone = session("image-answered-twice-none", [asked, callingRead("c1"), none, again]);
+    expect(imageOf(transcriptPage("pi-transcript", pathNone).turns[1]!.parts[0]!)).toBeUndefined();
+    expect(piTranscriptImage(pathNone, "pi:c1:0")).toBeNull();
+    // two results for one call in one entry: only the first one's pictures are named
+    const pathNested = session("image-nested-twice", [{ ...asked, parentId: null }, {
+      type: "message", id: "a1", parentId: "u1", timestamp: "2026-09-30T00:00:03.000Z", message: {
+        role: "assistant", model: "qwen-test", provider: "test", stopReason: "toolUse", usage: { input: 10, output: 1 },
+        content: [
+          { type: "toolCall", id: "c1", name: "read", arguments: {} },
+          { type: "toolResult", toolCallId: "c1", toolName: "read", content: [{ type: "image", mimeType: "image/png", data: PNG.toString("base64") }] },
+          { type: "toolResult", toolCallId: "c1", toolName: "read", content: [{ type: "image", mimeType: "image/gif", data: GIF }] },
+        ],
+      } },
+    ]);
+    expect(imageOf(transcriptPage("pi-transcript", pathNested).turns[1]!.parts[0]!)).toEqual([{ media_type: "image/png", ref: "pi:c1:0" }]);
+    expect(piTranscriptImage(pathNested, "pi:c1:0")?.mediaType).toBe("image/png");
+    expect(piTranscriptImage(pathNested, "pi:c1:1")).toBeNull();
+    // a call made again after an answer with no picture: the second answer's picture is the one named
+    const callAgain = { ...callingRead("c1"), id: "a2", parentId: "r1" };
+    const textOnly = { type: "message", id: "r1", parentId: "a1", timestamp: "2026-09-30T00:00:04.000Z", message: { role: "toolResult", toolCallId: "c1", toolName: "read", content: [{ type: "text", text: "nothing to read" }] } };
+    const pathAgain = session("image-called-again", [asked, callingRead("c1"), textOnly, callAgain, { ...withImage("c1"), id: "r2", parentId: "a2" }]);
+    expect(transcriptPage("pi-transcript", pathAgain).turns.flatMap((turn) => turn.parts).flatMap((part) => part.kind === "tool" ? imageOf(part) ?? [] : [])).toEqual([{ media_type: "image/png", ref: "pi:c1:0" }]);
+    expect(piTranscriptImage(pathAgain, "pi:c1:0")?.mediaType).toBe("image/png");
+    // a result answering no call the page draws: its picture is named nowhere
+    const pathOrphan = session("image-orphan", [asked, callingRead("c1"), { ...withImage("c2"), id: "r-c2", parentId: "a1" }]);
+    expect(transcriptPage("pi-transcript", pathOrphan).turns.flatMap((turn) => turn.parts).some((part) => part.kind === "tool" && imageOf(part) !== undefined)).toBe(false);
+    expect(piTranscriptImage(pathOrphan, "pi:c2:0")).toBeNull();
+  });
+
+  it("puts a tool's picture from before a clear out of reach, as the page does", () => {
+    const path = session("image-cleared", [asked, callingRead("c1"), withImage("c1"),
+      { type: "custom", customType: "context_clear", id: "x1", parentId: "r-c1", timestamp: "2026-09-30T00:00:05.000Z" }]);
+    expect(transcriptPage("pi-transcript", path).turns).toEqual([]);
+    expect(piTranscriptImage(path, "pi:c1:0")).toBeNull();
+  });
+});
+
+// A picture pi was sent: pi keeps it in the prompt beside the words, or alone. Only the address
+// reaches the page; the bytes are fetched when the prompt is shown.
+describe("the pictures sent to pi reach the chat", () => {
+  const GIF = Buffer.from("R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7", "base64");
+  const picture = (bytes: Buffer, mimeType = "image/png") => ({ type: "image", mimeType, data: bytes.toString("base64") });
+  const prompt = (id: string, parentId: string | null, content: unknown[]) => ({ type: "message", id, parentId, timestamp: "2026-09-30T00:00:02.000Z", message: { role: "user", content } });
+  const answer = (id: string, parentId: string, text: string) => ({ type: "message", id, parentId, timestamp: "2026-09-30T00:00:03.000Z", message: { role: "assistant", stopReason: "stop", content: [{ type: "text", text }] } });
+  const parts = (path: string) => transcriptPage("pi-transcript", path).turns.map((turn) => turn.parts.map((part) => part.kind === "text" ? part.text : part.kind === "image" ? `${part.media_type} ${part.ref}` : part.kind));
+
+  it("shows a prompt that is only a picture, and one with words, each picture by its prompt and place", () => {
+    const path = session("prompt-pictures", [
+      prompt("u1", null, [picture(PNG)]), answer("a1", "u1", "a pixel"),
+      // an svg, and bytes that are no picture under a picture's type, take no place
+      prompt("u2", "a1", [{ type: "text", text: "and these?" }, picture(Buffer.from("<svg/>"), "image/svg+xml"), picture(Buffer.from("not a picture")), picture(GIF, "image/gif")]), answer("a2", "u2", "a gif"),
+    ]);
+    expect(parts(path)).toEqual([["image/png pi-prompt:u1:0"], ["a pixel"], ["image/gif pi-prompt:u2:0", "and these?"], ["a gif"]]);
+    expect(JSON.stringify(transcriptPage("pi-transcript", path).turns)).not.toContain(PNG.toString("base64"));
+    expect(Buffer.from(piTranscriptImage(path, "pi-prompt:u1:0")!.bytes).equals(PNG)).toBe(true);
+    expect(piTranscriptImage(path, "pi-prompt:u2:0")?.mediaType).toBe("image/gif");
+    // no picture at that place, another entry, a ref that is no ref
+    for (const ref of ["pi-prompt:u2:1", "pi-prompt:a1:0", "pi-prompt:u1", "pi-prompt:../u1:0"]) expect(piTranscriptImage(path, ref)).toBeNull();
+  });
+
+  it("opens a page's turn at a prompt that is only a picture, as at one with words", () => {
+    const rows = [prompt("u1", null, [{ type: "text", text: "first" }]), answer("a1", "u1", "one"), prompt("u2", "a1", [picture(PNG)]), answer("a2", "u2", "two")].map((row) => JSON.stringify(row));
+    const bytes = Buffer.from(rows.join("\n"));
+    const second = rows[0]!.length + rows[1]!.length + 2;
+    expect(turnStarts(bytes, "pi-transcript")).toEqual([0, second]);
+    // omp draws no prompt picture yet, so it opens nothing there
+    expect(turnStarts(bytes, "omp-transcript")).toEqual([0]);
+  });
+
+  it("keeps a picture a /tree or a clear left behind out of the chat and out of reach", () => {
+    const path = session("prompt-picture-left", [prompt("u1", null, [picture(PNG)]), answer("a1", "u1", "a pixel")]);
+    expect(parts(path)).toEqual([["image/png pi-prompt:u1:0"], ["a pixel"]]);
+    // /tree back to before the picture, and on from there
+    appendFileSync(path, JSON.stringify(prompt("u9", null, [{ type: "text", text: "start over" }])) + "\n");
+    expect(parts(path)).toEqual([["start over"]]);
+    expect(piTranscriptImage(path, "pi-prompt:u1:0")).toBeNull();
+    const cleared = session("prompt-picture-cleared", [prompt("u1", null, [picture(PNG)]), answer("a1", "u1", "a pixel"),
+      { type: "custom", customType: "context_clear", id: "x1", parentId: "a1", timestamp: "2026-09-30T00:00:04.000Z" }]);
+    expect(parts(cleared)).toEqual([]);
+    expect(piTranscriptImage(cleared, "pi-prompt:u1:0")).toBeNull();
+  });
+
+  it("reads a clear and an entry id however JSON writes them, as the parser does", () => {
+    const respell = (path: string, from: string, to: string) => {
+      const text = readFileSync(path, "utf8");
+      expect(text).toContain(from);
+      writeFileSync(path, text.replace(from, to));
+      return path;
+    };
+    // a clear whose type is written with an escape is still a clear
+    const cleared = respell(session("prompt-picture-escaped-clear", [prompt("u1", null, [picture(PNG)]), answer("a1", "u1", "a pixel"),
+      { type: "custom", customType: "context_clear", id: "x1", parentId: "a1", timestamp: "2026-09-30T00:00:04.000Z" }]), '"customType":"context_clear"', '"customType":"context\\u005fclear"');
+    expect(parts(cleared)).toEqual([]);
+    expect(piTranscriptImage(cleared, "pi-prompt:u1:0")).toBeNull();
+    // a prompt whose id is written with an escape is still the prompt the page names
+    const escaped = respell(session("prompt-picture-escaped-id", [prompt("u1", null, [picture(PNG)]), answer("a1", "u1", "a pixel")]), '"id":"u1"', '"id":"\\u00751"');
+    expect(parts(escaped)).toEqual([["image/png pi-prompt:u1:0"], ["a pixel"]]);
+    expect(Buffer.from(piTranscriptImage(escaped, "pi-prompt:u1:0")!.bytes).equals(PNG)).toBe(true);
+  });
 });
 
 // The bridge must resolve a Pi profile from the process running in this pane; its own
@@ -324,7 +471,8 @@ it("reads a resumed transcript from this pane's Pi profile store", async () => {
       environOf: () => [`PI_CODING_AGENT_DIR=${profile}`],
       home: root,
     });
-    expect(result).toEqual({ path: customTranscript });
+    // the model catalogs are the pane's too, not those of the bridge's own PI_CODING_AGENT_DIR
+    expect(result).toEqual({ path: customTranscript, agentDir: profile });
   } finally {
     if (old === undefined) delete process.env["PI_CODING_AGENT_DIR"];
     else process.env["PI_CODING_AGENT_DIR"] = old;
@@ -346,7 +494,7 @@ it("resolves profile and session-directory overrides from each pane's Pi process
       processes: [{ pid: name === "profile-a" ? 790 : 791, argv: [name === "profile-a" ? "pi.exe" : "bun", ...(name === "profile-a" ? [] : ["/opt/pi.cjs"])] }],
       environOf: () => [`PI_CODING_AGENT_DIR=${profile}`],
       home: root,
-    })).toEqual({ path: target });
+    })).toEqual({ path: target, agentDir: profile });
   }
   const sessionDir = join(root, "direct-session-dir");
   mkdirSync(sessionDir, { recursive: true });
@@ -357,7 +505,7 @@ it("resolves profile and session-directory overrides from each pane's Pi process
     processes: [{ pid: 792, argv: ["/usr/bin/pi"] }],
     environOf: () => [`PI_CODING_AGENT_SESSION_DIR=${sessionDir}`],
     home: root,
-  })).toEqual({ path: target });
+  })).toEqual({ path: target, agentDir: join(root, ".pi", "agent") });
 });
 
 it("recognizes Pi's official npm bundle entry and renamed runtime argv", async () => {
@@ -371,15 +519,15 @@ it("recognizes Pi's official npm bundle entry and renamed runtime argv", async (
   expect(await piTranscriptPath("pane", undefined, {
     agent, processes: [{ pid: 810, argv: ["/usr/bin/node", officialEntry] }],
     environOf: () => [`PI_CODING_AGENT_DIR=${profile}`], home: root,
-  })).toEqual({ path: target });
+  })).toEqual({ path: target, agentDir: profile });
   expect(await piTranscriptPath("pane", undefined, {
     agent, processes: [{ pid: 811, argv: ["pi", "--offline"] }],
     environOf: () => [`PI_CODING_AGENT_DIR=${profile}`], home: root,
-  })).toEqual({ path: target });
+  })).toEqual({ path: target, agentDir: profile });
   expect(await piTranscriptPath("pane", undefined, {
     agent, processes: [{ pid: 812, argv: ["/usr/bin/pi"] }],
     environOf: () => [`USERPROFILE=${root}`, "PI_CODING_AGENT_DIR=~/npm-profile"], home: join(root, "bridge-home"),
-  })).toEqual({ path: target });
+  })).toEqual({ path: target, agentDir: profile });
 });
 
 it.skipIf(process.platform !== "linux")("recovers Pi argv and process HOME from a live PID when Herdr omits argv", async () => {
@@ -409,7 +557,7 @@ it.skipIf(process.platform !== "linux")("recovers Pi argv and process HOME from 
       processes: [{ pid: child.pid, name: "pi", cwd: root }],
       home: bridgeHome,
     });
-    expect(result).toEqual({ path: target });
+    expect(result).toEqual({ path: target, agentDir: profile });
   } finally {
     child.kill();
     await child.exited;
@@ -428,8 +576,9 @@ it("keeps a custom Pi profile scoped to its current process and canonical store"
   try {
     const defaultSession = session("default-profile");
     const defaultAgent = { agent: "pi", agent_session: { agent: "pi", source: "herdr:pi", kind: "path", value: defaultSession } } as never;
-    expect(await piTranscriptPath("pane", store, { agent: defaultAgent, processes, environOf: () => null, home: root })).toEqual({ path: defaultSession });
-    expect(await piTranscriptPath("pane", undefined, { agent, processes, environOf, home: root })).toEqual({ path: target });
+    // an environment that cannot be read names no profile: the bridge's store here is not its agent dir's own
+    expect(await piTranscriptPath("pane", store, { agent: defaultAgent, processes, environOf: () => null, home: root })).toEqual({ path: defaultSession, agentDir: null });
+    expect(await piTranscriptPath("pane", undefined, { agent, processes, environOf, home: root })).toEqual({ path: target, agentDir: profile });
     const ompAgent = { agent: "pi", agent_session: { agent: "omp", source: "herdr:omp", kind: "path", value: target } } as never;
     expect(await piTranscriptPath("pane", undefined, { agent: ompAgent, processes, environOf, home: root })).toBeNull();
     expect(await piTranscriptPath("pane", undefined, { agent, processes: [{ pid: 782, argv: ["shell"] }], environOf, home: root })).toBeNull();
@@ -443,6 +592,29 @@ it("keeps a custom Pi profile scoped to its current process and canonical store"
       environOf: (pid) => [`PI_CODING_AGENT_DIR=${pid === 781 ? profile : otherProfile}`],
       home: root,
     })).toBeNull();
+    // one store named by both, but two agent directories: neither one's catalogs are the pane's
+    expect(await piTranscriptPath("pane", undefined, {
+      agent,
+      processes: [{ pid: 781, argv: ["pi"] }, { pid: 783, argv: ["pi"] }],
+      environOf: (pid) => [`PI_CODING_AGENT_SESSION_DIR=${profileStore}`, `PI_CODING_AGENT_DIR=${pid === 781 ? profile : otherProfile}`],
+      home: root,
+    })).toEqual({ path: target, agentDir: null });
+    // pi decodes a file: URL, and one directory named through a link is still one directory
+    expect(await piTranscriptPath("pane", undefined, {
+      agent, processes, environOf: () => [`PI_CODING_AGENT_DIR=${pathToFileURL(profile).href}`], home: root,
+    })).toEqual({ path: target, agentDir: profile });
+    if (canSymlink) {
+      const alias = join(root, "profile-alias");
+      symlinkSync(profile, alias, "dir");
+      try {
+        expect(await piTranscriptPath("pane", undefined, {
+          agent,
+          processes: [{ pid: 781, argv: ["pi"] }, { pid: 783, argv: ["pi"] }],
+          environOf: (pid) => [`PI_CODING_AGENT_DIR=${pid === 781 ? profile : alias}`],
+          home: root,
+        })).toEqual({ path: target, agentDir: profile });
+      } finally { rmSync(alias, { force: true }); }
+    }
     if (canSymlink) {
       const escaped = join(root, "escaped.jsonl");
       writeFileSync(escaped, "{\"type\":\"session\"}\n");
@@ -490,12 +662,22 @@ it("keeps native default-store reports when process argv is unavailable", async 
   const processInfo = [{ pid: 802, name: "pi" }];
   const reported = (value: string) => ({ agent: "pi", agent_session: { agent: "pi", source: "herdr:pi", kind: "path", value } }) as never;
   const options = { processes: processInfo, argvOf: () => null, environOf: () => null, home: root };
+  // the store is shared (PI_CODING_AGENT_SESSION_DIR), not the one inside the bridge's agent dir: no catalog is the pane's
   expect(await piTranscriptPath("pane", store, {
     ...options, agent: reported(target),
-  })).toEqual({ path: target });
+  })).toEqual({ path: target, agentDir: null });
   expect(await piTranscriptPath("pane", store, {
     ...options, agent: reported(customTarget),
   })).toBeNull();
+  // the store inside the bridge's own agent dir: the session was written by that profile
+  const old = process.env["PI_CODING_AGENT_DIR"];
+  process.env["PI_CODING_AGENT_DIR"] = root;
+  try {
+    expect(await piTranscriptPath("pane", store, { ...options, agent: reported(target) })).toEqual({ path: target, agentDir: piAgentDir() });
+    expect(await piTranscriptPath("pane", store, { ...options, processes: [], agent: reported(target) })).toEqual({ path: target, agentDir: root });
+  } finally {
+    if (old === undefined) delete process.env["PI_CODING_AGENT_DIR"]; else process.env["PI_CODING_AGENT_DIR"] = old;
+  }
 });
 
 it("rejects Pi session-dir command-line overrides it cannot verify", async () => {

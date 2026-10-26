@@ -1,5 +1,7 @@
 # Ovis
 
+Ovis는 herdr를 위한 브라우저·휴대폰 클라이언트입니다.
+
 <p align="center">
   <img src="public/icons/icon-192.png" alt="Ovis" width="100">
 </p>
@@ -25,15 +27,13 @@
   <a href="docs/guide.md#on-your-phone"><img src="https://img.shields.io/badge/PWA-installable-666666?labelColor=333333" alt="Installable PWA"></a>
 </p>
 
+**Claude Code와 Codex를 폰에서.** 컴퓨터에서 돌아가는 에이전트 세션을 채팅으로 읽고 답하고, 필요할 때는 실제 터미널로 넘어갑니다. 이전 이름은 herdr web UI입니다.
+
 ---
 
 https://github.com/user-attachments/assets/d854dbb6-64bd-4eba-81c7-fbd3f525726b
 
 <p align="center"><sub>하나의 Claude Code 세션을 herdr 터미널에서 브라우저의 터미널과 채팅으로, 이어서 폰으로. 폰에서는 새 워크트리를 바로 옆에 띄웁니다 · 실제 화면 녹화, 컷 없음</sub></p>
-
-**Claude Code와 Codex를 폰에서.**
-
-[herdr](https://github.com/herdrdev/herdr)를 브라우저와 폰에서 쓰는 클라이언트입니다. 컴퓨터에서 돌아가는 에이전트 세션을 그대로, 데스크톱에서든 폰에서든 채팅으로 읽고 답합니다. 필요할 때는 터미널로 넘어갑니다.
 
 <table>
   <tr>
@@ -76,7 +76,7 @@ https://github.com/user-attachments/assets/d854dbb6-64bd-4eba-81c7-fbd3f525726b
 
 <p align="center"><sub>모든 클립은 데스크톱과 폰을 동시에 녹화한 실제 동작이며, 실제 속도로 컷 없이 담았습니다. 누르면 전체 영상을 볼 수 있습니다.</sub></p>
 
-- **채팅과 터미널을 pane 하나에** — Claude Code, Codex, omp, omo, gjc, pi, Hermes의 기록과 식별된 OpenCode, Devin CLI 세션을 보여 줍니다. Linux의 Grok과 실험적인 Antigravity(agy)도 아래 지원 조건에 따라 채팅으로 보이며, 클릭 한 번이면 같은 pane의 터미널로 넘어갑니다. 에이전트가 일하는 동안 메시지를 대기열에 두어 다음 턴에 보내거나 **지금 보내기(Send now)**로 바로 보낼 수 있습니다. [지원 에이전트 →](docs/guide.md#supported-agents)
+- **채팅과 터미널을 pane 하나에** — Claude Code, Codex, omp, omo, gjc, pi, Hermes의 기록과 식별된 OpenCode, Devin CLI 세션을 보여 줍니다. Linux와 macOS의 Grok과 실험적인 Antigravity(agy)도 아래 지원 조건에 따라 채팅으로 보이며, 클릭 한 번이면 같은 pane의 터미널로 넘어갑니다. 에이전트가 일하는 동안 메시지를 대기열에 두어 다음 턴에 보내거나 **지금 보내기(Send now)**로 바로 보낼 수 있습니다. [지원 에이전트 →](docs/guide.md#supported-agents)
 - **탭 한 번으로 승인** — 지원되는 승인 요청, 질문, 계획 메뉴가 카드로 뜹니다. 답을 보내기 전에 그 질문이 아직 유효한지 확인하며, 카드로 지원하지 않는 요청에는 터미널에서 답합니다.
 - **내가 필요할 때 알림** — 모든 pane의 상태를 실시간으로 보여 주고, 앱을 보고 있을 때는 알림이 위에서 내려오며, 에이전트가 입력을 기다리거나 일을 끝내면 앱이 닫혀 있어도 푸시 알림을 보냅니다.
 - **폰에 설치해서 쓰기** — 키보드 위에 키 바(Esc, Tab, Ctrl, Alt, Shift, Enter, 방향키)가 붙은 PWA입니다. 키 순서를 바꾸거나 나만의 키 조합을 Settings(설정)에서 추가할 수 있습니다. Tailscale 주소는 QR 코드로 받아 갑니다. [폰 설정 →](docs/guide.md#on-your-phone)
@@ -94,7 +94,7 @@ https://github.com/user-attachments/assets/d854dbb6-64bd-4eba-81c7-fbd3f525726b
 curl -fsSL https://ovis.sh/install.sh | sh
 ```
 
-glibc 기반 Linux(x64, arm64)와 macOS(Intel, Apple Silicon)를 지원하며, Alpine(musl)과 32비트 ARM은 지원하지 않습니다. `curl`, Git, `tar`가 필요하며 Bun이 없다면 Bash와 `unzip`도 필요합니다. herdr 0.9.0 이상, Bun 1.4 이상, Node 18 이상이 필요합니다. 없는 도구는 현재 사용자 계정에 설치하고, 오래된 Bun은 업데이트하며, Node가 없거나 18보다 오래됐다면 Node 22를 설치한 뒤 앱을 herdr 플러그인으로 설치합니다. 이미 설치된 herdr가 0.9.0보다 오래됐다면 herdr를 직접 업데이트하고 다시 시작한 다음 설치 스크립트를 다시 실행하세요.
+glibc 기반 Linux(x64, arm64)와 macOS(Intel, Apple Silicon)를 지원하며, Alpine(musl)과 32비트 ARM은 지원하지 않습니다. `curl`, Git, `tar`가 필요하며 Bun이 없다면 Bash와 `unzip`도 필요합니다. herdr 0.9.0 이상과 Bun 1.4 이상이 필요하며, Node는 필요 없습니다. 없는 도구는 현재 사용자 계정에 설치하고, 오래된 Bun은 업데이트한 뒤 앱을 herdr 플러그인으로 설치합니다. 터미널은 릴리스마다 함께 배포되는 Rust PTY 호스트에서 돌아가며, 설치할 때 SHA-256으로 검증합니다. PC에 이미 있는 Node 18 이상은 대비용으로만 씁니다. 이미 설치된 herdr가 0.9.0보다 오래됐다면 herdr를 직접 업데이트하고 다시 시작한 다음 설치 스크립트를 다시 실행하세요.
 
 기본 수신 주소를 쓰고 Tailscale이 켜져 있으면, HTTPS 설정이 끝났을 때 tailnet 주소와 QR 코드가 나옵니다. 별도 접근 토큰을 설정하지 않은 경우, `tailscale serve`가 이 PC 소유자와 같은 로그인임을 알려 주는 자신의 기기는 보통 코드 없이 들어갑니다. 그래도 자신의 폰이 페어링을 요구받는다면 `OVIS_TAILSCALE_SERVE_ONLY=1`은 Tailscale이 로그인이 하나뿐이고 태그된 기기가 없는 tailnet임을 확인하며 serve가 이 포트의 유일한 접근 경로일 때만 로그인 정보가 없는 접속을 허용합니다. 공용 프록시나 터널 등 다른 경로로 이 포트에 접근할 수 있다면 설정하지 마세요 ([접근과 안전](docs/guide.md#access-and-safety)).
 
@@ -107,10 +107,10 @@ irm https://ovis.sh/install.ps1 | iex
 [Git for Windows](https://git-scm.com/download/win)가 필요합니다. 없는 herdr와 Bun을 현재 사용자 계정에 설치한 뒤 같은 플러그인을 설치합니다. Node나 WSL은 필요 없습니다. 폰에서 쓰려면 herdr에서 **Phone setup**을 여세요. herdr가 Windows에서 터미널 attach를 지원하기 전까지 Windows 터미널은 입력은 되고 격자 크기는 고정된 [화면 미러](docs/remote-pcs.md#windows-pcs)로 보입니다.
 
 <p align="center">
-  <img src="docs/screenshots/install.png" width="720" alt="설치 스크립트 출력: Bun, Node, herdr 플러그인이 설치되고 tailscale serve가 앱을 공개한 뒤 폰용 QR 코드가 나옵니다.">
+  <img src="docs/screenshots/install.png" width="720" alt="설치 스크립트 출력: Bun과 herdr 플러그인이 설치되고 tailscale serve가 앱을 공개한 뒤 폰용 QR 코드가 나옵니다.">
 </p>
 
-herdr 0.9.0 이상, Bun 1.4 이상, Node 18 이상이 이미 있다면 플러그인만 설치해도 됩니다. Windows에서는 Node가 필요 없습니다.
+herdr 0.9.0 이상과 Bun 1.4 이상이 이미 있다면 플러그인만 설치해도 됩니다.
 
 ```bash
 herdr plugin install devswha/ovis
@@ -132,9 +132,9 @@ herdr가 실행 중이면 설치 스크립트가 출력하거나 열어 준 주�
 
 **채팅 화면은 어떤 에이전트를 지원하나요?**
 
-Claude Code, Codex, omp, omo, gjc, pi, Hermes는 각자의 세션 저장소에서 읽습니다. GJC 채팅에는 GJC 0.18.9 이상, 서버 PC의 PATH에 있는 `gjc`와 Git, 이미 실행 중인 SDK 브로커가 필요하며, 세션을 확실히 식별할 수 없으면 터미널로 보입니다. OpenCode는 지원되는 2.x와 1.x SQLite 구조에서 herdr가 보고한 세션을 읽습니다. 시작 화면, 세션 식별자가 없는 경우, 지원하지 않거나 읽을 수 없거나 크기 제한을 넘긴 저장소에서는 터미널로 보입니다. Devin CLI는 `devin --resume <id>`처럼 herdr나 실행 중인 프로세스가 세션을 명시할 때 채팅으로 보이고, 그냥 `devin`으로 띄우면 터미널로 보입니다.
+Claude Code, Codex, omp, omo, gjc, pi, Hermes는 각자의 세션 저장소에서 읽습니다. GJC 채팅과 완료 알림은 웹 UI의 네이티브 GJC 확장으로 활성 세션을 식별하며, SDK 브로커나 CLI 조회를 쓰지 않습니다. [확장을 설치](docs/guide.md#supported-agents)하고 GJC를 다시 시작하면 켜집니다. 세션을 확실히 식별할 수 없으면 터미널과 herdr 자체 상태로 보입니다. OpenCode는 지원되는 2.x와 1.x SQLite 구조에서 herdr가 보고한 세션을 읽습니다. 시작 화면, 세션 식별자가 없는 경우, 지원하지 않거나 읽을 수 없거나 크기 제한을 넘긴 저장소에서는 터미널로 보입니다. Devin CLI는 `devin --resume <id>`처럼 herdr나 실행 중인 프로세스가 세션을 명시할 때 채팅으로 보이고, 그냥 `devin`으로 띄우면 터미널로 보입니다.
 
-Grok 채팅은 Linux에서 프로세스가 보유한 세션이 하나뿐이고 herdr가 보고한 세션과 일치할 때 지원됩니다. macOS와 Windows, 세션이 불명확한 경우에는 터미널로 보입니다. Antigravity(agy)는 실행 중인 프로세스의 대화 잠금을 따라 기록을 읽는 실험적 지원입니다. Linux에서 실제 동작을 확인했으며 macOS는 미검증, Windows는 터미널 전용입니다. 지원하지 않거나 읽을 수 있는 기록이 없는 경우에는 터미널로 보입니다. [지원 에이전트 →](docs/guide.md#supported-agents)
+Grok 채팅은 Linux와 macOS에서 프로세스가 보유한 세션이 하나뿐이고 herdr가 보고한 세션과 일치할 때 지원됩니다. Windows와 세션이 불명확한 경우에는 터미널로 보입니다. Antigravity(agy)는 실행 중인 프로세스의 대화 잠금을 따라 기록을 읽는 실험적 지원입니다. Linux에서 실제 동작을 확인했으며 macOS는 미검증, Windows는 터미널 전용입니다. 지원하지 않거나 읽을 수 있는 기록이 없는 경우에는 터미널로 보입니다. [지원 에이전트 →](docs/guide.md#supported-agents)
 
 **herdr의 TUI를 대체하나요?**
 

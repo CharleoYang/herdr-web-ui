@@ -90,7 +90,8 @@ async function managedFixture(supervisor?: string, slowHealth = false) {
     try {
       return Bun.spawn([process.execPath, "--eval",
         `import {runManaged} from ${JSON.stringify(join(import.meta.dir, "managed.ts"))}; await runManaged(${JSON.stringify(root)});`], {
-        env: { ...process.env, PORT: String(port), HOST: "127.0.0.1", OVIS_STATE_DIR: stateDir,
+        // its own config home: the launcher links the default state dirs it finds there
+        env: { ...process.env, PORT: String(port), HOST: "127.0.0.1", OVIS_STATE_DIR: stateDir, XDG_CONFIG_HOME: join(directory, "config"),
           OVIS_TOKEN: "test-managed-token", OVIS_AUTO_UPDATE: "0", SUPERVISOR_MARKER: join(directory, "marker") },
         stdout: output, stderr: output,
       });
@@ -199,6 +200,19 @@ const offlineUpdater = (plugin: string) => new OfflineUnshallow({ root: plugin, 
   autoUpdate: false, pluginCheckout: true, publish() {}, activate: async (_next, persist) => persist() });
 
 describe("managed source updates with real Git repositories and builds", () => {
+  it("gives each release preparation command ten minutes without slowing ordinary discovery", async () => {
+    await release("second", "v0.2.0");
+    const timers = jest.spyOn(globalThis, "setTimeout");
+    try {
+      await updater.request("install");
+      expect(updater.status.error).toBeNull();
+      expect(timers.mock.calls.filter((call) => call[1] === 10 * 60_000)).toHaveLength(7);
+      expect(timers.mock.calls.some((call) => call[1] === 30_000)).toBe(true);
+    } finally {
+      timers.mockRestore();
+    }
+  });
+
   it("checks without installing, then builds an exact revision without changing the source", async () => {
     const original = await git(root, "rev-parse", "HEAD");
     writeFileSync(join(upstream, "CHANGELOG.md"), "# Changelog\n\n## [0.2.0] - 2026-10-07\n\n### Added\n- Second.\n");
@@ -553,7 +567,7 @@ describe("managed source updates with real Git repositories and builds", () => {
       process.exit(0);
     `);
     const child = Bun.spawn([process.execPath, script], { env: { ...process.env, PORT: "59999", HOST: "127.0.0.1",
-      OVIS_STATE_DIR: stateDir, OVIS_AUTO_UPDATE: "0" }, stdout: "pipe", stderr: "pipe" });
+      OVIS_STATE_DIR: stateDir, XDG_CONFIG_HOME: join(stateDir, "config"), OVIS_AUTO_UPDATE: "0" }, stdout: "pipe", stderr: "pipe" });
     const output = Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text()]);
     const timer = setTimeout(() => child.kill("SIGKILL"), 15_000); // a wedged stand-in must not hang the run
     try {
@@ -1086,7 +1100,9 @@ setInterval(() => {}, 1000);`);
       expect(() => process.kill(Number(readFileSync(pidFile, "utf8")), 0)).toThrow();
     } finally {
       // the child ignores SIGTERM: whatever happened above, it only ever ends by its own pid
-      if (existsSync(pidFile)) { try { process.kill(Number(readFileSync(pidFile, "utf8")), "SIGKILL"); } catch { /* already dead */ } }
+      // a pid file caught half written reads 0, and kill(0) would end this run's whole process group
+      const pid = existsSync(pidFile) ? Number(readFileSync(pidFile, "utf8")) : 0;
+      if (pid > 0) { try { process.kill(pid, "SIGKILL"); } catch { /* already dead */ } }
     }
   });
 

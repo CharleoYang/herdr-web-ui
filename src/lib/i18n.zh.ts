@@ -62,6 +62,11 @@ const BASE: Record<string, string> = {
   "Scroll pane up": "向上滚动面板",
   "Scroll pane down": "向下滚动面板",
   "Find in terminal": "在终端中查找",
+  "Previous match": "上一个匹配",
+  "Next match": "下一个匹配",
+  "Close search": "关闭搜索",
+  "No matches": "无匹配",
+  "{current} of {total}": "第 {current} 个，共 {total} 个",
   "Recent folders": "最近的文件夹",
   "Dismiss": "关闭",
   "Input line": "输入框",
@@ -70,6 +75,7 @@ const BASE: Record<string, string> = {
   "Chat": "聊天",
   "Agent default": "代理默认",
   "Phone & devices": "手机和设备",
+  "Access token": "访问 Token",
   "Install app": "安装应用",
 
   // ---- shortcuts (lib/shortcuts.ts labels) ----
@@ -272,9 +278,16 @@ const BASE: Record<string, string> = {
   "Try again": "重试",
   // tabs: the strip over the pane, and the New tab dialog
   "New tab": "新建标签页",
+  "Rename tab": "重命名标签页",
   "Zoom pane": "放大窗格",
   "Unzoom pane": "取消放大",
   "This PC's bridge does not offer this yet": "此电脑的桥接尚未提供此功能。",
+  "Move failed: {reason}": "移动失败：{reason}",
+  "Pane swap was refused: {reason}": "窗格交换被拒绝：{reason}",
+  "The panes are in different tabs.": "窗格位于不同的标签页中。",
+  "Choose two different panes.": "请选择两个不同的窗格。",
+  "A pane is no longer available.": "窗格已不可用。",
+  "There is no pane on that side.": "该方向没有窗格。",
   "Split pane right": "向右拆分窗格",
   "Split pane down": "向下拆分窗格",
   "Plan: {done} of {total} done": "计划：已完成 {done}/{total}",
@@ -290,6 +303,7 @@ const BASE: Record<string, string> = {
   // t3code ports (a)
   // t3code ports (d)
   "Change PC": "切换电脑",
+  "Selected": "已选择",
 };
 
 /** The parts ZH is made of; src/lib/i18n.test.ts fails when a key is in two parts, since a spread keeps only the last. */

@@ -501,7 +501,9 @@
   border: 0;
   outline: 0;
   color: var(--text-strong);
-  font-family: var(--font-ui);
+  /* the chat's font, as the dock around it and the transcript have (Settings → Chat → Chat font);
+     the measure copy takes it too, so the height it measures is the text drawn */
+  font-family: var(--font-chat, var(--font-ui));
   /* never under --fs-input, the smallest size iOS does not zoom the page for; a larger
      Settings → Chat font size grows it with the transcript */
   font-size: max(var(--fs-input), calc(var(--fs-chat) * var(--chat-scale, 1)));
@@ -528,15 +530,18 @@
   }
 }
 
-.composer-text::-webkit-scrollbar {
+.composer-text::-webkit-scrollbar,
+.composer-measure::-webkit-scrollbar {
   width: var(--space-2);
 }
 
-.composer-text::-webkit-scrollbar-track {
+.composer-text::-webkit-scrollbar-track,
+.composer-measure::-webkit-scrollbar-track {
   background: transparent;
 }
 
-.composer-text::-webkit-scrollbar-thumb {
+.composer-text::-webkit-scrollbar-thumb,
+.composer-measure::-webkit-scrollbar-thumb {
   background: var(--border-strong);
   border-radius: var(--radius-pill);
 }

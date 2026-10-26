@@ -60,6 +60,11 @@ const BASE: Record<string, string> = {
   "Scroll pane up": "ペインを上にスクロール",
   "Scroll pane down": "ペインを下にスクロール",
   "Find in terminal": "ターミナル内を検索",
+  "Previous match": "前の一致",
+  "Next match": "次の一致",
+  "Close search": "検索を閉じる",
+  "No matches": "一致なし",
+  "{current} of {total}": "{total}件中{current}件目",
   "Recent folders": "最近のフォルダー",
   "Dismiss": "閉じる",
   "Input line": "入力欄",
@@ -68,6 +73,7 @@ const BASE: Record<string, string> = {
   "Chat": "チャット",
   "Agent default": "エージェントの既定",
   "Phone & devices": "スマートフォンとデバイス",
+  "Access token": "アクセストークン",
   "Install app": "アプリをインストール",
 
   // ---- shortcuts (lib/shortcuts.ts labels) ----
@@ -270,9 +276,16 @@ const BASE: Record<string, string> = {
   "Try again": "再試行",
   // tabs: the strip over the pane, and the New tab dialog
   "New tab": "新しいタブ",
+  "Rename tab": "タブの名前を変更",
   "Zoom pane": "ペインをズーム",
   "Unzoom pane": "ズームを解除",
   "This PC's bridge does not offer this yet": "このPCのブリッジはまだこの機能に対応していません。",
+  "Move failed: {reason}": "移動できませんでした: {reason}",
+  "Pane swap was refused: {reason}": "ペインの入れ替えが拒否されました: {reason}",
+  "The panes are in different tabs.": "ペインが別々のタブにあります。",
+  "Choose two different panes.": "異なる2つのペインを選んでください。",
+  "A pane is no longer available.": "ペインは利用できなくなりました。",
+  "There is no pane on that side.": "その方向にペインはありません。",
   "Split pane right": "ペインを右に分割",
   "Split pane down": "ペインを下に分割",
   "Plan: {done} of {total} done": "計画: {total} 件中 {done} 件完了",
@@ -288,6 +301,7 @@ const BASE: Record<string, string> = {
   // t3code ports (a)
   // t3code ports (d)
   "Change PC": "PCを切り替え",
+  "Selected": "選択中",
 };
 
 /** The parts JA is made of; src/lib/i18n.test.ts fails when a key is in two parts, since a spread keeps only the last. */

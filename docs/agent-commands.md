@@ -42,11 +42,8 @@ provider 1.5 seconds and merges its answer over the scanned rows. A provider own
 commands and skills it answers with: those scanned rows are replaced and the new ones are marked
 `native` and verified. It can never remove or add a builtin. A timeout, an error or no answer
 leaves the scanned rows as they were. No provider starts an agent, a daemon or a broker, and none
-installs anything into the agent's configuration. The gjc provider is the one that runs a
-process: it asks the broker through the gjc CLI (`gjc sdk session raw query ... --attach-only`,
-with `GJC_SDK_BROKER_AUTOSTART=0`), so a broker that isn't running is never started. That query
-runs in a background refresh, at most every 30 seconds per pane and only while the chat holds a
-transcript binding for the pane; the commands request is answered from the last refresh.
+installs anything into the agent's configuration. GJC uses the scanned command and skill
+catalog; the bridge does not query its SDK broker.
 
 | Agent | Builtins pinned to | Folders scanned | Native source | Not listed (runtime only) |
 | --- | --- | --- | --- | --- |
@@ -56,7 +53,7 @@ transcript binding for the pane; the commands request is answered from the last 
 | pi | `earendil-works/pi` slash-commands at 5c1736f8 | agent dir, `~/.agents`, `settings.json` skills, project roots that pi's trust allows | none | extension and package commands |
 | omp | `oh-my-pi` builtin registry at 53a0377d (18.12.3) | omp's skill providers, namespaced on a clash, `disabledProviders` and `enabledProviders` | none | extension and plugin commands |
 | OmO | Senpi 46d15a1c and OmO b6230fcd tables | bundled skills minus the `disabled_skills` union of user, project and profile config | none | extension commands not in the pinned tables |
-| gjc | `builtin-registry.ts` v0.18.12 | bundled workflow skills, `.gjc/commands` of the project and the active profile | `skill.list/state` from the SDK broker the bridge is already bound to, when `runtime.capabilities` offers it, read through the gjc CLI attach-only, never on Windows ([`gjc-runtime.ts`](../server/gjc-runtime.ts)) | none known |
+| gjc | `builtin-registry.ts` v0.18.12 | bundled workflow skills, `.gjc/commands` of the project and the active profile | none | runtime-only skills not present in scanned roots |
 | Hermes | `CommandDef`s at 0.21.5 | skill roots and `quick_commands` | none | plugin slash commands, registered at run time |
 | Grok | `grok-build` 1.0.62 pager and shell tables | `.grok`, `.claude`, `.cursor` and `.agents` roots at every tier, bundled skills, collisions as `/local:x` and friends | none | none known |
 | Antigravity | the recorded agy 1.4.0 palette | `~/.gemini/config/skills` and the two loaded builtin skills | none | none known |
@@ -154,7 +151,11 @@ queued message's **Send now** are held the same way, without it. A command on th
 screen had not opened yet when the reader left (gjc's `/sessions` keeps its empty box for 10 to
 15 seconds while it loads) gets the notice once a frame shows the screen, unless the agent starts
 a turn first. The notice goes as soon as a frame shows the row back, or with another pane, agent
-or session; a peek left for another pane sets none. Messages the PC delivers by itself at the end
+or session; a peek left for another pane sets none. For Claude Code and Codex, a screen opened
+over the input row some other way (Codex's transcript search, Claude Code's `/config`, a peek's
+screen kept in the Terminal lens) gets the same notice, **A screen is still open in the
+terminal**, once Chat shows it with the agent at rest; its **Show terminal** opens the Terminal
+lens, and dismissing it holds until the row is back. Messages the PC delivers by itself at the end
 of a turn are not held. Nothing is typed to close the screen.
 
 Rows marked `agent-hidden` mirror the agent's own menu, which hides them (Claude Code's
@@ -203,6 +204,27 @@ send recorded the screen as it was at send time and only inside the send's windo
 merged into history, never starts another action, and is withheld from observe-role connections.
 A command the agent keeps no transcript turn for, such as Claude Code's `/btw`, still shows a sent
 row.
+
+A row belongs to the agent session it was sent in (`commandOutcomes` in
+[`server/prompt.ts`](../server/prompt.ts)): once herdr reports another session, terminal or agent
+process in the pane, the row is hidden. A send made before the agent reports a session is bound to
+the agent process it went to and stays with the session that process reports first. Where no
+process could be matched (native Windows lists only the shell; an agent may run under another
+program name), it stays with the next session herdr reports in the same terminal under the same
+agent, or under the label herdr gave the pane at the send (herdr names an OmO pane `pi`). A send to
+a restarted agent while herdr still shows the session of the process before waits up to a minute
+(`STALE_SESSION_LAG_MS`) for the agent's own session. Known limits, all of which hide a row rather
+than show a wrong result, except the last:
+
+- That minute is counted when Chat next asks. A session that appeared within it while no Chat was
+  open is taken for a later one, and the row is hidden.
+- Within that minute, a session change typed in the terminal of an agent that resumed the same
+  session (`claude -c`, `codex resume`) keeps the row in the new session until the next change.
+- Outside Linux, an agent restarted under the same process number cannot be told apart from the
+  one before it.
+- The order of repeated identical sends trusts the history row numbers herdr reports
+  (`printedPastEarlier` in [`server/outcome.ts`](../server/outcome.ts)): a herdr that renumbered
+  its history between two sends could credit one with the other's result. herdr 0.9.5 does not.
 
 ## Readers
 

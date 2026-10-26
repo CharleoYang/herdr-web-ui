@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
 
-import { readsStartScreen, startScreenMetadata } from "./start-screen.ts";
+import { codexStartScreenUnused, readsStartScreen, startScreenMetadata } from "./start-screen.ts";
 
 const CLAUDE = [
   " ▐▛███▛█   Claude Code v2.1.296",
@@ -62,6 +62,29 @@ describe("startScreenMetadata", () => {
     expect(startScreenMetadata("codex-transcript", `${header}\n  GPT-6-Sol high · /tmp/project`)).toEqual({ model: null, reasoning_effort: null });
   });
 
+  it("tells a Codex start screen with nothing said yet from one with a conversation", () => {
+    const header = "  >_ OpenAI Codex (v0.162.1)";
+    expect(codexStartScreenUnused(CODEX)).toBeTrue();
+    // a draft in the composer is not a message
+    expect(codexStartScreenUnused(CODEX.replace("\u203a Ask Codex to do anything", "\u203a fix the\n  build"))).toBeTrue();
+    // a message sent, its answer, an error; or a resumed conversation shown under its header
+    const said = (cells: string) => CODEX.replace("\u203a Ask Codex to do anything", `${cells}\n\n\u203a Ask Codex to do anything`);
+    expect(codexStartScreenUnused(said("\u203a hello\n\n\u2022 Hi! What should we work on?"))).toBeFalse();
+    expect(codexStartScreenUnused(said("\u203a hello"))).toBeFalse();
+    expect(codexStartScreenUnused(said("\u25a0 stream disconnected before completion"))).toBeFalse();
+    expect(codexStartScreenUnused(CODEX.replace(header, `${header}\n\u2022 Explored\n  \u2514 Read app.ts`))).toBeFalse();
+    // no header, no footer, or a popup over the footer: nothing to tell by
+    expect(codexStartScreenUnused(CODEX.replace(header, ""))).toBeFalse();
+    expect(codexStartScreenUnused(CODEX.replace("  \u2190 for agents \u00b7 ? for shortcuts", ""))).toBeFalse();
+    expect(codexStartScreenUnused([header, "  Select Model and Effort", "\u203a 1. GPT-6.1-Sol (default) (current)"].join("\n"))).toBeFalse();
+    // a header drawn under a conversation (a command's card, a second session in the same terminal)
+    expect(codexStartScreenUnused(`\u203a hello\n\n\u2022 Hi there\n\n${CODEX}`)).toBeFalse();
+    // an answer that only mentions the banner is no header, with the real one scrolled away
+    expect(codexStartScreenUnused(CODEX.replace(header, "  the tail of an answer\n\u2022 OpenAI Codex (v0.163.0)"))).toBeFalse();
+    // the banner boxed, as some versions draw it
+    expect(codexStartScreenUnused(CODEX.replace(header, "\u2502 >_ OpenAI Codex (v0.163.0) \u2502"))).toBeTrue();
+  });
+
   it("reads gjc's status line, keeping a model it has no id for as gjc wrote it", () => {
     expect(startScreenMetadata("gjc-transcript", GJC)).toEqual({ model: "claude-opus-5-5", reasoning_effort: "xhigh" });
     expect(startScreenMetadata("gjc-transcript", GJC.replace("opus-5.5", "kimi-k3"))).toEqual({ model: "kimi-k3", reasoning_effort: "xhigh" });
@@ -69,7 +92,6 @@ describe("startScreenMetadata", () => {
 
   it("reads only the agents whose screen it knows", () => {
     expect(readsStartScreen("codex-transcript")).toBeTrue();
-    expect(readsStartScreen("omp-transcript")).toBeFalse();
     expect(readsStartScreen("opencode-transcript")).toBeFalse();
     expect(startScreenMetadata("omo-transcript", CODEX)).toEqual({ model: null, reasoning_effort: null });
     expect(startScreenMetadata("claude-transcript", CODEX)).toEqual({ model: null, reasoning_effort: null });

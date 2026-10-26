@@ -1,5 +1,7 @@
 # Ovis
 
+Ovis，herdr 的浏览器和手机客户端。
+
 <p align="center">
   <img src="public/icons/icon-192.png" alt="Ovis" width="100">
 </p>
@@ -25,15 +27,13 @@
   <a href="docs/guide.md#on-your-phone"><img src="https://img.shields.io/badge/PWA-installable-666666?labelColor=333333" alt="可安装的 PWA"></a>
 </p>
 
+**在手机上使用 Claude Code 和 Codex。** 以聊天方式阅读并回复你电脑上正在运行的智能体会话，需要时可切换到真正的终端。原名 herdr web UI。
+
 ---
 
 https://github.com/user-attachments/assets/d854dbb6-64bd-4eba-81c7-fbd3f525726b
 
 <p align="center"><sub>同一个 Claude Code 会话：从 herdr 终端到浏览器的终端和聊天，再到手机，在手机上紧挨着它启动一个新的 worktree · 实机录制，无剪辑</sub></p>
-
-**在手机上使用 Claude Code 和 Codex。**
-
-[herdr](https://github.com/herdrdev/herdr) 的浏览器与手机客户端。无论在电脑还是手机上，都能以聊天方式阅读并回复你电脑上正在运行的同一批智能体会话，需要时可切换到终端。
 
 <table>
   <tr>
@@ -76,7 +76,7 @@ https://github.com/user-attachments/assets/d854dbb6-64bd-4eba-81c7-fbd3f525726b
 
 <p align="center"><sub>每段片段都是同时录制电脑和手机的真实操作，实时、无剪辑。点击可播放完整视频。</sub></p>
 
-- **聊天与终端，共用一个窗格** — 阅读 Claude Code、Codex、omp、omo、gjc、pi、Hermes 的原生会话记录，以及可明确识别的 OpenCode 和 Devin CLI 会话。Linux 上的 Grok 和实验性的 Antigravity（agy）也按下文所述条件提供支持，一键即可切换到同一窗格的终端。智能体工作时可将消息排队到下一轮发送，也可以用 Send now 立即发送。[支持的智能体 →](docs/guide.md#supported-agents)
+- **聊天与终端，共用一个窗格** — 阅读 Claude Code、Codex、omp、omo、gjc、pi、Hermes 的原生会话记录，以及可明确识别的 OpenCode 和 Devin CLI 会话。Linux 和 macOS 上的 Grok 和实验性的 Antigravity（agy）也按下文所述条件提供支持，一键即可切换到同一窗格的终端。智能体工作时可将消息排队到下一轮发送，也可以用 Send now 立即发送。[支持的智能体 →](docs/guide.md#supported-agents)
 - **轻点即可批准** — 支持的审批请求、问题和计划菜单会显示为卡片，发送回答前会先确认提示仍然有效。不支持卡片的请求需在终端中回答。
 - **需要你时及时提醒** — 实时显示每个窗格的状态；应用打开时提醒会从顶部滑下；智能体需要输入或完成任务时发送推送通知，即使应用已关闭也能收到。
 - **安装到手机** — PWA 在键盘上方提供按键栏（Esc、Tab、Ctrl、Alt、Shift、Enter 和方向键），可在 Settings（设置）中调整顺序或添加自定义组合键；Tailscale 地址以二维码显示。[手机设置 →](docs/guide.md#on-your-phone)
@@ -94,7 +94,7 @@ https://github.com/user-attachments/assets/d854dbb6-64bd-4eba-81c7-fbd3f525726b
 curl -fsSL https://ovis.sh/install.sh | sh
 ```
 
-支持基于 glibc 的 Linux（x64、arm64）和 macOS（Intel、Apple Silicon）；不支持 Alpine/musl 或 32 位 ARM。需预先安装 `curl`、Git 和 `tar`；如果没有 Bun，还需要 Bash 和 `unzip`。所需版本为 herdr 0.9.0+、Bun 1.4+ 和 Node 18+。安装程序为当前用户安装缺少的工具、升级旧版 Bun，并在 Node 缺失或低于 18 时安装 Node 22，然后将应用安装为 herdr 插件。如果已安装的 herdr 低于 0.9.0，请先自行更新并重启 herdr，再重新运行安装程序。
+支持基于 glibc 的 Linux（x64、arm64）和 macOS（Intel、Apple Silicon）；不支持 Alpine/musl 或 32 位 ARM。需预先安装 `curl`、Git 和 `tar`；如果没有 Bun，还需要 Bash 和 `unzip`。所需版本为 herdr 0.9.0+ 和 Bun 1.4+，无需 Node。安装程序为当前用户安装缺少的工具、升级旧版 Bun，然后将应用安装为 herdr 插件。终端运行在每个版本随附的 Rust PTY 主机上，安装时按 SHA-256 校验；电脑上已有的 Node 18+ 仅作后备。如果已安装的 herdr 低于 0.9.0，请先自行更新并重启 herdr，再重新运行安装程序。
 
 使用默认监听地址且 Tailscale 正在运行时，HTTPS 配置成功后会提供 tailnet 内的地址和二维码。未配置访问令牌时，如果 `tailscale serve` 报告的登录名与这台电脑的所有者相同，你自己的设备通常无需验证码即可进入。如果自己的手机仍被要求配对，`OVIS_TAILSCALE_SERVE_ONLY=1` 只会在 Tailscale 确认整个 tailnet 由一个登录名拥有、没有带标签的节点，且 serve 是此端口唯一访问途径时，允许没有登录信息的连接。公共代理、隧道或其他转发服务也能访问该端口时，切勿启用此设置（[访问与安全](docs/guide.md#access-and-safety)）。
 
@@ -107,10 +107,10 @@ irm https://ovis.sh/install.ps1 | iex
 需要 [Git for Windows](https://git-scm.com/download/win)。安装程序会为当前用户补齐 herdr 和 Bun，然后安装同一个插件，无需 Node 或 WSL。要在手机上使用，请在 herdr 中打开 **Phone setup**。在 herdr 支持 Windows 终端附加之前，Windows 上的终端是一个可以输入、网格固定的[屏幕镜像](docs/remote-pcs.md#windows-pcs)。
 
 <p align="center">
-  <img src="docs/screenshots/install.png" width="720" alt="安装程序输出：安装 Bun、Node 和 herdr 插件，然后通过 tailscale serve 提供应用访问地址，并显示供手机扫描的二维码。">
+  <img src="docs/screenshots/install.png" width="720" alt="安装程序输出：安装 Bun 和 herdr 插件，然后通过 tailscale serve 提供应用访问地址，并显示供手机扫描的二维码。">
 </p>
 
-已安装 herdr 0.9.0+、Bun 1.4+ 和 Node 18+（Windows 无需 Node）？只需安装插件：
+已安装 herdr 0.9.0+ 和 Bun 1.4+？只需安装插件：
 
 ```bash
 herdr plugin install devswha/ovis
@@ -132,9 +132,9 @@ herdr plugin install devswha/ovis
 
 **聊天视图支持哪些智能体？**
 
-Claude Code、Codex、omp、omo、gjc、pi 和 Hermes 从各自的会话存储读取记录。GJC 聊天需要 GJC 0.18.9+、服务器电脑 PATH 中的 `gjc` 和 Git，以及已运行的 SDK broker；无法明确识别会话时显示终端。OpenCode 从支持的 2.x 和 1.x SQLite 表结构中读取 herdr 报告的会话；开始界面、缺少会话 ID，以及不支持、无法读取或超出大小限制的存储则显示终端。Devin CLI 在 herdr 或运行中的进程明确指出其会话时（例如 `devin --resume <id>`）显示为聊天，直接运行 `devin` 则显示终端。
+Claude Code、Codex、omp、omo、gjc、pi 和 Hermes 从各自的会话存储读取记录。GJC 聊天和完成提醒通过 Web UI 的原生 GJC 扩展识别当前会话，不依赖 SDK broker 或 CLI 查询。[安装该扩展](docs/guide.md#supported-agents)并重启 GJC 即可启用；无法明确识别会话时显示终端，并使用 herdr 自身的状态。OpenCode 从支持的 2.x 和 1.x SQLite 表结构中读取 herdr 报告的会话；开始界面、缺少会话 ID，以及不支持、无法读取或超出大小限制的存储则显示终端。Devin CLI 在 herdr 或运行中的进程明确指出其会话时（例如 `devin --resume <id>`）显示为聊天，直接运行 `devin` 则显示终端。
 
-Grok 聊天仅支持 Linux，并要求进程只持有一个会话，且与 herdr 报告的会话一致；macOS、Windows 或身份不明确时显示终端。Antigravity（agy）是实验性支持，通过运行中进程持有的会话锁定位记录，而非猜测会话。Linux 已通过原生环境验证，macOS 尚未验证，Windows 仅显示终端。对于不支持或无法读取的记录，也会显示终端。[支持的智能体 →](docs/guide.md#supported-agents)
+Grok 聊天支持 Linux 和 macOS，并要求进程只持有一个会话，且与 herdr 报告的会话一致；Windows 或身份不明确时显示终端。Antigravity（agy）是实验性支持，通过运行中进程持有的会话锁定位记录，而非猜测会话。Linux 已通过原生环境验证，macOS 尚未验证，Windows 仅显示终端。对于不支持或无法读取的记录，也会显示终端。[支持的智能体 →](docs/guide.md#supported-agents)
 
 **它会取代 herdr 自带的 TUI 吗？**
 

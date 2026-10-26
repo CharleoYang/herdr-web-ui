@@ -117,6 +117,10 @@ const DEFAULT_DEPS: StatusCollectorDeps = {
 export interface StatusCollector {
   /** Initial baselines are reconciled after the status subscription has started. */
   ready: Promise<void>;
+  /** The lifecycle subscription is live: a workspace, tab or pane created from here on is heard of. */
+  structureReady: Promise<void>;
+  /** A focus change made after this acknowledgement is observable by the bridge. */
+  focusReady: Promise<void>;
   /** Register a pane before starting work whose exit must survive a lifecycle subscription gap. */
   trackPane: (paneId: string) => void;
   stop: () => void;
@@ -243,6 +247,8 @@ function logSubscriptionError(error: Error): void {
 export function startStatusCollector(handlers: StatusCollectorHandlers, overrides: Partial<StatusCollectorDeps> = {}): StatusCollector {
   const deps: StatusCollectorDeps = { ...DEFAULT_DEPS, ...overrides };
   const ready = Promise.withResolvers<void>();
+  const structureStarted = Promise.withResolvers<void>();
+  const focusStarted = Promise.withResolvers<void>();
   let stopped = false;
   let statusSubscription: Subscription | null = null;
   let subscribedPaneIds = new Set<string>();
@@ -540,12 +546,16 @@ export function startStatusCollector(handlers: StatusCollectorHandlers, override
     },
     // panes created or closed meanwhile were not heard of: learn them from a snapshot
     () => {
+      structureStarted.resolve();
       handlers.onStructureChange();
       void reconcile();
     },
     () => stopped,
     // The first connection can start after a tracked pane already exited too.
-    () => { if (trackedPanes.size > 0) void reconcile(); },
+    () => {
+      structureStarted.resolve();
+      if (trackedPanes.size > 0) void reconcile();
+    },
   );
 
   // Its own connection: a focus type an older herdr refuses must not cost pane exits.
@@ -565,16 +575,19 @@ export function startStatusCollector(handlers: StatusCollectorHandlers, override
         onFocus(paneId);
       },
       // a focus change missed meanwhile is gone for good: the next one is heard again
-      () => {},
+      () => focusStarted.resolve(),
       () => stopped,
+      () => focusStarted.resolve(),
     );
-  }
+  } else focusStarted.resolve();
 
   void reconcile();
   backstopTimer = setInterval(() => void reconcile(), deps.backstopMs);
 
   return {
     ready: ready.promise,
+    structureReady: structureStarted.promise,
+    focusReady: focusStarted.promise,
     trackPane(paneId) {
       trackedPanes.set(paneId, ++statusEvents);
       void reconcile();

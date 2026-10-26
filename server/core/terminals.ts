@@ -56,8 +56,8 @@ export function validGeometry(cols: unknown, rows: unknown): { cols: number; row
  * The server's terminals. `stopped` is read through a getter, as `stop()` sets it later, and `end`
  * is called through one, as the connections are built after the terminals.
  */
-export function createTerminalRegistry({ options, clients, stopped, terminalAttach, holdFor, heldRetry, retryFor, relookupFor, holdPending, holdPendingPane, attached, inputReady, end }: {
-  options: PromptRequestOptions & { devinDbPath?: string; opencodeDb?: string; hermesHome?: string; grokHome?: string };
+export function createTerminalRegistry({ options, clients, stopped, terminalAttach, holdFor, heldRetry, retryFor, relookupFor, holdPending, holdPendingPane, attached, transcriptChanged, inputReady, end }: {
+  options: PromptRequestOptions & { devinDbPath?: string; opencodeDb?: string; hermesHome?: string; grokHome?: string; museData?: string };
   clients: Set<Client>;
   stopped: () => boolean;
   terminalAttach: () => Promise<boolean>;
@@ -69,6 +69,8 @@ export function createTerminalRegistry({ options, clients, stopped, terminalAtta
   holdPendingPane: (paneId: string, fault: { code: string; message: string }) => void;
   /** a connection joined the pane's attachment: the pending messages queued for the pane are told to it, and may go through it */
   attached: (client: Client, paneId: string) => void;
+  /** a native transcript changed: reconcile Ovis-origin Pi receipts before notifying readers */
+  transcriptChanged?: (paneId: string) => void;
   /** the pane's terminal takes input again: a pending message waiting for a typist may go now */
   inputReady: (paneId: string) => void;
   end: (client: Client, reason: "stalled" | "revoked" | "closed") => void;
@@ -83,6 +85,7 @@ export function createTerminalRegistry({ options, clients, stopped, terminalAtta
   const conversationEligible = (client: Client, paneId: string): boolean =>
     !stopped() && !connectionOf(client).closing && client.readyState === WebSocket.OPEN && client.data.attached.has(paneId) && client.data.conversationInterests.has(paneId);
   const conversations = new ConversationMonitor((paneId, signature) => {
+    transcriptChanged?.(paneId);
     const recipients: { client: Client; claim: { keepSize: boolean } | undefined; interest: { signature: string | null } }[] = [];
     for (const client of clients) {
       if (!conversationEligible(client, paneId)) continue;
@@ -95,7 +98,7 @@ export function createTerminalRegistry({ options, clients, stopped, terminalAtta
     const run = (conversationReads.get(paneId) ?? Promise.resolve()).then(async () => {
       if (stopped() || !await conversations.matches(paneId, signature)) return;
       // The authoritative REST reader's default page, never a PTY projection or a from/before fragment.
-      const page = await paneConversation(paneId, options.codexHome, {}, options.devinDbPath, options.opencodeDb, options.hermesHome, options.grokHome);
+      const page = await paneConversation(paneId, options.codexHome, {}, options.devinDbPath, options.opencodeDb, options.hermesHome, options.grokHome, options.museData);
       if (stopped() || !await conversations.matches(paneId, signature)) return;
       for (const { client, claim, interest } of recipients) {
         if (!conversationEligible(client, paneId) || client.data.attached.get(paneId) !== claim || client.data.conversationInterests.get(paneId) !== interest) continue;
@@ -109,7 +112,7 @@ export function createTerminalRegistry({ options, clients, stopped, terminalAtta
     }).catch(() => { /* A read or identity failure leaves only the original invalidation. */ });
     conversationReads.set(paneId, run);
     void run.finally(() => { if (conversationReads.get(paneId) === run) conversationReads.delete(paneId); });
-  }, options.codexHome, options.devinDbPath, options.opencodeDb, options.hermesHome, options.grokHome);
+  }, options.codexHome, options.devinDbPath, options.opencodeDb, options.hermesHome, options.grokHome, options.museData);
   const PROMPT_PUSH_MS = 2_000;
 
 
@@ -265,6 +268,7 @@ export function createTerminalRegistry({ options, clients, stopped, terminalAtta
     attachments.delete(paneId);
     clearTimeout(attachment.retry);
     clearTimeout(attachment.relookup);
+    clearTimeout(attachment.recovery);
     clearTimeout(attachment.repaint);
     // its members hold nothing on this pane any more (a pty that exited leaves them on
     // the "terminal ended" screen): a stale entry would read as a live claim in

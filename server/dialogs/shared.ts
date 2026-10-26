@@ -4,6 +4,20 @@ import { createHash } from "node:crypto";
 import type { ReaderContext } from "./registry.ts";
 import type { InteractionPlan } from "./interaction-plan.ts";
 
+/**
+ * A parser that several readers call on the same screen, run once per read: the readers of one
+ * parsePrompt pass are given the same screen and the same context object in turn.
+ */
+export function onePerPass<T>(parse: (screen: string, ctx: ReaderContext) => T): (screen: string, ctx: ReaderContext) => T {
+  let last: { screen: string; ctx: ReaderContext; value: T } | null = null;
+  return (screen, ctx) => {
+    if (last?.screen === screen && last.ctx === ctx) return last.value;
+    const value = parse(screen, ctx);
+    last = { screen, ctx, value };
+    return value;
+  };
+}
+
 export interface DialogReader {
   id: string;
   agents: readonly string[];
@@ -78,6 +92,9 @@ type Responder =
   | "pi-confirm"
   | "pi-input"
   | "pi-model"
+  | "pi-thinking"
+  | "pi-ask-question"
+  | "pi-ask-submit"
   | "omo-model"
   | "omp-model"
   | "hermes-question"
@@ -115,6 +132,10 @@ export type ParsedPrompt = InteractivePrompt & {
     revision: number;
     available: boolean;
   };
+  /** Pi's active tab, from colors verified against the live detection screen by the caller. */
+  piAskForm?: { identity: string; index: number };
+  /** Pi's custom row owns the inline editor, rather than only a selected menu row. */
+  piAskTyping?: true;
   menuLabels: string[];
   selectedIndex: number;
   checkedOptionIndices: number[];
@@ -231,7 +252,7 @@ export function finishPrompt(
   input: Omit<InteractivePrompt, "id" | "agent">,
   internal: Omit<ParsedPrompt, keyof InteractivePrompt>,
   /** fields as the id reads them, where that is not as the card shows them (a fallback card's ticking working line) */
-  hashed: Partial<Pick<InteractivePrompt, "title" | "question" | "body">> & { call?: string } = {},
+  hashed: Partial<Pick<InteractivePrompt, "title" | "question" | "body" | "steps" | "can_step_back" | "default_custom_text">> & { call?: string } = {},
 ): ParsedPrompt {
   const id = createHash("sha256")
     .update(JSON.stringify({ agent, ...input, ...hashed }))

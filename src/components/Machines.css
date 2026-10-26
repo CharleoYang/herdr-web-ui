@@ -31,11 +31,37 @@
 
 .machine-list > .tree-state { padding-left: calc(var(--side-gutter) + var(--side-box)); }
 
+/* PCs kept out on this device (Settings → Remote PCs): one quiet line under the PCs shown, which
+   opens the page that shows them again */
+.machine-hidden-note {
+  display: block;
+  margin: var(--space-2) 0 0;
+  padding: var(--space-2) var(--space-2) var(--space-2) calc(var(--side-gutter) + var(--side-box));
+  background: transparent;
+  border: 0;
+  color: var(--text-dim);
+  font: inherit;
+  font-size: var(--fs-xs);
+  text-align: left;
+  cursor: pointer;
+}
+
+.machine-hidden-note:hover,
+.machine-hidden-note:focus-visible {
+  color: var(--text);
+  text-decoration: underline;
+}
+
+@media (pointer: coarse) {
+  .machine-hidden-note { min-height: var(--touch-target); }
+}
+
 .machine-group {
   --machine-indent: calc(var(--side-gutter) + var(--side-box));
 }
 
-.machine-group + .machine-group { margin-top: var(--space-4); }
+/* a PC the sidebar's filter hides stays in the list, hidden: the gap is between the groups that show */
+.machine-group:not([hidden]) ~ .machine-group { margin-top: var(--space-4); }
 
 .machine-header {
   display: flex;
@@ -232,11 +258,11 @@
   }
 }
 
-/* only the removal in flight (MachineSidebar.tsx marks it aria-busy) keeps most of its tint, so its
-   warning stays readable while the request runs; disabled because another action of the panel is
-   running, it dims like its neighbours */
+/* only the removal in flight (MachineSidebar.tsx marks it aria-busy) keeps its full strength, so its
+   warning stays readable while the request runs: dimmed even to 0.9, its text fell under 4.5:1 in
+   Tokyo Night. Disabled because another action of the panel is running, it dims like its neighbours */
 .machine-controls .btn-danger[aria-busy="true"] {
-  opacity: 0.85;
+  opacity: 1;
 }
 
 .machine-dialog {

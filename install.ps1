@@ -67,7 +67,37 @@ function Find-Plugin([string]$Id = $pluginId) {
     (Run-Tool herdr @('plugin', 'list', '--json') | ConvertFrom-Json).result.plugins |
         Where-Object { $_.plugin_id -eq $Id } | Select-Object -First 1
 }
-$legacy = Find-Plugin $legacyId
+# the highest vX.Y.Z tag, as the updater picks it
+function Get-LatestRef {
+    $latest = Run-Tool git @('ls-remote', '--tags', '--refs', 'https://github.com/devswha/ovis.git', 'v*') |
+        ForEach-Object { if ($_ -match 'refs/tags/(v\d+\.\d+\.\d+)$') { $Matches[1] } } |
+        Sort-Object { [version]$_.Substring(1) } | Select-Object -Last 1
+    if (-not $latest) { throw 'Could not find the latest app release on GitHub. Check your connection and run this again.' }
+    $latest
+}
+# The ref to install is settled before anything moves: a release from before the rename still names
+# the plugin by its old id, and installing it cannot move an install to the new one
+$move = $true
+if (-not (Find-Plugin)) {
+    if (-not $Ref) { $Ref = Get-LatestRef }
+    # the id the manifest at $Ref names
+    $refId = try {
+        $manifest = (Invoke-WebRequest -UseBasicParsing -TimeoutSec 10 "https://raw.githubusercontent.com/devswha/ovis/$Ref/herdr-plugin.toml").Content
+        if ($manifest -match '(?m)^id\s*=\s*"([^"]+)"') { $Matches[1] }
+    } catch { $null }
+    # raw.githubusercontent.com can be blocked where github.com is not: a release tag's version tells it too
+    if (-not $refId -and $Ref -match '^v(\d+\.\d+\.\d+)$') {
+        $refId = if ([version]$Matches[1] -ge [version]'0.4.14') { $pluginId } else { $legacyId }
+    }
+    # That release (0.4.13 and older) installs, runs and updates under the old id: the move waits for
+    # a release that names the new one. With the id unknown (a branch whose manifest cannot be read),
+    # an install under the old id is left running, since the ref may not be able to move it.
+    if ($refId -eq $legacyId) { $pluginId = $legacyId } elseif (-not $refId) { $move = $false }
+}
+$legacy = if ($pluginId -ne $legacyId -and $move) { Find-Plugin $legacyId } else { $null }
+if (-not $move -and (Find-Plugin $legacyId)) {
+    Write-Host "Ovis: could not read the plugin id at $Ref, so the install under $legacyId is left as it is; run this again to move it"
+}
 if ($legacy) {
     Write-Host "Ovis: moving the installed plugin to its Ovis id; its settings and token come along"
     # stopped first: under both ids, each would start a server on herdr's next start
@@ -79,7 +109,7 @@ if ($legacy) {
 function Test-WindowsPlugin($Plugin) {
     $Plugin.plugin_root -and (Test-Path -LiteralPath (Join-Path $Plugin.plugin_root 'scripts\plugin.ps1'))
 }
-$plugin = Find-Plugin
+$plugin = Find-Plugin $pluginId
 $newInstall = $false
 if ($plugin -and -not (Test-WindowsPlugin $plugin)) {
     # A copy from a release older than Windows support never starts here, so no in-app update reaches it.
@@ -88,16 +118,16 @@ if ($plugin -and -not (Test-WindowsPlugin $plugin)) {
     $plugin = $null
 }
 if (-not $plugin) {
-    if (-not $Ref) {
-        $Ref = Run-Tool git @('ls-remote', '--tags', '--refs', 'https://github.com/devswha/ovis.git', 'v*') |
-            ForEach-Object { if ($_ -match 'refs/tags/(v\d+\.\d+\.\d+)$') { $Matches[1] } } |
-            Sort-Object { [version]$_.Substring(1) } | Select-Object -Last 1
-    }
-    if (-not $Ref) { throw 'Could not find the latest app release on GitHub. Check your connection and run this again.' }
+    if (-not $Ref) { $Ref = Get-LatestRef }
     Write-Host "Ovis: installing the plugin at $Ref"
     Run-Tool herdr @('plugin', 'install', 'devswha/ovis', '--ref', $Ref, '--yes')
     $newInstall = $true
-    $plugin = Find-Plugin
+    $plugin = Find-Plugin $pluginId
+    # the id unknown before the install: the ref may have named the old one
+    if (-not $plugin -and -not $move) {
+        $pluginId = $legacyId
+        $plugin = Find-Plugin $pluginId
+    }
     if (-not $plugin.plugin_root) { throw 'herdr does not list the plugin after installing it. See: herdr plugin list' }
     # herdr installs a release without Windows build steps as a success that cannot start.
     if (-not (Test-WindowsPlugin $plugin)) { throw "Ovis $Ref does not support Windows yet. Run this again after the next release." }
@@ -178,7 +208,7 @@ function Invoke-GhApi([string]$Arguments) {
     if (-not $gh) { return }
     $job = [IntPtr]::Zero
     try {
-        if (-not ('HerdrWebUi.GhJob' -as [type])) {
+        if (-not ('Ovis.GhJob' -as [type])) {
             Add-Type -TypeDefinition @'
 using System;
 using System.ComponentModel;
@@ -186,7 +216,7 @@ using System.IO;
 using System.Runtime.InteropServices;
 using System.Text;
 using Microsoft.Win32.SafeHandles;
-namespace HerdrWebUi {
+namespace Ovis {
     public static class GhJob {
         [StructLayout(LayoutKind.Sequential)]
         struct BasicLimits {
@@ -326,7 +356,7 @@ namespace HerdrWebUi {
 }
 '@
         }
-        $job = [HerdrWebUi.GhJob]::Create()
+        $job = [Ovis.GhJob]::Create()
     } catch { $job = [IntPtr]::Zero } # taskkill fallback cannot find an orphan after its launcher exits
     $start = New-Object Diagnostics.ProcessStartInfo
     $ghArguments = "api --hostname github.com --include $Arguments"
@@ -346,9 +376,9 @@ namespace HerdrWebUi {
     $process = $null
     try {
         if ($job -ne [IntPtr]::Zero) {
-            $process = [HerdrWebUi.GhJob]::StartSuspended($start.FileName, $start.Arguments)
-            if (-not [HerdrWebUi.GhJob]::Assign($job, $process.Handle)) {
-                $null = [HerdrWebUi.GhJob]::CloseHandle($job); $job = [IntPtr]::Zero
+            $process = [Ovis.GhJob]::StartSuspended($start.FileName, $start.Arguments)
+            if (-not [Ovis.GhJob]::Assign($job, $process.Handle)) {
+                $null = [Ovis.GhJob]::CloseHandle($job); $job = [IntPtr]::Zero
             }
             $process.Resume()
         } else {
@@ -359,7 +389,7 @@ namespace HerdrWebUi {
         $null = $process.StandardError.ReadToEndAsync()
         if (-not $process.WaitForExit(10000) -or -not $said.Wait(2000)) {
             # closing the job kills gh and every process it started, also one whose parent has exited
-            if ($job -ne [IntPtr]::Zero) { $null = [HerdrWebUi.GhJob]::CloseHandle($job); $job = [IntPtr]::Zero }
+            if ($job -ne [IntPtr]::Zero) { $null = [Ovis.GhJob]::CloseHandle($job); $job = [IntPtr]::Zero }
             try { & $env:ComSpec /d /c "taskkill /T /F /PID $($process.Id) >nul 2>&1" } catch { }
             return
         }
@@ -368,7 +398,7 @@ namespace HerdrWebUi {
         @{ code = $process.ExitCode; status = $status }
     } finally {
         # what gh left running after it answered ends here too
-        if ($job -ne [IntPtr]::Zero) { $null = [HerdrWebUi.GhJob]::CloseHandle($job) }
+        if ($job -ne [IntPtr]::Zero) { $null = [Ovis.GhJob]::CloseHandle($job) }
         if ($process) {
             # Dispose leaves the pipe readers open on .NET Framework; a reader still busy with its
             # ReadToEndAsync may refuse to close, and then the job has ended the writers already
