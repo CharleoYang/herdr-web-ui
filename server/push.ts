@@ -52,7 +52,7 @@ import { dirname, join } from "node:path";
 import webpush from "web-push";
 
 import { paneStorageId } from "../shared/machines.ts";
-import type { AgentStatus, HerdrPane, PushDeliveryFailure, PushPayload, PushSubscriptionStatus } from "../shared/protocol.ts";
+import type { AgentStatus, DevicePairedEvent, HerdrPane, PushDeliveryFailure, PushPayload, PushSubscriptionStatus } from "../shared/protocol.ts";
 import {
   type AlertPrefs,
   DEFAULT_ALERTS,
@@ -101,6 +101,12 @@ export interface PushSubscriptionRecord {
   alerts?: AlertPrefs;
   /** null: local/token sign-in; absent: legacy subscription awaiting ownership. */
   device_id?: string | null;
+  /**
+   * The stream keys of the browser that registered it (server/devices.ts `streamKeys`), so a
+   * pairing that browser makes is not pushed back to it, whatever access it subscribed through.
+   * Absent: registered without one (it then hears every pairing, like any other subscriber).
+   */
+  browser_keys?: string[];
 }
 
 
@@ -143,7 +149,7 @@ export interface PushService {
   /** `parseSubscription` with this service's endpoint rule: what POST /api/push/subscribe accepts */
   parse(value: unknown): PushSubscriptionRecord | null;
   /** `alerts` absent keeps what the device chose before (a re-registration on load) */
-  subscribe(subscription: PushSubscriptionRecord, alerts?: AlertPrefs, deviceId?: string | null): void;
+  subscribe(subscription: PushSubscriptionRecord, alerts?: AlertPrefs, deviceId?: string | null, browserKeys?: readonly string[]): void;
   revokeDevice(id: string): void;
   unsubscribe(endpoint: string): void;
   /** whether a push service answered 404/410 for this endpoint since the server started */
@@ -156,6 +162,14 @@ export interface PushService {
    * subscription still answers, `registered: false`, with the failure that retired it.
    */
   status(subscription: PushSubscriptionRecord, owner: string | null | undefined): PushSubscriptionStatus | null;
+  /**
+   * A device was durably enrolled (server/devices.ts): every other eligible subscriber is told at
+   * once, visibly, whether or not a window of the app is in use somewhere (that window could be
+   * the new device's). The new device's own subscriptions hear nothing, and neither does any
+   * subscription of the browser that paired (`origin`, its stream keys), whoever owns it: a
+   * token, local or Tailscale sign-in pairing itself, or a device pairing again. Resolves once delivered.
+   */
+  devicePaired(event: DevicePairedEvent, origin?: readonly string[]): Promise<void>;
   /** The collector's view of every pane: status baselines and the titles notifications use. */
   seed(panes: readonly HerdrPane[], machineId?: string, machineName?: string): void;
   /**
@@ -334,8 +348,11 @@ export function createPushService(options: PushServiceOptions): PushService {
         const alerts = (entry as { alerts?: unknown } | null)?.alerts;
         if (parsed) {
           const owner = (entry as PushSubscriptionRecord).device_id;
+          const browser = (entry as { browser_keys?: unknown }).browser_keys;
+          const browserKeys = Array.isArray(browser) ? browser.filter((key): key is string => typeof key === "string" && /^[0-9a-f]{32}$/.test(key)).slice(0, 8) : [];
           subscriptions.set(parsed.endpoint, { ...parsed, ...(alerts === undefined ? {} : { alerts: parseAlerts(alerts) }),
-            ...(owner === null || typeof owner === "string" ? { device_id: owner } : {}) });
+            ...(owner === null || typeof owner === "string" ? { device_id: owner } : {}),
+            ...(browserKeys.length > 0 ? { browser_keys: browserKeys } : {}) });
         }
       }
     }
@@ -642,11 +659,17 @@ export function createPushService(options: PushServiceOptions): PushService {
     publicKey: () => keys().publicKey,
     parse: (value) => parseSubscription(value, options),
 
-    subscribe(subscription, alerts, deviceId) {
-      const kept = alerts ?? store().get(subscription.endpoint)?.alerts;
+    subscribe(subscription, alerts, deviceId, browserKeys = []) {
+      const previous = store().get(subscription.endpoint);
+      const kept = alerts ?? previous?.alerts;
+      // one endpoint is one browser: a re-registration adds the keys it carries (a browser that lost its
+      // key cookie is issued a new one) to those it was registered with, the newest kept within the limit
+      const merged = [...new Set([...(previous?.browser_keys ?? []), ...browserKeys])].slice(-8);
+      const browser = merged.length > 0 ? merged : undefined;
       const next = new Map(store());
       next.set(subscription.endpoint, { ...subscription, ...(kept === undefined ? {} : { alerts: kept }),
-        ...(deviceId === undefined ? {} : { device_id: deviceId }) });
+        ...(deviceId === undefined ? {} : { device_id: deviceId }),
+        ...(browser === undefined ? {} : { browser_keys: browser }) });
       persist(next);
       // the record of the subscription this replaces (another owner, other keys) is not the new one's
       const identity = identityOf({ ...subscription, device_id: deviceId });
@@ -699,6 +722,13 @@ export function createPushService(options: PushServiceOptions): PushService {
       const subscription = store().get(endpoint);
       if (!subscription) return null;
       return deliver(subscription, { pane_id: null, title: "Ovis", body: "Alerts are on for this device", tag: "herdr-test" }, "normal");
+    },
+
+    async devicePaired(event, origin = []) {
+      // its own tag per enrollment: a second delivery of the same event replaces the first instead of adding to it
+      const others = [...store().values()].filter((subscription) => subscription.device_id !== event.device_id
+        && !(subscription.browser_keys ?? []).some((key) => origin.includes(key)));
+      await broadcast({ pane_id: null, title: "Ovis", body: `New device paired: ${event.label}`, tag: `herdr-device-paired-${event.event_id}` }, "high", others);
     },
 
     seed(panes, machineId = "local", machineName) {
@@ -831,7 +861,7 @@ function subscriptionNotFound(): Response {
 
 const PUSH_ROUTES = ["POST /api/push/subscribe", "DELETE /api/push/subscribe", "POST /api/push/test", "POST /api/push/status"];
 
-export async function handlePushRequest(request: Request, pathname: string, push: PushService, deviceId: string | null | undefined): Promise<Response | null> {
+export async function handlePushRequest(request: Request, pathname: string, push: PushService, deviceId: string | null | undefined, browserKeys: readonly string[] = []): Promise<Response | null> {
   if (pathname === "/api/push" || pathname === "/api/push/subscribe" || pathname === "/api/push/test" || pathname === "/api/push/status") setRequestRoute(pathname);
   const route = `${request.method} ${pathname}`;
   if (route === "GET /api/push") return jsonResponse({ public_key: push.publicKey() });
@@ -852,7 +882,7 @@ export async function handlePushRequest(request: Request, pathname: string, push
     const subscription = push.parse(body.subscription);
     if (!subscription) return badRequest("invalid_subscription", "subscription needs an https endpoint and p256dh/auth keys");
     if (push.retired(subscription.endpoint)) return subscriptionGone();
-    push.subscribe(subscription, body.alerts === undefined ? undefined : parseAlerts(body.alerts), deviceId);
+    push.subscribe(subscription, body.alerts === undefined ? undefined : parseAlerts(body.alerts), deviceId, browserKeys);
     return new Response(null, { status: 204 });
   }
   if (route === "POST /api/push/status") {
