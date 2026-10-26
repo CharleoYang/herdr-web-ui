@@ -22,6 +22,22 @@ const render = (code: string, message: string, languages: string[], serverOwned 
 };
 
 describe("a pending row's refusal note", () => {
+  it.each(["en", "ko", "ja", "zh"] as const)("shows a confirmed agent change on an uncertain message in %s", (language) => {
+    const fields = { from: "Build", to: "Plan" };
+    const message = `Tab switched OpenCode's agent from ${JSON.stringify(fields.from)} to ${JSON.stringify(fields.to)}. Nothing more was typed.`;
+    const note = translate(language, "Tab switched OpenCode's agent from {from} to {to}. Nothing more was typed. Check the terminal before sending again.", fields);
+    const expected = renderToStaticMarkup(createElement("span", null, note)).slice("<span>".length, -"</span>".length);
+    expect(render("submit_changed", message, [language], true, "uncertain")).toContain(expected);
+  });
+
+  it.each(["en", "ko", "ja", "zh"] as const)("shows that Tab attached another skill on an uncertain message in %s", (language) => {
+    const message = "OpenCode attached another skill. Your chat text stayed here. Check the terminal before sending again.";
+    const expected = renderToStaticMarkup(createElement("span", null, translate(language, message))).slice("<span>".length, -"</span>".length);
+    const html = render("submit_changed", message, [language], true, "uncertain");
+    expect(html).toContain(expected);
+    expect(html).not.toContain(translate(language, "Not confirmed. Check the terminal before sending again."));
+  });
+
   it("says a held-input refusal in the reader's language, not the raw English reason", () => {
     const held = translate("ko", "Not sent: send or discard the held input first.");
     expect(held).not.toBe("Not sent: send or discard the held input first.");
