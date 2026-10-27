@@ -1033,7 +1033,7 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   rather than another app's policy; at `<=480px` both go with the other header pills.
 
 ### Sidebar roster row and footer
-- No top bar. The sidebar opens with the plan panel (when Settings puts it there), the PC workspace groups and a separate **Agents** list spanning the connected PCs. A workspace starts from the `+` on its PC's header, or from the **New workspace**
+- No top bar. The sidebar opens with the plan panel (when Settings puts it there), the PC workspace groups and a separate **Agents** list spanning the connected PCs. A workspace starts from the `+` on its PC's header (the lone Host's **New workspace** row, below), or from the **New workspace**
   button in the dashed **No workspaces yet** box of an empty PC. **Add PC** lives in Settings →
   Remote PCs and in the command palette. Search, as in finding anything and acting on it (panes by
   status, path or folder, actions, plugins), lives in the command palette, as the Codex and Claude
@@ -1051,7 +1051,16 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   and it is empty again after a reload, an unmount, a clear, Escape in the field, or the phone's
   drawer closing. Escape in a field with words clears them and leaves the drawer open; the empty
   field's Escape is the drawer's. Nothing focuses the field by itself, and nothing typed elsewhere reaches it, so a
-  terminal keeps every keystroke. The matcher is the command palette's fuzzy one
+  terminal keeps every keystroke; the command palette's **Filter workspaces and agents** opens the drawer or the
+  sidebar and focuses it. Settings → Appearance → **Sidebar filter** (on by default, this device's choice, kept in its own
+  `ovis:sidebar-filter` key as the PC fold is) leaves the row out, so the lists start at the top, as the Codex and
+  Claude apps keep search in the palette alone; that palette entry then draws the row, focused, for the filter's time.
+  It stays while it holds words, and goes on its **Close filter** (its X while it is empty), Escape in it empty (that
+  Escape goes no further), leaving the sidebar while it is empty: a press outside it, or the keyboard's focus going
+  out from the field or any row (a press inside keeps it, also when the row it picks moves the focus to its pane, so
+  the rows never move under the pointer), or the drawer closing. Going while it holds the focus, it gives the focus back to what had it when it
+  came, else to the list's first row, never to the page, as `useFocusReturn` does for a closing dialog. Turning the
+  setting off while the field holds words keeps it, as one the palette opened. The matcher is the command palette's fuzzy one
   (`matchesQuery`, lib/paletteSearch.ts), its membership alone, never its rank: rows keep herdr's
   order, their PC, their group, their card and their pins (lib/sidebarFilter.ts). It reads only what
   a row shows: the PC's name, a workspace's name and the branch under it, an agent row's title, its
@@ -1089,6 +1098,17 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   panes have come, an empty list says **Loading agents…**, never "No agents running".
 - A PC's header is the head of its workspaces, and the caret beside its `+` is the one fold over
   them. The roster has no label or fold of its own.
+- When the sidebar shows one PC and it is the Host (the only PC, or the others hidden on this device), its group
+  has no header: there is no other PC to tell it from, and the workspaces start the list, as the Claude app lists its
+  sessions with no heading for the computer they run on. Nothing the header held is lost. The state words, the notice
+  and the error are lines of their own and stay; the group is never folded (a fold stored before is ignored, since no
+  caret could open it); its `+` is a **New workspace** row (`.machine-new-row`) after the workspaces, on the rows'
+  grid with the `+` in the folders' cell and its words in `--text-dim`, left out while a filter is on, while the PC is
+  offline and while the empty box offers the same, and there while the PC's first roster loads; the group keeps the PC's name as its accessible name, and the
+  filter neither searches nor suggests a name no row shows. The Claude and Codex apps put their New button at the top;
+  here it closes the list, so the workspaces come first. A Host has no manage panel, and Add PC is in Settings and the
+  palette. A lone PC that is not the Host keeps its header: its name says which PC this is, and its manage panel has
+  no other place. No setting turns this off, since nothing is lost.
 - **Settings → Remote PCs → Show in sidebar** hides a PC on this device (`lib/hiddenMachines.ts`,
   its own `ovis:hidden-pcs` key, like the fold): it leaves the PC groups, the Agents list and the
   command palette, stays connected, and a link or an alert to its pane still opens that pane. The
