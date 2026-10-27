@@ -21,8 +21,26 @@ import type { SshConnection } from "./ssh.ts";
 import { psQuote } from "./powershell.ts";
 import { REMOTE_BUNDLE_VERSION } from "../shared/machines.ts";
 import { isAgyProcessName, windowsHolders } from "./agy-store.ts";
+import { ancestorsToRepoRoot } from "./skills/walk.ts";
 
 const onWindows = process.platform === "win32";
+
+it.skipIf(!onWindows)("stops skill discovery at the user's home whatever its letter case", () => {
+  const home = mkdtempSync(join(tmpdir(), "herdr-home-case-"));
+  const before = process.env["HOME"];
+  try {
+    process.env["HOME"] = home.toLowerCase();
+    // home is itself a repository: a folder under it with no .git of its own must not reach it
+    mkdirSync(join(home, ".git"));
+    const cwd = join(home.toUpperCase(), "work", "sub");
+    mkdirSync(cwd, { recursive: true });
+    expect(ancestorsToRepoRoot(cwd)).toEqual([cwd]);
+    expect(ancestorsToRepoRoot(home.toUpperCase())).toEqual([]);
+  } finally {
+    if (before === undefined) delete process.env["HOME"]; else process.env["HOME"] = before;
+    rmSync(home, { recursive: true, force: true });
+  }
+});
 
 it.skipIf(!onWindows)("finds this process holding an open file through Restart Manager, then observes its release", () => {
   const root = mkdtempSync(join(tmpdir(), "herdr-agy-native-"));
