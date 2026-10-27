@@ -547,13 +547,16 @@ The values are the ones in `src/styles.css`. Every token but `--fs-input` is `ca
   first font that matches, and keeps meaning the copy installed on the device.
 - Ovis Hangul Mono is the terminal's Hangul: the syllables and compatibility jamo of D2Coding
   1.3.2, renamed because its license reserves the name, 265 KB regular and 277 KB bold, each
-  fetched only once a pane prints Korean in it (`unicode-range`, `PaneTerminal.css`). It holds no
-  Latin, so it never sizes a cell. In the terminal's stack it follows the Korean coding fonts a
+  fetched only once a pane prints Korean that reaches it (`unicode-range`, `PaneTerminal.css`): a
+  Korean font installed ahead of it that draws the syllable leaves it unfetched, and a font typed in
+  Settings is applied without waiting for it. It holds no Latin, so it never sizes a cell. In the terminal's stack it follows the Korean coding fonts a
   device may have (D2Coding, Noto Sans Mono CJK KR) and comes before the generic monospace: Hangul
   beside Menlo, Consolas or a phone's monospace is a coding face on every device, not the
   system's proportional Apple SD Gothic Neo or Malgun Gothic. When it arrives the terminal
   measures again and redraws every row (`lib/terminalGlyphs.ts`), as for the icon font, from
-  each face's own load promise: WebKit fires no `loadingdone` for a face a stylesheet loads. It is
+  each face's own load promise: WebKit fires no `loadingdone` for a face a stylesheet loads. Faces
+  that arrive before the next frame (both weights from the cache, or an icon with Korean) are
+  measured for once, and one face that fails holds back none of the others. It is
   `font-display: block`, since WebKit reports a swap face failed while it still loads.
 - Except in Ovis for Mac's window: WebKit there draws a font the user installed, but its canvas,
   which xterm and the glyph fit measure with, sees only the system's fonts. The terminal leaves

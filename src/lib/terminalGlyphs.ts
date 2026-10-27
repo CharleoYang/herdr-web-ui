@@ -86,6 +86,93 @@ const JOINS = /[\p{M}\u200d\ufe00-\ufe0f]/u;
 /** the app's own icon font (PaneTerminal.css), whose late arrival makes every width measured before it wrong */
 export const ICON_FAMILY = "Symbols Nerd Font Mono";
 
+const QUOTES = /["']/g;
+/** A family name as CSS matches it: unquoted, and without regard to case ("pretendard variable" typed in Settings draws with "Pretendard Variable"). */
+const familyKey = (name: string): string => name.replace(QUOTES, "").trim().toLowerCase();
+// a unicode-range as code point pairs, by the text FontFace.unicodeRange gives back
+const parsedRanges = new Map<string, [number, number][]>();
+
+/** Whether a `unicode-range` (as FontFace.unicodeRange gives it back) covers any character of the text. */
+export function coversAny(unicodeRange: string, text: string): boolean {
+  let ranges = parsedRanges.get(unicodeRange);
+  if (!ranges) {
+    ranges = unicodeRange.split(",").map((range): [number, number] => {
+      const [low = "", high = low] = range.trim().replace(/^u\+/i, "").split("-");
+      // a wildcard (U+4??) spans every digit it stands for
+      return [Number.parseInt(low.replace(/\?/g, "0"), 16), Number.parseInt(high.replace(/\?/g, "f"), 16)];
+    });
+    parsedRanges.set(unicodeRange, ranges);
+  }
+  for (const char of text) {
+    const point = char.codePointAt(0) ?? 0;
+    if (ranges.some(([low, high]) => point >= low && point <= high)) return true;
+  }
+  return false;
+}
+
+/** What following a late face needs of a FontFace: its family, what it covers, where its load stands, and the promise that settles with it. */
+export interface LateFace {
+  readonly family: string;
+  readonly unicodeRange: string;
+  readonly status: string;
+  readonly loaded: Promise<unknown>;
+}
+
+export interface LateFaces {
+  /** Follows every face of `families` that covers a character of `text` and has not loaded yet. */
+  ask(families: string, text: string): void;
+  stop(): void;
+}
+
+interface Relay {
+  fire: (() => void) | null;
+}
+
+/** A face that never loads holds on to the relay alone, and a stopped terminal's relay holds nothing. */
+function whenLoaded(face: LateFace, relay: Relay): void {
+  face.loaded.then(() => relay.fire?.(), () => undefined);
+}
+
+/**
+ * Follows the faces that are to draw a terminal's characters but had not loaded when those were
+ * measured, and calls `arrived` in the next `frame` once any of them loaded: one call however many
+ * arrive before it, so the terminal measures and draws again once, not once a face. Each face is
+ * followed by its own `loaded` promise and starts no load: the page loads the faces its text reaches
+ * (a face behind a font that draws the character never loads), one face that fails or stalls holds
+ * back none of the others, and a face that failed is not followed.
+ */
+export function followLateFaces<Face extends LateFace>(fonts: Iterable<Face> | undefined, frame: (callback: () => void) => void, arrived: () => void): LateFaces {
+  const followed = new WeakSet<Face>();
+  let waiting = false;
+  let stopped = false;
+  const relay: Relay = {
+    fire: () => {
+      if (waiting) return;
+      waiting = true;
+      frame(() => {
+        waiting = false;
+        if (!stopped) arrived();
+      });
+    },
+  };
+  return {
+    ask(families, text) {
+      if (!fonts || stopped) return;
+      const names = new Set(families.split(",").map(familyKey));
+      for (const face of fonts) {
+        if ((face.status !== "unloaded" && face.status !== "loading") || followed.has(face)) continue;
+        if (!names.has(familyKey(face.family)) || !coversAny(face.unicodeRange, text)) continue;
+        followed.add(face);
+        whenLoaded(face, relay);
+      }
+    },
+    stop() {
+      stopped = true;
+      relay.fire = null;
+    },
+  };
+}
+
 /**
  * Whether a character is an icon drawn wider than its one cell. Symbols Nerd Font Mono advances
  * 1em, two of the app's 0.5-0.6em cells, so each icon covered the cell after it (`ls` with icons,
@@ -129,7 +216,7 @@ export function adjustTerminalGlyphs(term: Terminal): () => void {
   if (!rows || !screen || !measure) return () => {};
   // glyph advances by "<bold><italic><text>", for the font they were measured in
   const widths = new Map<string, number>();
-  // the characters that asked for their faces in that font, by style
+  // the characters that asked for their faces in that font (every style's: a face of each weight is followed)
   const asked = new Set<string>();
   let measuredFont = "";
   // a box character's drawing, for the cell size it was drawn in
@@ -236,12 +323,11 @@ export function adjustTerminalGlyphs(term: Terminal): () => void {
       // measured it too, and a span that already fills its cells is wrong once a late face arrives
       let fresh = "";
       for (const char of shown) {
-        const key = `${style} ${char}`;
-        if (asked.has(key)) continue;
-        asked.add(key);
+        if (asked.has(char)) continue;
+        asked.add(char);
         fresh += char;
       }
-      if (fresh !== "") awaitFaces(style, fontFamily ?? "", fresh);
+      if (fresh !== "") lateFaces.ask(fontFamily ?? "", fresh);
       const widthOf = (glyph: string): number => {
         const key = `${bold ? 1 : 0}${italic ? 1 : 0}${glyph}`;
         let width = widths.get(key);
@@ -327,51 +413,28 @@ export function adjustTerminalGlyphs(term: Terminal): () => void {
   };
 
   /**
-   * The icon font and the Hangul face are fetched only once a pane prints an icon or Korean
-   * (unicode-range), after xterm and this module measured those characters with whatever stood
-   * in for them, and both keep what they measured. So a character drawn while a face that covers
-   * it has not loaded asks for that face (one load at a time per family and style). When it
-   * arrives, the font family is set again in a form that reads differently and means the same, so
-   * xterm measures anew and the widths here start over, and every row is drawn again: xterm keeps
-   * the rows it drew while the cell stays the same size, and only a row drawn again is fitted
-   * again. The load's own promise tells, as no event can: WebKit (Safari, Ovis for Mac's window)
-   * fires no `loadingdone` for a face a stylesheet loads. Each family is asked on its own: WebKit
-   * checks and loads only the first family with a face for the glyph, and a face with no
-   * unicode-range ("JetBrains Mono Web" typed in Settings) has one for every glyph, so the Hangul
-   * face behind it was never asked for. A face that never loads leaves the fallback as measured.
+   * The icon font and the Hangul face are fetched only once a pane prints an icon or Korean that
+   * reaches them (unicode-range, and no font ahead of them drawing it), after xterm and this module
+   * measured those characters with whatever stood in for them, and both keep what they measured. So
+   * a character drawn while a face that covers it has not loaded follows that face
+   * (followLateFaces): its own `loaded` promise tells when it arrives, as no event can (WebKit, in
+   * Safari and Ovis for Mac's window, fires no `loadingdone` for a face a stylesheet loads). Then,
+   * once a frame whatever number of faces arrived, the widths here start over, the font family is
+   * set again in a form that reads differently and means the same, so xterm measures anew, and every
+   * row is drawn again: xterm keeps the rows it drew while the cell stays the same size, and only a
+   * row drawn again is fitted again. The widths are cleared here rather than when the family reads
+   * differently: two arrivals set it back as it was. A face that never loads leaves the fallback as
+   * measured.
    */
-  let stopped = false;
-  const loading = new Set<string>();
-  const awaitFaces = (style: string, families: string, glyph: string): void => {
-    const fonts = document.fonts;
-    if (!fonts) return;
-    for (const family of families.split(",")) {
-      const spec = `${style} ${family.trim()}`;
-      if (loading.has(spec)) continue;
-      let ready: boolean;
-      try {
-        ready = fonts.check(spec, glyph);
-      } catch {
-        // a name the font parser refuses: the canvas ignored it too and measured another font
-        continue;
-      }
-      if (ready) continue;
-      loading.add(spec);
-      fonts.load(spec, glyph).then((faces) => {
-        loading.delete(spec);
-        if (faces.length > 0) fontArrived();
-      }, () => loading.delete(spec));
-    }
-  };
-  const fontArrived = (): void => {
-    if (stopped) return;
+  const lateFaces = followLateFaces(document.fonts as FontFaceSet | undefined, (callback) => { requestAnimationFrame(callback); }, () => {
+    widths.clear();
     const family = term.options.fontFamily ?? "";
     const double = `"${ICON_FAMILY}"`;
     const single = `'${ICON_FAMILY}'`;
     if (family.includes(double)) term.options.fontFamily = family.replace(double, single);
     else if (family.includes(single)) term.options.fontFamily = family.replace(single, double);
     term.refresh(0, term.rows - 1);
-  };
+  });
   adjustAll(rows.querySelectorAll("span"));
   placeBoxes();
   const observer = new MutationObserver((records) => {
@@ -432,6 +495,6 @@ export function adjustTerminalGlyphs(term: Terminal): () => void {
   return () => {
     observer.disconnect();
     viewObserver.disconnect();
-    stopped = true;
+    lateFaces.stop();
   };
 }

@@ -162,15 +162,20 @@ const FONT_LOAD_SAMPLE = "Mg가";
 /**
  * Resolves once the faces of `stack` are loaded, or failed, or the timeout passed: never rejects,
  * since a font that cannot load falls back like a missing one. An installed font has no face to
- * load and resolves at once.
+ * load and resolves at once. The bundled Hangul face is not waited for: it has no Latin, so it never
+ * sizes the grid, and fetching it here would fetch it on a device whose own Korean font draws the
+ * Hangul ahead of it, and hold the new font back until it came. It loads when a pane prints Korean
+ * that reaches it, and lib/terminalGlyphs.ts measures again then.
  */
 export async function loadFontStack(stack: string, sizePx: number, timeoutMs = FONT_LOAD_TIMEOUT_MS): Promise<void> {
   const fonts = typeof document === "undefined" ? undefined : document.fonts;
   if (!fonts || typeof fonts.load !== "function") return;
+  // CSS matches family names without regard to case: "ovis hangul mono" typed in Settings is the bundled face too
+  const families = stack.split(",").map((name) => name.trim()).filter((name) => name.replace(QUOTES, "").toLowerCase() !== HANGUL_FAMILY.toLowerCase()).join(", ");
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     await Promise.race([
-      fonts.load(`${sizePx}px ${stack}`, FONT_LOAD_SAMPLE),
+      fonts.load(`${sizePx}px ${families}`, FONT_LOAD_SAMPLE),
       new Promise<void>((resolve) => { timer = setTimeout(resolve, timeoutMs); }),
     ]);
   } catch {
