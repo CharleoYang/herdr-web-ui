@@ -91,6 +91,13 @@ The update path never takes over a terminal or stops herdr sessions.
 
 PC registrations and last snapshots persist in `<stateDir>/machines.json`; `OVIS_STATE_DIR` chooses the state directory. A disconnected PC retains its last roster with controls disabled. Retries back off from 1 second to 60 seconds. Other PCs keep working. Reconnection never changes a non-empty selection or sends held input. Composer drafts, held messages, terminal drafts, lenses, recent panes and notification identities include both machine and pane. Held messages have an explicit **Send now** action.
 
+A PC set up at another SSH address (destination, port or session) in its dialog moves there only once
+that setup connects. Until then, and after a setup there that is cancelled or fails, the PC keeps the
+address it had: `machines.json`, its reconnects and its updates that ask nobody use only that one, and
+it tries it again. Its card keeps its own panes, herdr version and update offer; what the setup finds
+at the new address is shown in its dialog only. Nothing of this app's is installed or started at the
+new address unless that setup's own approval allowed it.
+
 SSH commands ignore configured `LocalForward`, `RemoteForward` and `DynamicForward`
 tunnels. The app adds only its own loopback forward through the existing control socket, without
 rereading host config for that forwarding request. A Windows connection server has no control

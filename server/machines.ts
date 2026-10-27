@@ -56,6 +56,12 @@ interface Runtime {
    * restarting one from a PC without a bridge. Another address, set up in the PC's dialog, is not told by it.
    */
   ownOvisAt?: SshTarget;
+  /**
+   * What a setup at another SSH address learns there (its herdr, its first snapshot, whose server it is; null: this
+   * app's bridge), kept off the PC until that setup connects there, when the PC takes it with that address (setup).
+   * Ends with the connection (disconnect): a cancelled, failed or superseded setup leaves the PC as it was (#2075).
+   */
+  move?: { herdr?: Machine["herdr"]; snapshot?: SessionSnapshot; ownOvisAt?: SshTarget | null };
 }
 interface JobState {
   update: boolean;
@@ -183,7 +189,8 @@ const ownUpdateRefused = (offer: RemoteOvis): string => `${independentBridge(REM
 
 /** A connection that retrying cannot fix: the PC waits for the user instead of reconnecting. */
 export class MachineActionRequired extends Error {
-  constructor(message: string, readonly action: MachineAction) { super(message); }
+  /** `newerServer`: the server that answered is newer than this app, as its own identity proved (verify) */
+  constructor(message: string, readonly action: MachineAction, readonly newerServer = false) { super(message); }
 }
 
 
@@ -500,10 +507,12 @@ export class MachineManager {
   private persist(): void {
     const data: StoredMachine[] = [...this.machines.values()].filter(({ machine }) => !machine.herdr_profile_id).map(({ machine: m }) => ({ id: m.id, name: m.name, target: m.target!, enabled: m.enabled, snapshot: m.snapshot }));
     const text = JSON.stringify(data);
-    // the file on disk may have been deleted or replaced since this manager wrote it
-    if (text !== this.written || !holdsDocument(this.statePath, text)) { writePrivateState(this.statePath, data); this.written = text; }
+    // the PCs' registrations are written last: a save that fails before them leaves them as they were on disk, so a
+    // PC moved to another address (setup) is saved there only when nothing else of its save can still fail (#2075)
     for (const { machine } of this.machines.values()) if (machine.herdr_profile_id) this.profileState.saveSnapshot(machine.herdr_profile_id, machine.snapshot);
     this.profileState.flush();
+    // the file on disk may have been deleted or replaced since this manager wrote it
+    if (text !== this.written || !holdsDocument(this.statePath, text)) { writePrivateState(this.statePath, data); this.written = text; }
   }
   job(id: string): SetupJob | undefined { return this.jobs.get(id)?.public; }
   settings(): MachineSettings { return { ...this.preferences, ...(this.setAside.length > 0 ? { set_aside: [...this.setAside] } : {}) }; }
@@ -552,6 +561,9 @@ export class MachineManager {
       target = { ...existing.machine.target! };
     }
     const auto = options.auto === true && request.update_remote === true && !!existing;
+    // A saved PC set up at another SSH address stays at its own until it connects there: that address is the user's to
+    // review in this dialog, and a reconnect or an update that asks nobody goes only where the PC is (#2075)
+    const moving = !!existing && !sameSshSession(target, existing.machine.target!);
     const job: JobState = { update: request.update_remote === true, auto, public: { id, machine_id: machineId, target, phase: "connecting", step: "Connecting with SSH keys and ssh-agent…", challenge: null, installations: [], error: null, ssh_output: null, progress: null }, abort: new AbortController(), timer: setTimeout(() => this.cancelJob(id), 600_000), stageStartedAt: Date.now(), finished: Promise.resolve() };
     if (job.update && existing) job.runtime = existing;
     if (job.update && existing && !auto) existing.updateCancelled = false;
@@ -562,7 +574,7 @@ export class MachineManager {
     this.disconnect(runtime);
     // a setup or bridge update is a try to connect too: a failed one waits its interval (retryNow)
     runtime.triedAt = this.now();
-    runtime.machine.target = target;
+    if (moving) runtime.move = {};
     const ssh = new SshConnection(target, this.sshDir, join(this.sshDir, machineId));
     job.ssh = ssh;
     runtime.ssh = ssh;
@@ -589,11 +601,32 @@ export class MachineManager {
         this.machines.set(machineId, runtime);
         await this.observe(runtime);
         if (job.abort.signal.aborted || runtime.generation !== generation || this.stopped) throw new Error("Setup cancelled");
-        if (runtime.machine.herdr_profile_id) {
-          this.profileState.allowConnection(runtime.machine.herdr_profile_id, target);
-          if (job.installationApproved) this.profileState.approve(runtime.machine.herdr_profile_id, target);
+        // connected there: the PC moves to the address it was set up at, with what this setup learnt there. A move is
+        // all or nothing: one that cannot be completed or saved leaves the PC as it was, trying its own address (#2075)
+        const move = runtime.move;
+        runtime.move = undefined;
+        const left = { target: runtime.machine.target, error: runtime.machine.error, herdr: runtime.machine.herdr, snapshot: runtime.machine.snapshot, ownOvisAt: runtime.ownOvisAt };
+        try {
+          runtime.machine.target = target;
+          if (move) {
+            // what went wrong at the address it left is not this one's: a read there clears it as any read does
+            runtime.machine.error = null;
+            if (move.herdr) runtime.machine.herdr = move.herdr;
+            if (move.ownOvisAt === null) delete runtime.ownOvisAt; else if (move.ownOvisAt) runtime.ownOvisAt = move.ownOvisAt;
+            if (move.snapshot) this.publish(runtime, move.snapshot);
+          }
+          if (runtime.machine.herdr_profile_id) {
+            this.profileState.allowConnection(runtime.machine.herdr_profile_id, target);
+            if (job.installationApproved) this.profileState.approve(runtime.machine.herdr_profile_id, target);
+          }
+          this.persist();
+        } catch (error) {
+          if (move) {
+            Object.assign(runtime.machine, { target: left.target, error: left.error, herdr: left.herdr, snapshot: left.snapshot });
+            if (left.ownOvisAt) runtime.ownOvisAt = left.ownOvisAt; else delete runtime.ownOvisAt;
+          }
+          throw error;
         }
-        this.persist();
         this.stage(job, "connected", "Connected");
         this.emit();
       } catch (e) {
@@ -613,12 +646,19 @@ export class MachineManager {
         // a cancelled update (its Cancel, a closed dialog, the setup's time limit) says nothing
         // about the bridge either: the PC tries again on its own, and only a version check on a PC
         // that answers asks for the update again, without starting the cancelled one by itself
+        // A setup at another SSH address that did not connect there leaves the PC as it was, trying its own address
+        // again when it is enabled: what that setup met there is not this PC's, and its dialog says how it ended (#2075).
         if (job.public.phase === "cancelled") {
-          if (ownsRuntime && job.update && existing && runtime.machine.enabled && !this.stopped) { runtime.machine.error = null; runtime.machine.action_required = null; runtime.updateCancelled = true; this.retryLater(runtime); }
+          if (ownsRuntime && (job.update || moving) && existing && runtime.machine.enabled && !this.stopped) {
+            runtime.machine.error = null; runtime.machine.action_required = null;
+            if (job.update && !moving) runtime.updateCancelled = true;
+            this.retryLater(runtime);
+          }
         } else {
           job.public.phase = "failed"; job.public.step = "Connection failed";
           job.public.error = error;
-          if (ownsRuntime && unreachable && runtime.machine.enabled) { runtime.machine.error = error; runtime.machine.action_required = null; this.retryLater(runtime); }
+          if (moving) { if (ownsRuntime && runtime.machine.enabled && !this.stopped) { runtime.machine.error = null; runtime.machine.action_required = null; this.retryLater(runtime); } }
+          else if (ownsRuntime && unreachable && runtime.machine.enabled) { runtime.machine.error = error; runtime.machine.action_required = null; this.retryLater(runtime); }
           // a failed bridge update on a PC that answered keeps its button: the bridge is still
           // out of date, and the error says why this attempt failed (a password needed, …)
           else if (ownsRuntime) { runtime.machine.state = "error"; runtime.machine.error = error; runtime.machine.action_required = e instanceof MachineActionRequired ? e.action : job.update && existing ? "update_bridge" : null; }
@@ -694,18 +734,33 @@ export class MachineManager {
   private async prepare(runtime: Runtime, job?: JobState): Promise<void> {
     const generation = runtime.generation;
     const ssh = runtime.ssh!;
-    const target = runtime.machine.target!;
+    // a setup tries the address its dialog was given, which the PC takes only once it connects there (setup)
+    const target = job?.public.target ?? runtime.machine.target!;
     const session = target.session;
+    // at an address the PC is not at yet, what this try learns is kept apart (Runtime.move) and its offer goes only
+    // to the job its dialog reads: the PC keeps its own until it connects there
+    const moving = !!job && !sameSshSession(target, runtime.machine.target!);
     // only this try, at this address, tells whose server the PC runs: a cancelled or superseded one (another
     // connection, or its dialog moving the PC to another address, since it looked) writes nothing
     const learnServer = (seen: BridgeDescriptor) => {
       if (runtime.generation !== generation || job?.abort.signal.aborted || this.stopped) return;
-      if (seen.managed_remote) delete runtime.ownOvisAt; else runtime.ownOvisAt = { ...target };
+      const own = seen.managed_remote ? null : { ...target };
+      if (moving) runtime.move!.ownOvisAt = own;
+      else if (own) runtime.ownOvisAt = own; else delete runtime.ownOvisAt;
+    };
+    // an own update that ended in a refusal: no update of it is on offer any more, and one is never told beside a
+    // setup (shared/machines.ts remote_ovis). A server newer than this app is told as any newer one is: this app is
+    // the one to update, and nothing of that server's is offered. One still behind keeps where it answers, for the
+    // user to update it there; its versions from before the update do not
+    const ownRefused = (offer: RemoteOvis, refusal: MachineActionRequired, update: JobState) => {
+      const left: RemoteOvis | null = refusal.newerServer ? null : { ...offer, version: null, latest_version: null, updatable: false, reason: refusal.message };
+      update.public.remote_ovis = left;
+      if (runtime.generation === generation && !moving) runtime.machine.remote_ovis = left;
     };
     const { host, inspection } = await detectHost(ssh, session);
     const { platform, expectedSocket } = inspection;
     // what the PC's own Ovis said is read anew on every try: it may have been updated or replaced since
-    runtime.machine.remote_ovis = null;
+    if (!moving) runtime.machine.remote_ovis = null;
     let { herdrPath } = inspection;
     if (herdrPath) {
       const version = await host.herdrVersion(ssh, herdrPath);
@@ -749,9 +804,9 @@ export class MachineManager {
     if (descriptor && (update || descriptor.bridge_protocol !== BRIDGE_PROTOCOL || descriptor.bundle_version !== REMOTE_BUNDLE_VERSION)) {
       if (!descriptor.managed_remote) {
         if (newerBundle(descriptor.bundle_version)) throw new MachineActionRequired(independentBridge(descriptor.bundle_version), "setup");
-        const offer = await this.ownOffer(ssh, descriptor, runtime.machine.target!, job?.abort.signal);
+        const offer = await this.ownOffer(ssh, descriptor, target, job?.abort.signal);
         if (runtime.generation !== generation || this.stopped || job?.abort.signal.aborted) throw new Error("Setup cancelled");
-        runtime.machine.remote_ovis = offer;
+        if (!moving) runtime.machine.remote_ovis = offer;
         if (job) job.public.remote_ovis = offer;
         // a check still running there is no refusal: the PC tries again on its own instead of waiting for a tap
         if (!offer.updatable) throw offer.reason === OWN_CHECK_RUNNING ? new Error(OWN_CHECK_RUNNING) : new MachineActionRequired(ownUpdateRefused(offer), "setup");
@@ -781,7 +836,7 @@ export class MachineManager {
         await this.wait(job);
       }
       job.installationApproved = update || !descriptor;
-      if (update || !descriptor && !hasBundle) { this.stage(job, "installing", `Installing verified ${platform} bundle…`); await host.installBundle(ssh, platform, job.abort.signal, { cacheDir: join(this.stateDir, "bundles"), owner: installLockOwner(this.stateDir, runtime.machine.target!), onProgress: (stage, done, total) => this.progress(job, stage, done, total) }); }
+      if (update || !descriptor && !hasBundle) { this.stage(job, "installing", `Installing verified ${platform} bundle…`); await host.installBundle(ssh, platform, job.abort.signal, { cacheDir: join(this.stateDir, "bundles"), owner: installLockOwner(this.stateDir, target), onProgress: (stage, done, total) => this.progress(job, stage, done, total) }); }
       if (!descriptor && !herdrPath && host.installHerdr) { this.stage(job, "installing", "Installing herdr with its own installer…"); herdrPath = await host.installHerdr(ssh); }
       if (ssh.usedSecret) {
         this.stage(job, "installing", "Registering the app SSH key…");
@@ -803,21 +858,15 @@ export class MachineManager {
         const publicKey = readFileSync(path + ".pub", "utf8").trim();
         await host.authorizeKey(ssh, "no-agent-forwarding,no-X11-forwarding,no-pty " + publicKey);
         // A separate master proves the new key actually works without a password.
-        const proof = new SshConnection({ ...runtime.machine.target!, identity_file: path }, this.sshDir, path, true);
+        const proof = new SshConnection({ ...target, identity_file: path }, this.sshDir, path, true);
         try { await proof.start(); await (host.kind === "windows" ? proof.runPowerShell("Write-Output ok") : proof.run("true")); } finally { proof.close(); }
       }
     }
     if (ownUpdate && job && descriptor) {
       try { descriptor = await this.runOwnUpdate(job, ssh, host, descriptor, expectedSocket, ownUpdate); }
       catch (error) {
-        // it updated itself into a refusal (another version than this app's): no update is on offer any more, and
-        // an update it can run is never told beside a setup (shared/machines.ts remote_ovis). Where it answers stays,
-        // for the user to update it there; its versions from before the update do not
-        if (error instanceof MachineActionRequired) {
-          const refused: RemoteOvis = { ...ownUpdate, version: null, latest_version: null, updatable: false, reason: error.message };
-          job.public.remote_ovis = refused;
-          if (runtime.generation === generation) runtime.machine.remote_ovis = refused;
-        }
+        // it updated itself into a refusal: its new bridge registered another version than this app's
+        if (error instanceof MachineActionRequired) ownRefused(ownUpdate, error, job);
         throw error;
       }
     }
@@ -858,17 +907,13 @@ export class MachineManager {
     let verified: Awaited<ReturnType<MachineManager["verify"]>>;
     try { verified = currentBridge ?? await this.verify(ssh, descriptor, expectedSocket); }
     catch (error) {
-      // its own update ended on a version newer than this app's: as with any newer server, this app is the one to
-      // update, and that server's own update is offered neither there nor here (shared/machines.ts remote_ovis)
-      if (ownUpdate && job && error instanceof MachineActionRequired) {
-        job.public.remote_ovis = null;
-        if (runtime.generation === generation) runtime.machine.remote_ovis = null;
-      }
+      // its own update ended in a refusal of what answers there, which decides over what its descriptor said
+      if (ownUpdate && job && error instanceof MachineActionRequired) ownRefused(ownUpdate, error, job);
       throw error;
     }
     if (runtime.generation !== generation || this.stopped || job?.abort.signal.aborted) throw new Error("Setup cancelled");
     runtime.endpoint = verified.endpoint;
-    runtime.machine.herdr = verified.identity.herdr;
+    if (moving) runtime.move!.herdr = verified.identity.herdr; else runtime.machine.herdr = verified.identity.herdr;
   }
   /** A tunnel to the bridge a descriptor names, on the PC's 127.0.0.1, with that bridge's token. */
   private async tunnel(ssh: SshConnection, descriptor: BridgeDescriptor): Promise<{ url: string; token: string }> {
@@ -1037,8 +1082,8 @@ export class MachineManager {
     if (!forReplacement && (identity.bridge_protocol !== BRIDGE_PROTOCOL || identity.bundle_version !== REMOTE_BUNDLE_VERSION)) {
       // what runs decides, not its descriptor: a server this app does not manage, or a newer
       // bridge, is not something an update from here can fix
-      if (identity.managed_remote === false) throw new MachineActionRequired(independentBridge(identity.bundle_version), "setup");
-      if (newerBundle(identity.bundle_version)) throw new MachineActionRequired(newerBridge(identity.bundle_version), "bridge_conflict");
+      if (identity.managed_remote === false) throw new MachineActionRequired(independentBridge(identity.bundle_version), "setup", newerBundle(identity.bundle_version));
+      if (newerBundle(identity.bundle_version)) throw new MachineActionRequired(newerBridge(identity.bundle_version), "bridge_conflict", true);
       throw new MachineActionRequired("This PC runs a bridge from a different version. Update the bridge to reconnect; herdr sessions keep running.", "update_bridge");
     }
     if (identity.socket_path !== expectedSocket || typeof identity.socket_id !== "string" || !identity.socket_id || !Number.isInteger(identity.herdr?.protocol) || identity.herdr.protocol < 22) throw new Error("Remote bridge/socket is incompatible; update it explicitly");
@@ -1069,13 +1114,8 @@ export class MachineManager {
           const { snapshot } = await readCappedJson<{ snapshot: SessionSnapshot }>(r, REMOTE_LIMITS.sessionSnapshot);
           if (generation !== runtime.generation || this.stopped) return;
           if (revision !== runtime.snapshotRevision) { runtime.refreshQueued = true; continue; }
-          runtime.machine.error = null;
-          if (this.admitRemote(runtime, snapshot)) {
-            runtime.machine.snapshot = snapshot;
-            this.saveSoon();
-            this.push.seed(forAlerts(snapshot.panes), runtime.machine.id, runtime.machine.name);
-            this.emit();
-          }
+          if (!runtime.move) runtime.machine.error = null;
+          if (this.admitRemote(runtime, snapshot)) { this.publish(runtime, snapshot); this.emit(); }
         } catch (e) {
           if (generation !== runtime.generation || this.stopped) return;
           if (revision !== runtime.snapshotRevision) { runtime.refreshQueued = true; continue; }
@@ -1203,6 +1243,7 @@ export class MachineManager {
     // what this connection proved goes with it; the start interval stays (sourceStarts)
     runtime.verification?.abort.abort(); runtime.verification = undefined;
     runtime.acceptedEpoch = undefined; runtime.candidate = undefined; delete runtime.machine.source_boot_id;
+    runtime.move = undefined;
     runtime.machine.state = "disconnected";
   }
   /**
@@ -1253,17 +1294,24 @@ export class MachineManager {
     })();
     return { call, fresh: true };
   }
+  /**
+   * A full snapshot read from the PC's server becomes the PC's, saved and seeded for alerts. One that a setup at another
+   * SSH address read waits for that setup to connect there (Runtime.move), and is neither shown nor saved before.
+   */
+  private publish(runtime: Runtime, snapshot: SessionSnapshot): void {
+    if (runtime.move) { runtime.move.snapshot = snapshot; return; }
+    runtime.machine.snapshot = snapshot;
+    this.saveSoon();
+    this.push.seed(forAlerts(snapshot.panes), runtime.machine.id, runtime.machine.name);
+  }
   /** the PC's server proved itself: its epoch is the accepted one, and a held snapshot of it is published */
   private proved(runtime: Runtime, boot: string): void {
     runtime.machine.source_boot_id = boot;
     runtime.acceptedEpoch = boot;
     const candidate = runtime.candidate;
     runtime.candidate = undefined;
-    if (candidate?.order_epoch === boot && !olderOrderRead(runtime.machine.snapshot, candidate)) {
-      runtime.machine.snapshot = candidate;
-      this.saveSoon();
-      this.push.seed(forAlerts(candidate.panes), runtime.machine.id, runtime.machine.name);
-    } else if (runtime.machine.snapshot?.order_epoch !== boot) {
+    if (candidate?.order_epoch === boot && !olderOrderRead(runtime.machine.snapshot, candidate)) this.publish(runtime, candidate);
+    else if (runtime.machine.snapshot?.order_epoch !== boot) {
       // the cache is of another server: a read of this one replaces it
       const generation = runtime.generation;
       void this.refresh(runtime).catch((e) => this.lost(runtime, generation, e));
