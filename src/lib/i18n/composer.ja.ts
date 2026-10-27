@@ -8,6 +8,8 @@
  */
 export const COMPOSER_JA: Record<string, string> = {
   "Edit queued message": "キュー内のメッセージを編集",
+  "Not sent: the agent started for this message has ended. Review the message before sending it.": "未送信: このメッセージのために起動したエージェントは終了しました。送信する前にメッセージを確認してください。",
+  "Not sent: the pane's terminal or agent session changed. Review the message before sending it again.": "未送信: ペインのターミナルまたはエージェントセッションが変わりました。再送信する前にメッセージを確認してください。",
   "(answered)": "(回答済み)",
   "Add an OpenAI API key in Settings > Voice input": "設定 > 音声入力で OpenAI API キーを追加してください",
   "Agent is asking": "エージェントからの質問",

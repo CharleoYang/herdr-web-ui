@@ -8,6 +8,8 @@
  */
 export const COMPOSER_KO: Record<string, string> = {
   "Edit queued message": "대기 중인 메시지 편집",
+  "Not sent: the agent started for this message has ended. Review the message before sending it.": "전송되지 않음: 이 메시지를 위해 시작한 에이전트가 종료되었습니다. 전송 전에 메시지를 확인하세요.",
+  "Not sent: the pane's terminal or agent session changed. Review the message before sending it again.": "전송되지 않음: 패널의 터미널이나 에이전트 세션이 바뀌었습니다. 다시 전송하기 전에 메시지를 확인하세요.",
   "(answered)": "(답함)",
   "Add an OpenAI API key in Settings > Voice input": "설정 > 음성 입력에서 OpenAI API 키를 추가하세요",
   "Agent is asking": "에이전트의 질문",

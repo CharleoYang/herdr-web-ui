@@ -8,6 +8,8 @@
  */
 export const COMPOSER_ZH: Record<string, string> = {
   "Edit queued message": "编辑排队消息",
+  "Not sent: the agent started for this message has ended. Review the message before sending it.": "未发送：为这条消息启动的代理已结束。发送前请先检查消息。",
+  "Not sent: the pane's terminal or agent session changed. Review the message before sending it again.": "未发送：窗格的终端或代理会话已更改。再次发送前请先检查消息。",
   "(answered)": "(已回答)",
   "Add an OpenAI API key in Settings > Voice input": "请在设置 > 语音输入中添加 OpenAI API 密钥",
   "Agent is asking": "Agent 提问",

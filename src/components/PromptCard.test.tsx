@@ -1,11 +1,14 @@
-import { describe, expect, it } from "bun:test";
+import { afterEach, describe, expect, it } from "bun:test";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
 import type { InteractivePrompt } from "../../shared/protocol.ts";
-import { translate } from "../lib/i18n.ts";
+import { setCurrentLanguage, translate } from "../lib/i18n.ts";
 import { SettingsProvider } from "../lib/settings.ts";
 import { PromptCard } from "./PromptCard.tsx";
+
+// SSR sets the module-level reader language; do not leak the last fixture into later test files.
+afterEach(() => setCurrentLanguage("en"));
 
 const goal: InteractivePrompt = {
   id: "g", agent: "claude", kind: "menu", title: "Goal active", question: "the file hello.txt exists", body: "running 25s · 0 tokens",
