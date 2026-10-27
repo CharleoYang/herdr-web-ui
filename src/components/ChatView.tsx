@@ -1715,8 +1715,9 @@ export const ChatView = memo(function ChatView({ paneId, presentationKey, finish
       // Keep one object per on-screen occurrence; a null state ends that occurrence.
       setPrompt((before) => {
         if (before === null || next.prompt === null || before.id !== next.prompt.id) return next.prompt;
-        if (JSON.stringify([before.steps, before.can_step_back]) === JSON.stringify([next.prompt.steps, next.prompt.can_step_back])) return before;
-        return { ...before, steps: next.prompt.steps, can_step_back: next.prompt.can_step_back };
+        if (JSON.stringify([before.steps, before.can_step_back, before.own_text]) === JSON.stringify([next.prompt.steps, next.prompt.can_step_back, next.prompt.own_text])) return before;
+        // own_text names steps by index: it goes with the steps it was read with
+        return { ...before, steps: next.prompt.steps, can_step_back: next.prompt.can_step_back, own_text: next.prompt.own_text };
       });
       // unchanged outcomes keep their objects: the turns carrying them are not re-rendered
       const nextOutcomes = next.outcomes ?? [];
