@@ -38,6 +38,10 @@ function BtwTopicRow({ topic }: { topic: BtwTopic }) {
   </details>;
 }
 
+/** Thirty seconds of a pane's saved answers: reopening the dock must not read them again. */
+const BTW_TTL_MS = 30_000;
+const btwByPane = new Map<string, { at: number; topics: BtwTopic[] }>();
+
 /** Saved BTW is a separate store. Its checkpoints must refresh even while the main transcript is idle. */
 export function BtwPanel({ paneId, visible }: { paneId: string; visible: boolean }) {
   const t = useT();
@@ -46,6 +50,7 @@ export function BtwPanel({ paneId, visible }: { paneId: string; visible: boolean
   const [topics, setTopics] = useState<BtwTopic[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [open, setOpen] = useState(false);
+  // Read when the dock appears, then only while it is open (it shows a count, so one read stays).
   useEffect(() => {
     if (!visible || !shown) return;
     const controller = new AbortController();
@@ -58,6 +63,7 @@ export function BtwPanel({ paneId, visible }: { paneId: string; visible: boolean
       try {
         const answer = await fetchPaneBtw(paneId, request.signal);
         if (controller.signal.aborted) return;
+        btwByPane.set(paneId, { at: Date.now(), topics: answer.topics });
         setTopics((previous) => JSON.stringify(previous) === JSON.stringify(answer.topics) ? previous : answer.topics);
         setError(null);
       } catch (cause) {
@@ -69,12 +75,15 @@ export function BtwPanel({ paneId, visible }: { paneId: string; visible: boolean
         setError(cause instanceof Error ? cause.message : String(cause));
       } finally {
         clearTimeout(deadline);
-        if (!controller.signal.aborted && !unsupported) timer = setTimeout(read, 2000);
+        if (!controller.signal.aborted && !unsupported && open) timer = setTimeout(read, 2000);
       }
     };
-    void read();
+    const cached = btwByPane.get(paneId);
+    const fresh = cached !== undefined && Date.now() - cached.at < BTW_TTL_MS;
+    if (fresh) setTopics(cached.topics);
+    if (!fresh || open) void read();
     return () => { controller.abort(); request?.abort(); clearTimeout(timer); };
-  }, [paneId, visible, shown, fetchPaneBtw]);
+  }, [paneId, visible, shown, open, fetchPaneBtw]);
   if (!shown || (topics.length === 0 && error === null)) return null;
   const running = topics.some((topic) => (topic.followUps?.at(-1) ?? topic).status === "running");
   return <section className="chat-btw" aria-label={`${t("Side conversations")} (BTW)`}>

@@ -35,6 +35,10 @@ function OmpAgentRow({ agent, t }: { agent: OmpAgent; t: Translate }) {
   </details>;
 }
 
+/** Thirty seconds of a pane's subagents: reopening the dock must not read the transcripts again. */
+const OMP_AGENTS_TTL_MS = 30_000;
+const ompAgentsByPane = new Map<string, { at: number; agents: OmpAgent[] }>();
+
 /** A journal checkpoint, not a process monitor. Kept outside the virtual transcript. */
 export function OmpAgentsPanel(props: { paneId: string; visible: boolean }) {
   return <OmpAgentsDock {...props} t={useT()} />;
@@ -46,27 +50,35 @@ export function OmpAgentsDock({ paneId, visible, t }: { paneId: string; visible:
   const [agents, setAgents] = useState<OmpAgent[]>([]);
   const [open, setOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Read when the pane appears, then only while the dock is open: a closed dock kept the
+  // child transcripts re-read every three seconds for a count nobody was looking at.
   useEffect(() => {
     if (!visible) return;
     const controller = new AbortController();
     let timer: ReturnType<typeof setTimeout> | undefined;
     let unsupported = false;
-    const poll = async () => {
+    const read = async () => {
       try {
         const result = await fetchPaneOmpAgents(paneId, controller.signal);
-        if (!controller.signal.aborted) { setAgents(result.agents.filter((agent) => agent.status === "unknown")); setError(null); }
+        if (controller.signal.aborted) return;
+        const unfinished = result.agents.filter((agent) => agent.status === "unknown");
+        ompAgentsByPane.set(paneId, { at: Date.now(), agents: unfinished });
+        setAgents(unfinished); setError(null);
       } catch (cause) {
         if (controller.signal.aborted) return;
         // a PC running a bridge without this route (upstream's published runtime) has nothing to show: no error, no more polls
         if (cause instanceof ApiError && cause.status === 404) { unsupported = true; setAgents([]); setError(null); return; }
         setError(cause instanceof Error ? cause.message : String(cause));
       } finally {
-        if (!controller.signal.aborted && !unsupported) timer = setTimeout(poll, 3000);
+        if (!controller.signal.aborted && !unsupported && open) timer = setTimeout(read, 3000);
       }
     };
-    void poll();
+    const cached = ompAgentsByPane.get(paneId);
+    const fresh = cached !== undefined && Date.now() - cached.at < OMP_AGENTS_TTL_MS;
+    if (fresh) setAgents(cached.agents);
+    if (!fresh || open) void read();
     return () => { controller.abort(); clearTimeout(timer); };
-  }, [paneId, visible, fetchPaneOmpAgents]);
+  }, [paneId, visible, open, fetchPaneOmpAgents]);
 
   if (!agents.length && !error) return null;
   return <section className="chat-subagents" aria-label={t("OMP subagents")}>

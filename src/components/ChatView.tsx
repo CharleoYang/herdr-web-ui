@@ -29,7 +29,7 @@ import { conversationFinishEvidence, conversationFinishPresented } from "../lib/
 import { seenKey } from "../lib/seenFinishes.ts";
 import { useWholeOutput as useScopedOutput } from "../lib/useWholeOutput.ts";
 import { turnSkills } from "../lib/skillActivity.ts";
-import { ApiError } from "../lib/api.ts";
+import { ApiError, pinPaneConversation, unpinPaneConversation } from "../lib/api.ts";
 import { copyText } from "../lib/clipboard.ts";
 import { attachmentFileName, mentionFileName, type GalleryImage } from "../lib/imageViewer.ts";
 import { useMachineApi } from "../lib/machineContext.tsx";
@@ -1206,7 +1206,14 @@ export const ChatView = memo(function ChatView({ paneId, presentationKey, finish
   const t = useT();
   const { fetchPaneConversation, peekPaneConversation, fetchPanePromptState, fetchPaneTranscript } = useMachineApi();
   const { settings } = useSettings();
+  // older turns load a page at a time; the setting decides how many prompts a page holds
+  const pagePrompts = settings.historyPrompts;
   const machineId = useMachineId();
+  // the pane the chat has open keeps its page: its answer is the last one evicted
+  useEffect(() => {
+    pinPaneConversation(paneId, machineId);
+    return () => unpinPaneConversation(paneId, machineId);
+  }, [paneId, machineId]);
   const machineSessions = useMachineSessions();
   const promptSession = machineSessions?.get(machineId) ?? null;
   const skillMatcher = useSkillMatcher(paneId, agent);
@@ -1429,7 +1436,7 @@ export const ChatView = memo(function ChatView({ paneId, presentationKey, finish
     wasConnected.current = connected;
     // Stale while revalidating: the last answer read for this pane draws before paint, and the
     // mount read still asks the server; an unchanged answer (a 304) is this object and is skipped.
-    const cached = peekPaneConversation(paneId);
+    const cached = peekPaneConversation(paneId, pagePrompts);
     if (cached !== undefined && cached.source !== "scrollback" && loadedChatTimeline() !== null) {
       history.current = cached.history_id; setHistoryId(cached.history_id);
       showAnswerDetails(cached);
@@ -1475,7 +1482,7 @@ export const ChatView = memo(function ChatView({ paneId, presentationKey, finish
       try {
         for (let step = 0; step < 32 && before !== held; step++) {
           if (cancelled || !isCurrent()) return null;
-          const page = await fetchPaneConversation(paneId, { before, ...(held === null ? {} : { since: held }) });
+          const page = await fetchPaneConversation(paneId, { before, ...(held === null ? {} : { since: held }), prompts: pagePrompts });
           if (page.cursor === held) {
             pages.unshift(page.turns);
             return pages.flat();
@@ -1493,7 +1500,7 @@ export const ChatView = memo(function ChatView({ paneId, presentationKey, finish
       const readKey = presentationRef.current;
       const finish = finishRef.current;
       const previousAnswer = lastAnswer.current ?? undefined;
-      const page = { ...(heldFrom.current === null ? {} : { from: heldFrom.current }), fresh: readKey !== validatedPresentation.current };
+      const page = { ...(heldFrom.current === null ? {} : { from: heldFrom.current }), prompts: pagePrompts, fresh: readKey !== validatedPresentation.current };
        let generation = olderGeneration.current;
       try {
         let conversation;
@@ -1505,7 +1512,7 @@ export const ChatView = memo(function ChatView({ paneId, presentationKey, finish
           if (cancelled || !isCurrent() || generation !== olderGeneration.current) return;
           dropOlder(); setState(EMPTY_STATE); setLoaded(false); signature.current = ""; lastAnswer.current = null;
           generation = olderGeneration.current;
-          conversation = await fetchPaneConversation(paneId);
+          conversation = await fetchPaneConversation(paneId, { prompts: pagePrompts });
         }
         // a read that answers after a hide, disconnect or agent change draws nothing
         if (cancelled || generation !== olderGeneration.current) return;
@@ -1649,7 +1656,7 @@ export const ChatView = memo(function ChatView({ paneId, presentationKey, finish
     await conversationRefresh.page(async () => {
       try {
         if (shownPane.current !== paneId || olderGeneration.current !== generation) return;
-        const page = await fetchPaneConversation(paneId, { before });
+        const page = await fetchPaneConversation(paneId, { before, prompts: pagePrompts });
         if (shownPane.current !== paneId || olderGeneration.current !== generation) return;
         if (page.history_id !== history.current) {
           dropOlder(); setState(EMPTY_STATE); setLoaded(false); signature.current = ""; lastAnswer.current = null;
