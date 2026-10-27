@@ -2380,20 +2380,45 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   prompt dock. `PendingMessages` uses the chat's column and neutral user-bubble surface: plain
   text aligned right, with no outer card. Its scrolling stack is capped by `--pending-max-h`
   (`min(20dvh, 12rem)`). The text stays selectable. Its separate ↑ Send now action sends it, and the small sibling X
-  discards it. Actions keep a `--touch-target` touch target on phones.
+  discards it. A sibling pencil **Edit queued message** withdraws only that exact unsent ID
+  before restoring its text to the composer, after any existing draft with a blank line between.
+  Existing attachment mentions and other queued rows stay intact. This follows Claude Code's
+  [pull-a-queued-message-back-to-input flow](https://wmedia.es/en/tips/claude-code-queue-messages-while-working),
+  with an explicit labeled button for touch and keyboard access instead of an empty-input Up shortcut.
+  Edit is available only for a row this connection owns on the bridge, not another tab's saved
+  held copy. Delivery winning the serialized withdrawal race, including a held-copy resend from
+  another tab, leaves the draft unchanged; withdrawal removes the shared saved copy. An ambiguous
+  resend makes the original row uncertain across retry generations. Edit's withdrawal-only
+  request then keeps that row and leaves the draft unchanged. Plain Discard dismisses an uncertain
+  copy without proving withdrawal. An older server ignores the optional withdrawal-only flag
+  and retains its existing discard behaviour.
+  Stable-ID
+  dispositions survive connection loss and retry generations in a bounded 1024-entry history,
+  retained for at least the resend receipt's 60-second window. New pending input is refused if all
+  those slots are recent or reserved for accepted rows. After history eviction or bridge restart,
+  a stale copy that missed the removal remains explicitly resendable to preserve offline recovery.
+  Actions keep a
+  `--touch-target` touch target on phones.
   Sending disables that item's actions; errors stay inline. Uncertain messages offer Copy and
   Discard saved copy, with no retry action. Desktop and phones share this flow.
 - Accepted pending messages clear only the draft prefix acknowledged by the bridge. For agents
   other than Pi, actual Enter delivery removes the pending row and refreshes the transcript. For
   a message submitted from Ovis Chat to Pi, Enter changes it to a read-only **Sent to Pi ·
   waiting for transcript** user bubble. Only a matching durable user record appended beyond the byte
-  boundary captured on that exact Pi session's unchanged active-branch prefix removes it. Pi may
+  boundary captured on that exact Pi file/session and extending its captured leaf removes it.
+  Bounded byte-exact tail checks assume Pi's append-only history contract, not arbitrary older
+  history corruption detection; changed inode, header, anchor tail or branch fails closed. Pi may
   stage input while status says idle/done during automatic compaction, so status and screen text are
-  not delivery evidence. The live receipt and its text belong only to the connection that sent it;
-  another attached typist neither sees nor acts on it. A lost connection or server restart keeps the
-  browser's saved, non-resendable **transcript confirmation unavailable** copy, but automatic
-  consumption cannot resume without that exact server-owned connection. A changed terminal or
-  session also makes confirmation unavailable. Ovis does not claim that Pi queued or consumed
+  not delivery evidence. A receipt belongs to its sending browser and authenticated device,
+  not another attached typist. The bridge retains disconnected presentation receipts and exact
+  consumed IDs for up to ten minutes, capped at 1024 each. An authorized, non-observing reattach
+  with the same opaque browser resume ID and device can resume that receipt or receive its exact
+  consumed removal on the local machine only. Remote-machine relays strip the resume ID from every
+  attach because their shared bridge token carries no trusted origin-device namespace; remote
+  reconnection cannot resume presentation receipts. This conveys no input permission. The browser's saved, non-resendable
+  **transcript confirmation unavailable** copy remains after server restart or retention expiry;
+  neither matching text nor an empty queue clears it. A changed terminal or session also makes
+  confirmation unavailable. Ovis does not claim that Pi queued or consumed
   the message until the transcript proves it. Next-turn delivery and an explicit Send
   now action claim the same server ID. Connection loss never resumes automatic input. Previously
   held browser messages retain their explicit Send now/Discard recovery.
