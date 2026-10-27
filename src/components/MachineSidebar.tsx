@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { ChevronDown, ChevronRight, Download, Monitor, Plus, Settings, SlidersHorizontal, X } from "lucide-react";
-import type { Machine, MachineState, MachineUpdate, RemoteOvis } from "../../shared/machines.ts";
+import { OWN_UPDATE_OFFER, type Machine, type MachineState, type MachineUpdate, type RemoteOvis } from "../../shared/machines.ts";
 import { copyText } from "../lib/clipboard.ts";
 import { MachineContext } from "../lib/machineContext.tsx";
 import { answerMachineSetup, machineRequest } from "../lib/api.ts";
@@ -251,12 +251,15 @@ function MachineActionNotice({ machine, onSetup }: { machine: Machine; onSetup(m
     <p className="machine-action-text"><strong>{t("Bridge connection conflict")}</strong><span>{t("Update the apps connected to this PC to the same version, or disconnect the other app, then reconnect here. Sessions keep running.")}</span>{machine.error && <span className="machine-action-reason">{machineErrorText(machine.error, t)}</span>}</p>
     <button type="button" className="btn btn-primary" onClick={() => onSetup(machine, false)}>{t("Reconnect")}</button>
   </div>;
-  // the PC's own Ovis, older than this app: it updates itself when asked, or the card says why it cannot
+  // the PC's own Ovis, older than this app: it updates itself when asked, or the card says why it cannot. An
+  // update of it that failed is offered again, with why it failed
   const own = ownOvisAction(machine);
+  const failure = ownUpdateFailure(machine);
   if (own?.updatable) return <div className="machine-action" role="alert">
     <p className="machine-action-text">
-      <strong>{t("This PC's Ovis is older than this app")}</strong>
+      <strong>{t(failure ? "Updating this PC's Ovis failed" : "This PC's Ovis is older than this app")}</strong>
       <span>{t("It updates itself through its own updater, then this PC reconnects; herdr sessions keep running.")}</span>
+      {failure && <span className="machine-action-reason">{machineErrorText(failure, t)}</span>}
     </p>
     <div className="machine-action-buttons">
       <button type="button" className="btn btn-primary" disabled={busy} onClick={() => void run(() => machineRequest(`/${encodeURIComponent(machine.id)}/update-bridge`, "POST").catch((e) => { if (!machine.herdr_profile_id) throw e; onSetup(machine, true); }))}>{own.latest_version ? t("Update this PC's Ovis to v{version}", { version: own.latest_version }) : t("Update this PC's Ovis")}</button>
@@ -323,6 +326,14 @@ export function ownOvisAction(machine: Pick<Machine, "remote_ovis" | "action_req
   return (machine.action_required === "update_bridge" && own.updatable) || (machine.action_required === "setup" && !own.updatable) ? own : null;
 }
 
+/**
+ * Why the last update of a PC's own Ovis failed, when the PC offers it again after one: its error then holds that
+ * failure instead of the offer's own sentence (shared/machines.ts OWN_UPDATE_OFFER). Null otherwise.
+ */
+export function ownUpdateFailure(machine: Pick<Machine, "remote_ovis" | "action_required" | "error">): string | null {
+  return ownOvisAction(machine)?.updatable && machine.error && !machine.error.startsWith(OWN_UPDATE_OFFER) ? machine.error : null;
+}
+
 function urlHost(url: string): string {
   try { return new URL(url).host; } catch { return url; }
 }
@@ -351,8 +362,10 @@ export function MachineActionBanner({ machines, onSetup }: { machines: Machine[]
   const update = first.action_required === "update_bridge";
   const others = waiting.length > 1 ? t(" (+{n} more)", { n: waiting.length - 1 }) : "";
   const own = ownOvisAction(first);
+  // a failed update of it says so here; the PC's card says why
+  const failure = ownUpdateFailure(first);
   return <div className="update-notice" role="status">
-    <span>{own ? t(own.updatable ? "{name}'s own Ovis needs an update to reconnect{others}." : "{name}'s own Ovis needs an update on that PC{others}.", { name: first.name, others }) : t(conflict ? "{name} has a bridge connection conflict{others}." : update ? "{name} needs a bridge update to reconnect{others}." : "{name} needs web access setup{others}.", { name: first.name, others })}</span>
+    <span title={failure === null ? undefined : machineErrorText(failure, t)}>{own ? t(failure ? "Updating {name}'s own Ovis failed{others}." : own.updatable ? "{name}'s own Ovis needs an update to reconnect{others}." : "{name}'s own Ovis needs an update on that PC{others}.", { name: first.name, others }) : t(conflict ? "{name} has a bridge connection conflict{others}." : update ? "{name} needs a bridge update to reconnect{others}." : "{name} needs web access setup{others}.", { name: first.name, others })}</span>
     <button type="button" className="btn" onClick={() => update ? void machineRequest(`/${encodeURIComponent(first.id)}/update-bridge`, "POST").catch(() => onSetup(first, true)) : onSetup(first, false)}>{own ? t(own.updatable ? "Update this PC's Ovis" : "Reconnect") : t(conflict ? "Reconnect" : update ? "Update bridge" : "Set up web access")}</button>
     <button type="button" className="icon-button update-notice-dismiss" aria-label={t("Dismiss")} title={t("Dismiss")} onClick={() => { const next = [...dismissed, ...waiting.map(noticeKey)]; setDismissed(next); writeDismissed(next); }}><X /></button>
   </div>;
