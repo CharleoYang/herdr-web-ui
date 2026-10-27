@@ -106,9 +106,23 @@ The update runs on the server, not in a dialog: closing the dialog after approva
 
 A verified runtime is installed into a checksum-addressed directory before the selected managed bridge is restarted. Existing runtime directories remain available to other running bridges. The updater authenticates the old bridge and checks its socket, managed ownership and PID before stopping it. An approved replacement may have a different bridge protocol, but the new bridge must match the current protocol and bundle version before connecting; herdr itself is left running. A separately managed server must use its own update controls. The connection server's own app update (Settings → Updates) is separate from these bridge updates.
 
-An independently managed server is detected before downloading or installing a remote bundle and
-does not enter the automatic bridge-update queue. Update its app through its own Settings, then
-reconnect the PC here. On Windows, extraction always uses `%SystemRoot%\System32\tar.exe`, so Git
+An independently managed server is detected before downloading or installing a remote bundle, and
+nothing of this app's is ever installed over it or restarted in its place. When it is older than
+this app, the connection server asks it through the SSH tunnel how it updates (its own
+`GET /api/updates`, with the token its bridge descriptor holds). If it updates itself (a managed
+install, not blocked, with a newer release on offer that it installs by revision), the PC's card
+offers **Update this PC's Ovis to vX**, and with **Update PC bridges automatically** on it runs
+unasked. That update asks the server to install the exact release its own updater offers
+(`POST /api/updates/install`; a check for releases running there is waited out first, and no
+redirect is followed), shows its steps, waits up to 15 minutes for the new version's bridge to
+register, and then reconnects. An install that has not started within a minute fails with that
+reason. A server older than this change takes these requests only as its own PC's: when it listens
+on that PC's loopback and has no `OVIS_TOKEN`. A server that cannot update itself (not started by
+its updater, a changed source checkout, an `OVIS_TOKEN` or paired-device gate this app cannot pass,
+a supervisor too old to install by revision, no newer release) keeps the message to update it through its own Settings, with the reason and where it
+answers: the HTTPS address it says Tailscale serves it at, or else its host and port to copy and open
+on that PC or through its own tailnet address. A server newer than this app is told to the user as
+an app update to install here, and it is not asked about its updates. On Windows, extraction always uses `%SystemRoot%\System32\tar.exe`, so Git
 or MSYS tools earlier on PATH cannot reinterpret the archive's drive-letter path.
 
 ## Building and distributing runtimes

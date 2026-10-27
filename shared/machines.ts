@@ -38,6 +38,30 @@ export interface Machine {
    * workspace-order epoch on it (only a verify_source_boot answer can, shared/protocol.ts).
    */
   source_boot_id?: string;
+  /**
+   * The PC's own Ovis (an independently managed web server, not a bridge this app started) when it
+   * is older than this app, as its own updater told it over SSH; null or absent otherwise, and from
+   * an older server. With `updatable`, `action_required` is "update_bridge" and that update asks it
+   * to install its own update; without, it is "setup" and `reason` says why.
+   */
+  remote_ovis?: RemoteOvis | null;
+}
+/**
+ * What a PC's own Ovis says of its own update (GET /api/updates there, read through the SSH tunnel).
+ * Every field is that server's word, shown as text, apart from `url`, an https address only.
+ */
+export interface RemoteOvis {
+  /** its running version and the release its updater offers, without the v; null when it names none */
+  version: string | null;
+  latest_version: string | null;
+  /** it can install its offered update itself, asked by this app */
+  updatable: boolean;
+  /** why it cannot, in that server's words or this app's; null when it can */
+  reason: string | null;
+  /** where it answers: the SSH host and its own port, to open on that PC or through its own tailnet address */
+  address: string;
+  /** the HTTPS address it says Tailscale already serves it at, when it says so */
+  url: string | null;
 }
 /** GET /api/machines: with ?verify_source_boot=<id>, also that PC's freshly proved boot id */
 export interface MachineRoster { machines: Machine[]; verified_source_boot?: { machine_id: string; boot_id: string } }
@@ -56,7 +80,8 @@ export interface HerdrIdentity {
   terminal_mirror?: boolean;
 }
 export type MachineAction = "connect" | "update_bridge" | "setup" | "bridge_conflict";
-export interface MachineUpdate { job_id: string; step: string; progress: SetupProgress | null }
+/** `ovis`: the PC's own Ovis updates itself (Machine.remote_ovis); absent for a bridge this app installs */
+export interface MachineUpdate { job_id: string; step: string; progress: SetupProgress | null; ovis?: boolean }
 /**
  * Where a bridge install is. download (the web server fetching the bundle) and upload (the
  * bundle going to the PC over SSH) count bytes; install and restart have no size.
@@ -97,6 +122,8 @@ export interface SetupJob {
   ssh_output: string | null;
   target: SshTarget;
   progress?: SetupProgress | null;
+  /** the PC's own Ovis, when it is older than this app (Machine.remote_ovis): a first connect has no PC to carry it */
+  remote_ovis?: RemoteOvis | null;
 }
 export type SetupAction = { action: "answer"; challenge_id: string; answer: string } | { action: "approve" } | { action: "cancel" };
 /**

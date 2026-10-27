@@ -710,6 +710,33 @@ describe("update API", () => {
     } finally { protectedServer.stop(); rmSync(protectedState, { recursive: true, force: true }); }
   });
 
+  it("lets the connection server's bridge token read the update status and install the offer, and nothing else of it", async () => {
+    // this PC's own Ovis, gated by its own token, reached by another PC's app through SSH
+    const offered = "a".repeat(40);
+    const bridge = "b".repeat(64);
+    const requests: unknown[] = [];
+    const status: UpdateStatus = { ...unmanagedUpdateStatus(), managed: true, blocked_reason: null, available: true, latest_revision: offered, latest_version: "9.9.9", revision_bound_install: true };
+    const ownState = mkdtempSync(join(tmpdir(), "herdr-update-bridge-"));
+    const own = createServer({ port: 0, stateDir: ownState, token: "own-token", bridgeToken: bridge,
+      updates: { status: () => status, notes: noUpdateNotes, installed: noInstalledNotes, request: (request) => { requests.push(request); } } });
+    const call = (path: string, authorization: string, body?: string) => fetch(`http://127.0.0.1:${own.port}${path}`, {
+      method: body === undefined && path !== "/api/updates/check" ? "GET" : "POST", ...(body === undefined ? {} : { body }),
+      headers: { authorization, "x-herdr-update": "1", "content-type": "application/json" },
+    });
+    try {
+      expect(await (await call("/api/updates", `Bearer ${bridge}`)).json()).toMatchObject({ managed: true, available: true, latest_revision: offered });
+      // the install still names the offer, as from the app's own controls
+      expect((await call("/api/updates/install", `Bearer ${bridge}`, "{}")).status).toBe(400);
+      expect(requests).toEqual([]);
+      expect((await call("/api/updates/install", `Bearer ${bridge}`, JSON.stringify({ expected_revision: offered }))).status).toBe(202);
+      expect(requests).toEqual([{ command: "install", expected_revision: offered }]);
+      // a wrong bridge token is refused like any other, and the token opens no other update route
+      expect((await call("/api/updates", `Bearer ${"c".repeat(64)}`)).status).toBe(401);
+      for (const path of ["/api/updates/notes", "/api/updates/installed", "/api/updates/check", "/api/herdr/update"]) expect((await call(path, `Bearer ${bridge}`)).status).toBe(401);
+      expect(requests).toHaveLength(1);
+    } finally { own.stop(); rmSync(ownState, { recursive: true, force: true }); }
+  });
+
   it("offers no herdr update on a server started without the updater", async () => {
     const response = await fetch(`${base()}/api/herdr/update`);
     expect(response.headers.get("cache-control")).toBe("no-store");

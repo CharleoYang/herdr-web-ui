@@ -108,6 +108,9 @@ describe("independently managed bridge updates", () => {
     const socket = "/home/u/.config/herdr/herdr.sock";
     const descriptor = { pid: process.pid, port: 7317, token: "a".repeat(64), socket_path: socket, bridge_protocol: 1, bundle_version: "older", managed_remote: false };
     const commands: string[] = [];
+    // that PC's own Ovis answers through the tunnel as a server its updater did not start
+    const tunnels: ReturnType<typeof Bun.serve>[] = [];
+    const asked: string[] = [];
     const ssh = { run: async (script: string) => {
       commands.push(script);
       if (script.includes("uname")) return `Linux\nx86_64\n/home/u\n/home/u/.config\n/usr/bin/herdr\nbundle-older\n${JSON.stringify(descriptor)}\n`;
@@ -115,16 +118,24 @@ describe("independently managed bridge updates", () => {
       if (script.includes("--version")) return "herdr 0.9.3";
       if (script.includes("kill -0")) return "live";
       throw new Error("Unexpected remote mutation");
+    }, forward: async (local: number) => {
+      tunnels.push(Bun.serve({ hostname: "127.0.0.1", port: local, fetch(request) {
+        asked.push(`${request.method} ${new URL(request.url).pathname}`);
+        if (new URL(request.url).pathname === "/api/updates") return Response.json({ managed: false, phase: "idle", available: false, blocked_reason: "Start with bun run start or the herdr plugin to enable updates." });
+        return new Response("not found", { status: 404 });
+      } }));
     } } as unknown as SshConnection;
     const prepare = (manager as unknown as { prepare(runtime: unknown, job?: unknown): Promise<void> }).prepare.bind(manager);
     const runtime = { generation: 0, ssh, machine: { target: { destination: "pc" } } };
     try {
-      await expect(prepare(runtime)).rejects.toMatchObject({ action: "setup" });
+      await expect(prepare(runtime)).rejects.toMatchObject({ action: "setup", message: expect.stringContaining("does not update itself") });
       await expect(prepare(runtime, { update: true, auto: true, public: { installations: [] }, abort: new AbortController() })).rejects.toMatchObject({ action: "setup" });
+      // it was only asked how it updates, never to install anything
+      expect(asked.every((request) => request.startsWith("GET "))).toBe(true);
       descriptor.managed_remote = true;
       await expect(prepare(runtime)).rejects.toMatchObject({ action: "update_bridge" });
       expect(commands.every(script => script.includes("uname") || script.includes("socket=") || script.includes("--version") || script.includes("kill -0"))).toBe(true);
-    } finally { manager.stop(); rmSync(dir, { recursive: true, force: true }); }
+    } finally { manager.stop(); for (const tunnel of tunnels) tunnel.stop(true); rmSync(dir, { recursive: true, force: true }); }
   });
 });
 
