@@ -190,8 +190,13 @@ try {
         const bar = node.getBoundingClientRect();
         const pressed = { clientX: bar.left + node.clientWidth, clientY: bar.bottom - 20 };
         const letGo = (dragged: boolean) => node.dispatchEvent(new PointerEvent("pointerup", { bubbles: true, clientX: pressed.clientX, clientY: pressed.clientY - (dragged ? 20 : 0) }));
+        // The list hands a scroll to the chat at once only while it settles a data change (its anchor
+        // lock lasts 300 ms), otherwise in an animation frame it asks for first: awaiting the next
+        // frame awaits that delivery. A loaded runner gets here after the lock has lapsed.
+        const delivered = () => new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
         // Deliver the preceding return-to-end scroll before testing a new upward move.
         node.dispatchEvent(new Event("scroll"));
+        await delivered();
         if (input.endsWith("wheel")) text.dispatchEvent(new WheelEvent("wheel", { bubbles: true, deltaY: input === "up-wheel" ? -20 : input === "down-wheel" ? 20 : 0, deltaX: input === "horizontal-wheel" ? 20 : 0 }));
         else if (input === "click" || input === "drag") {
           text.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, buttons: 1, clientY: 100 }));
@@ -216,6 +221,8 @@ try {
         // the thumb let go before the browser delivered the scroll its drag made
         if (input === "scrollbar-held-released-first") letGo(true);
         node.dispatchEvent(new Event("scroll"));
+        // the chat reads the clock when the scroll reaches it: the rest lasts until then
+        await delivered();
         Reflect.deleteProperty(performance, "now");
         if (input === "drag") text.dispatchEvent(new PointerEvent("pointerup", { bubbles: true }));
         if (input === "scrollbar-held" || input === "scrollbar-blurred") letGo(true);
@@ -393,6 +400,9 @@ try {
     const work = page.locator("[data-chat-row]").filter({ hasText: "local E1 ROW-497" });
     await work.locator(".work-block-head").click();
     await work.locator(".work-row-head").click();
+    // A click first scrolls its target into view, and rows above measured late can leave this button
+    // just below the fold: that scroll is the click's, not the output's.
+    await work.locator(".chat-tool-more").scrollIntoViewIfNeeded();
     const beforeOutput = await work.evaluate((row) => row.getBoundingClientRect().top);
     await work.locator(".chat-tool-more").click();
     await work.locator(".chat-tool-io.is-whole").waitFor();
