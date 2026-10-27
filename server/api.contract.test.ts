@@ -31,7 +31,7 @@ import { testShellEnv } from "../scripts/test-shell.ts";
 import { PendingInputError, PendingInputs } from "./pending-input.ts";
 import { loginPathProbe, ShellAgentLocator, type LoginPathProbe } from "./shell-agent.ts";
 import { DeviceStore } from "./devices.ts";
-import type { MachineEvent } from "../shared/machines.ts";
+import type { MachineEvent, MachineSettings } from "../shared/machines.ts";
 import { MAX_MUTED_PANES, type SharedPreferences } from "../shared/preferences.ts";
 
 /**
@@ -1304,6 +1304,27 @@ describe("agent rename", () => {
       expect(Array.isArray(((await res.json()) as { commands: unknown[] }).commands)).toBeTrue();
     } finally {
       bridge.stop();
+      rmSync(state, { recursive: true, force: true });
+    }
+  });
+
+  // #2044: a crash left machines.json its old length in NULs, and the server would not start
+  it("starts on saved PCs that are not JSON and names the file it set aside in the PC settings, read only", async () => {
+    const state = mkdtempSync(join(tmpdir(), "ovis-machines-set-aside-"));
+    writeFileSync(join(state, "machines.json"), Buffer.alloc(353));
+    const error = spyOn(console, "error").mockImplementation(() => {});
+    let app: ReturnType<typeof createServer> | undefined;
+    try {
+      app = createServer({ port: 0, hostname: "127.0.0.1", token: "", stateDir: state, tailscaleOwner: null });
+      const url = `http://127.0.0.1:${app.port}/api/machines/settings`;
+      const settings = await (await fetch(url)).json() as MachineSettings;
+      expect(settings).toEqual({ auto_update_bridges: true, set_aside: [expect.stringMatching(/^machines\.json\.corrupt-\S+$/)] });
+      expect(readdirSync(state)).toContain(settings.set_aside![0]!);
+      const patched = await fetch(url, { method: "PATCH", headers: { "content-type": "application/json", "x-herdr-machine": "1" }, body: JSON.stringify({ auto_update_bridges: false, set_aside: [] }) });
+      expect(patched.status).toBe(200);
+      expect(await patched.json()).toEqual({ auto_update_bridges: false, set_aside: settings.set_aside });
+    } finally {
+      app?.stop(); error.mockRestore();
       rmSync(state, { recursive: true, force: true });
     }
   });

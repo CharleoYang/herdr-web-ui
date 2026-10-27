@@ -1032,6 +1032,10 @@ function RemotePcsPage({ actions, machines, pcSettings, pcSettingsError, onPcSet
           <Toggle label={t("Update PC bridges automatically")} checked={pcSettings.auto_update_bridges} onChange={(auto_update_bridges) => onPcSettings({ auto_update_bridges })} />
         </SettingsRow>
       )}
+      {/* a crash can leave the saved PCs unreadable: the server set the file aside and started without them */}
+      {pcSettings?.set_aside && pcSettings.set_aside.length > 0 && <p className="settings-item settings-hint">
+        {t("Saved PC data was damaged and could not be read when the app started. It was set aside as {files}; add any missing PC again.", { files: pcSettings.set_aside.join(", ") })}
+      </p>}
       {pcSettingsError && <p className="settings-item settings-hint" role="alert">{pcSettingsError}</p>}
     </SettingsGroup>
     <SidebarPcsGroup machines={machines} />

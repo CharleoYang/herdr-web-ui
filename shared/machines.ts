@@ -64,7 +64,15 @@ export interface MachineUpdate { job_id: string; step: string; progress: SetupPr
  */
 export interface SetupProgress { stage: "download" | "upload" | "install" | "restart"; done: number; total: number | null; rate: number | null; elapsed_ms: number }
 /** Server-side PC preferences (machine-settings.json in the state directory). */
-export interface MachineSettings { auto_update_bridges: boolean }
+export interface MachineSettings {
+  auto_update_bridges: boolean;
+  /**
+   * The Host's saved-PC files (machines.json, herdr-profile-state.json) that were not JSON when
+   * this server started, by the name each was moved to beside them; absent when none was. Read
+   * only: a PATCH ignores it.
+   */
+  set_aside?: string[];
+}
 export interface SetupRequest extends SshTarget { name?: string; machine_id?: string; update_remote?: boolean }
 export type SetupPhase = "connecting" | "authentication" | "checking" | "approval" | "installing" | "starting" | "connected" | "failed" | "cancelled";
 export interface SetupChallenge { id: string; kind: "host_key" | "secret"; prompt: string }

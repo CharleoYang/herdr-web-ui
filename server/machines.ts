@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import { createServer as tcpServer } from "node:net";
 import { hostname } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { BRIDGE_PROTOCOL, LOCAL_MACHINE, REMOTE_BUNDLE_VERSION, type BridgeIdentity, type Machine, type MachineAction, type MachineEvent, type MachineSettings, type SetupAction, type SetupJob, type SetupProgress, type SetupRequest, type SshTarget } from "../shared/machines.ts";
 import type { ServerMessage, SessionSnapshot, HerdrPane } from "../shared/protocol.ts";
 import type { PushService } from "./push.ts";
@@ -16,6 +16,8 @@ import type { CompletionTracker } from "./completion.ts";
 import { HerdrProfileState, herdrMachineId } from "./herdr-profile-state.ts";
 import { sameSshSession, type HerdrMachineProfile } from "./herdr-profiles.ts";
 import { validateTarget } from "./machine-security.ts";
+import { writePrivateState } from "./private-state.ts";
+import { holdsDocument, readStateDocument, setAsideDamaged } from "./state-document.ts";
 import { detectHost, HERDR_INSTALL_CMD, installLockOwner } from "./remote-host.ts";
 import { discard, readCappedJson, REMOTE_LIMITS } from "./remote-json.ts";
 import { SshConnection, sshClient } from "./ssh.ts";
@@ -202,6 +204,10 @@ export class MachineManager {
   private saveTimer?: ReturnType<typeof setTimeout>;
   private profileState: HerdrProfileState;
   private statePath: string;
+  /** machines.json as this manager last wrote it (persist) */
+  private written: string | undefined;
+  /** the state files that were not JSON at startup, by the name they were moved to (settings) */
+  private setAside: string[] = [];
   private sshDir: string;
   private local: Machine = { id: LOCAL_MACHINE, name: hostname(), kind: "local", enabled: true, state: "connecting", error: null, snapshot: null };
   private localDiagnostics = new ConnectionDiagnostics("machine.local");
@@ -239,8 +245,17 @@ export class MachineManager {
         : error instanceof Error && "code" in error && typeof error.code === "string" ? error.code : "read failed";
       if (cause !== "ENOENT") console.error(`Cannot read ${this.settingsPath}; remote PC settings start empty`, cause);
     }
-    if (existsSync(this.statePath)) {
-      const saved: unknown = JSON.parse(readFileSync(this.statePath, "utf8"));
+    if (this.profileState.setAside !== null) this.setAside.push(basename(this.profileState.setAside));
+    // bytes that are not JSON (a crash can leave the file all NULs) are moved aside and the app starts
+    // without saved PCs; JSON that is not a list of PCs still refuses to start, so nothing replaces it
+    const read = readStateDocument(this.statePath);
+    if (read.kind === "malformed") {
+      const aside = setAsideDamaged(this.statePath);
+      this.setAside.push(basename(aside));
+      console.error(`${this.statePath} is not JSON; it was set aside as ${aside}, and the app starts without the PCs added here`);
+    }
+    if (read.kind === "json") {
+      const saved = read.value;
       if (!Array.isArray(saved)) throw new Error("Invalid machines.json; registrations were preserved");
       for (const item of saved as StoredMachine[]) {
         if (!/^[a-f0-9-]{36}$/.test(item.id) || typeof item.name !== "string" || typeof item.enabled !== "boolean") throw new Error("Invalid machine registration");
@@ -429,17 +444,22 @@ export class MachineManager {
     this.saveTimer = setTimeout(() => { this.saveTimer = undefined; if (!this.stopped) { try { this.persist(); } catch (e) { console.error("PC state could not be saved:", e instanceof Error ? e.message : "write failed"); } } }, 1000);
     this.saveTimer.unref();
   }
+  /**
+   * The registrations cannot be recomputed, so they are written durably (writePrivateState): a
+   * crash after a plain rename can leave the file its old length in NULs. Every refresh of a remote
+   * PC saves soon, mostly with the same snapshot, so only a document that differs from the one on
+   * disk pays for the write and its fsync.
+   */
   private persist(): void {
-    mkdirSync(this.stateDir, { recursive: true, mode: 0o700 });
     const data: StoredMachine[] = [...this.machines.values()].filter(({ machine }) => !machine.herdr_profile_id).map(({ machine: m }) => ({ id: m.id, name: m.name, target: m.target!, enabled: m.enabled, snapshot: m.snapshot }));
-    const tmp = this.statePath + ".tmp";
-    writeFileSync(tmp, JSON.stringify(data), { mode: 0o600 });
-    chmodSync(tmp, 0o600); renameSync(tmp, this.statePath);
+    const text = JSON.stringify(data);
+    // the file on disk may have been deleted or replaced since this manager wrote it
+    if (text !== this.written || !holdsDocument(this.statePath, text)) { writePrivateState(this.statePath, data); this.written = text; }
     for (const { machine } of this.machines.values()) if (machine.herdr_profile_id) this.profileState.saveSnapshot(machine.herdr_profile_id, machine.snapshot);
     this.profileState.flush();
   }
   job(id: string): SetupJob | undefined { return this.jobs.get(id)?.public; }
-  settings(): MachineSettings { return { ...this.preferences }; }
+  settings(): MachineSettings { return { ...this.preferences, ...(this.setAside.length > 0 ? { set_aside: [...this.setAside] } : {}) }; }
   updateSettings(patch: Record<string, unknown>): MachineSettings {
     if (patch["auto_update_bridges"] !== undefined) {
       if (typeof patch["auto_update_bridges"] !== "boolean") throw new Error("auto_update_bridges must be boolean");
