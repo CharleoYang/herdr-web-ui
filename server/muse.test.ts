@@ -153,6 +153,39 @@ describe("Muse session log", () => {
     expect(museSessionLive(path)).toBe(true);
   });
 
+  test("reads the sessions Muse 1.4.13 recorded with a picture, a file mention, a subagent, /fork, /side and /rewind", () => {
+    const log = (name: string) => readFileSync(join(import.meta.dir, "fixtures", "muse", `recorded-1.4.13-${name}.jsonl`), "utf8");
+    const brief = (turns: ReturnType<typeof real>) => turns.map((turn) => [turn.role,
+      turn.parts.map((part) => part.kind === "tool" ? `tool:${part.name}` : part.kind === "text" && part.phase !== "commentary" ? part.text : part.kind)]);
+    // the picture is an `asset` block beside the words; `@shed.txt` was sent as the words `shed.txt`
+    expect(brief(parseMuseTranscript(log("main"), "01a17b25-1a12-79d2-85c7-c69a93734997"))).toEqual([
+      ["user", ["[Image #1]  What color is this picture? Answer in one word."]],
+      ["assistant", ["text", "tool:read_file", "text", "tool:bash", "tool:bash", "tool:bash", "thinking", "Green"]],
+      ["user", ["How many items does shed.txt list? Answer with the number only."]],
+      ["assistant", ["text", "tool:read_file", "3"]],
+      ["user", ["Start one subagent that counts the lines in notes.txt, wait for it, then tell me its number."]],
+      ["assistant", ["text", "tool:subagent_spawn", "text", "tool:subagent_wait", "3"]],
+    ]);
+    // `/fork` opened this session in a new tab; the turns before the fork are `session.fork.turn` records, not shown
+    const fork = "01a17b27-16af-7d23-b6e3-359822f02bba";
+    const forked = parseMuseTranscript(log("fork"), fork);
+    expect(brief(forked)).toEqual([
+      ["user", ["In this fork, which line of notes.txt mentions water? Quote it."]],
+      ["assistant", ["text", "tool:read_file", "- water every other day"]],
+    ]);
+    expect(transcriptPage("muse-transcript", logAt(fork, log("fork"))).turns).toEqual(forked);
+    // a side chat's question is in its `session.side.started` record, which is not read
+    expect(brief(parseMuseTranscript(log("side"), "01a17b28-dbc2-7c40-ac12-4284736f2d0f"))).toEqual([
+      ["assistant", ["A rake gathers leaves and debris into piles and levels or loosens the soil."]],
+    ]);
+    // `/rewind` to the second prompt writes the kept prompt again; its answer is only a `session.fork.turn` record
+    expect(brief(parseMuseTranscript(log("rewind"), "01a17b29-b9c6-7f72-ade5-8ccfc373f2f3"))).toEqual([
+      ["user", ["[Image #1]  What color is this picture? Answer in one word."]],
+      ["user", ["How many items does shed.txt list? Answer with the number only. Then name them."]],
+      ["assistant", ["text", "tool:read_file", "thinking", "3\nrake, hose, seeds"]],
+    ]);
+  });
+
   test("a log in a shape the reader does not know is refused, so the pane uses Terminal", () => {
     const line = (mark: string) => recorded.split("\n").find((candidate) => candidate.includes(mark))!;
     const prompt = line('"runtime.user_intent.accepted"');

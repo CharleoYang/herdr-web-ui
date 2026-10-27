@@ -64,7 +64,8 @@ Chat uses Terminal when the log is missing or cannot be read, or when a whole li
 
 - does not parse;
 - names a record, a `runtime.session` kind or a run event that is not in the logs of Muse 1.4.2
-  to 1.4.13 (61 records and 56 run events, from 160 session logs on one test PC);
+  to 1.4.13 (63 records and 56 run events, from 160 session logs on one test PC and a recorded
+  1.4.13 `/fork`, which writes two records the 160 logs do not have);
 - names another session in its `stream`, as Muse names each log's folder after its session;
 - is a record above in another shape: a prompt block other than `text` or a picture (`asset`),
   a tool call without `name`, a result without `text`, or a compaction other than `summary_text`.
@@ -83,9 +84,12 @@ share no bytes.
 ## Limits
 
 - Prompt cards, slash commands, todos and plans, subagents, pictures and Earlier sessions are
-  outside this first scope. A picture shows as the `[Image #n]` name Muse gives it.
+  outside this first scope. A picture shows as the `[Image #n]` name Muse gives it, and a
+  subagent as its `subagent_spawn` and `subagent_wait` calls.
 - A forked session's Chat starts at the fork. Muse copies the turns before it into the fork's
   log as `session.fork.turn` records, which are not shown.
+- After `/side`, the pane uses Terminal until Muse exits. The side session takes a lock for the
+  same process and does not end its log, so the pane has two live sessions.
 - Only the pages Chat reads are checked. A line further back that Chat cannot read sends that
   older page to Terminal, and Chat then shows no turns older than the pages it has. Grok and
   Antigravity behave the same.
@@ -94,7 +98,8 @@ share no bytes.
   `tool-outputs/`, which is not read.
 - A result recorded after a later prompt, while its call is on an earlier page, shows on a row of
   its own.
-- What `/rewind` records is not handled yet: Chat can keep the turns it went back over.
+- `/rewind` opens a new session in the pane. Its Chat shows the kept prompt without its answer:
+  Muse writes the prompt again, but keeps the answer only as a `session.fork.turn` record.
 
 ## Verification
 
@@ -108,7 +113,9 @@ bun run check fast
 records as Muse wrote them: tool calls, a failed command, a declined call and a `/model` switch.
 Its README says what was replaced. `session.jsonl` beside it is fictional, written in the record
 shapes of real 1.4.12 logs, for the cases the recording does not have (a compaction, a long
-output). The contract test runs a stand-in process named `muse` in an isolated herdr, checks that
+output). `recorded-1.4.13-main.jsonl` and the `-fork`, `-side` and `-rewind` logs beside it are
+a second recording: a picture, a file mention, a subagent, and the sessions that `/fork`, `/side`
+and `/rewind` opened. The contract test runs a stand-in process named `muse` in an isolated herdr, checks that
 a lock naming another pid binds nothing, then reads the recorded session over HTTP, a whole tool
 output, a switch to a second session, and Terminal for a renamed record and for a log it cannot
 read. It does not run the Muse TUI.
