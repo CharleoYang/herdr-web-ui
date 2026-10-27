@@ -545,10 +545,20 @@ The values are the ones in `src/styles.css`. Every token but `--fs-input` is `ca
   name `"JetBrains Mono Web"`. The name is the app's own so that the terminal never takes it:
   xterm's stack (`src/lib/fontFamily.ts`) names `"JetBrains Mono"`, sizes every cell from the
   first font that matches, and keeps meaning the copy installed on the device.
+- Ovis Hangul Mono is the terminal's Hangul: the syllables and compatibility jamo of D2Coding
+  1.3.2, renamed because its license reserves the name, 265 KB regular and 277 KB bold, each
+  fetched only once a pane prints Korean in it (`unicode-range`, `PaneTerminal.css`). It holds no
+  Latin, so it never sizes a cell. In the terminal's stack it follows the Korean coding fonts a
+  device may have (D2Coding, Noto Sans Mono CJK KR) and comes before the generic monospace: Hangul
+  beside Menlo, Consolas or a phone's monospace is a coding face on every device, not the
+  system's proportional Apple SD Gothic Neo or Malgun Gothic. When it arrives the terminal
+  measures again and redraws every row (`lib/terminalGlyphs.ts`), as for the icon font, from
+  each face's own load promise: WebKit fires no `loadingdone` for a face a stylesheet loads. It is
+  `font-display: block`, since WebKit reports a swap face failed while it still loads.
 - Except in Ovis for Mac's window: WebKit there draws a font the user installed, but its canvas,
   which xterm and the glyph fit measure with, sees only the system's fonts. The terminal leaves
-  such a font out of its stack (`measurableFontStack`) and draws what Safari draws, Menlo and
-  Apple SD Gothic Neo, rather than a grid measured in one font and drawn in another. It follows
+  such a font out of its stack (`measurableFontStack`) and draws what Safari draws, Menlo with
+  Hangul in Ovis Hangul Mono, rather than a grid measured in one font and drawn in another. It follows
   Zed and Warp, whose terminals size a cell with the font that draws it. VS Code's xterm.js
   terminal, the nearest web one, never meets the case: in Electron the canvas and the page see
   the same installed fonts. A WKWebView's canvas cannot, so here the font is dropped rather than

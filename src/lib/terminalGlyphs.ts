@@ -129,6 +129,8 @@ export function adjustTerminalGlyphs(term: Terminal): () => void {
   if (!rows || !screen || !measure) return () => {};
   // glyph advances by "<bold><italic><text>", for the font they were measured in
   const widths = new Map<string, number>();
+  // the characters that asked for their faces in that font, by style
+  const asked = new Set<string>();
   let measuredFont = "";
   // a box character's drawing, for the cell size it was drawn in
   const boxes = new Map<string, BoxDrawing | null>();
@@ -218,6 +220,7 @@ export function adjustTerminalGlyphs(term: Terminal): () => void {
     const font = `${fontSize}px ${fontFamily}`;
     if (font !== measuredFont) {
       widths.clear();
+      asked.clear();
       measuredFont = font;
     }
     const cellWidth = Number.parseFloat(screen.style.width) / term.cols;
@@ -228,11 +231,22 @@ export function adjustTerminalGlyphs(term: Terminal): () => void {
       let shown = displayText(text);
       const bold = span.classList.contains("xterm-bold");
       const italic = span.classList.contains("xterm-italic");
+      const style = `${italic ? "italic " : ""}${bold ? fontWeightBold : fontWeight} ${fontSize}px`;
+      // every character drawn asks for its faces once, whether or not its span is fitted: xterm
+      // measured it too, and a span that already fills its cells is wrong once a late face arrives
+      let fresh = "";
+      for (const char of shown) {
+        const key = `${style} ${char}`;
+        if (asked.has(key)) continue;
+        asked.add(key);
+        fresh += char;
+      }
+      if (fresh !== "") awaitFaces(style, fontFamily ?? "", fresh);
       const widthOf = (glyph: string): number => {
         const key = `${bold ? 1 : 0}${italic ? 1 : 0}${glyph}`;
         let width = widths.get(key);
         if (width === undefined) {
-          measure.font = `${italic ? "italic " : ""}${bold ? fontWeightBold : fontWeight} ${font}`;
+          measure.font = `${style} ${fontFamily}`;
           width = measure.measureText(glyph).width;
           widths.set(key, width);
         }
@@ -313,22 +327,51 @@ export function adjustTerminalGlyphs(term: Terminal): () => void {
   };
 
   /**
-   * The icon font is fetched only once a pane prints an icon (unicode-range), after xterm and
-   * this module measured that icon with whatever stood in for it, and both keep what they
-   * measured. When it arrives, the font family is set again in a form that reads differently and
-   * means the same: xterm measures and draws every row anew, and the widths here start over.
+   * The icon font and the Hangul face are fetched only once a pane prints an icon or Korean
+   * (unicode-range), after xterm and this module measured those characters with whatever stood
+   * in for them, and both keep what they measured. So a character drawn while a face that covers
+   * it has not loaded asks for that face (one load at a time per family and style). When it
+   * arrives, the font family is set again in a form that reads differently and means the same, so
+   * xterm measures anew and the widths here start over, and every row is drawn again: xterm keeps
+   * the rows it drew while the cell stays the same size, and only a row drawn again is fitted
+   * again. The load's own promise tells, as no event can: WebKit (Safari, Ovis for Mac's window)
+   * fires no `loadingdone` for a face a stylesheet loads. Each family is asked on its own: WebKit
+   * checks and loads only the first family with a face for the glyph, and a face with no
+   * unicode-range ("JetBrains Mono Web" typed in Settings) has one for every glyph, so the Hangul
+   * face behind it was never asked for. A face that never loads leaves the fallback as measured.
    */
-  const fontsArrived = (event: Event): void => {
-    const faces = (event as FontFaceSetLoadEvent).fontfaces ?? [];
-    if (!faces.some((face) => face.family.replace(/["']/g, "") === ICON_FAMILY)) return;
+  let stopped = false;
+  const loading = new Set<string>();
+  const awaitFaces = (style: string, families: string, glyph: string): void => {
+    const fonts = document.fonts;
+    if (!fonts) return;
+    for (const family of families.split(",")) {
+      const spec = `${style} ${family.trim()}`;
+      if (loading.has(spec)) continue;
+      let ready: boolean;
+      try {
+        ready = fonts.check(spec, glyph);
+      } catch {
+        // a name the font parser refuses: the canvas ignored it too and measured another font
+        continue;
+      }
+      if (ready) continue;
+      loading.add(spec);
+      fonts.load(spec, glyph).then((faces) => {
+        loading.delete(spec);
+        if (faces.length > 0) fontArrived();
+      }, () => loading.delete(spec));
+    }
+  };
+  const fontArrived = (): void => {
+    if (stopped) return;
     const family = term.options.fontFamily ?? "";
     const double = `"${ICON_FAMILY}"`;
     const single = `'${ICON_FAMILY}'`;
     if (family.includes(double)) term.options.fontFamily = family.replace(double, single);
     else if (family.includes(single)) term.options.fontFamily = family.replace(single, double);
+    term.refresh(0, term.rows - 1);
   };
-  document.fonts?.addEventListener("loadingdone", fontsArrived);
-
   adjustAll(rows.querySelectorAll("span"));
   placeBoxes();
   const observer = new MutationObserver((records) => {
@@ -389,6 +432,6 @@ export function adjustTerminalGlyphs(term: Terminal): () => void {
   return () => {
     observer.disconnect();
     viewObserver.disconnect();
-    document.fonts?.removeEventListener("loadingdone", fontsArrived);
+    stopped = true;
   };
 }
