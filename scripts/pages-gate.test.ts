@@ -269,7 +269,7 @@ describe("Extracted UI checks", () => {
     "checkComposerReconnect", "checkDroplet", "checkSplitView", "checkTakeOver", "checkAlertSound",
     "checkChatKeepsTerminalSize", "checkPaneSwitchKeepsTerminalSize",
     "checkBackgroundTabKeepsTerminalSize", "checkFocusedWindowReclaimsTerminalSize",
-    "checkUpdateNotice", "checkTelemetrySettings",
+    "checkUpdateNotice",
   ];
   const calls = (source: string) => [...source.matchAll(/\b(check[A-Z]\w*)\(/g)].map((match) => match[1]!);
 

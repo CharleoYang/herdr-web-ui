@@ -1193,7 +1193,6 @@ async function route(url: URL, method: string, init: RequestInit | undefined, in
   if (path === "/api/updates/notes") return json({ revision: null, releases: [], omitted: 0 }, 200, { "cache-control": "no-store" });
   if (path === "/api/updates/installed") return json({ revision: null, version: null, previous_version: null, installed_at: null, releases: [], omitted: 0 }, 200, { "cache-control": "no-store" });
   // the demo has no herdr to update: the controls stay hidden
-  // the demo sends no counts: a server without telemetry answers 404, and the app shows neither its notice nor its switch
   // Connection breadcrumbs stay inside the fictional demo; never send them to a real endpoint.
   if (path === "/api/connection-diagnostics") return new Response(null, { status: 204 });
   // the demo is one browser: a finish read here is kept in its own storage, with no other browser to tell
@@ -1206,7 +1205,6 @@ async function route(url: URL, method: string, init: RequestInit | undefined, in
     catch { return error("invalid_json", "The body is not JSON", 400); }
     return changePreferences(raw);
   }
-  if (path === "/api/telemetry") return json({ error: { code: "not_found", message: "This server sends no telemetry" } }, 404, { "cache-control": "no-store" });
   if (path === "/api/herdr/update") return json({ supported: false, phase: "idle", server_version: null, binary_version: null, stale: false, output: null, finished_at: null }, 200, { "cache-control": "no-store" });
   if (path === "/api/portal") return json(demoPortal(), 200, { "cache-control": "no-store" });
   if (path === "/api/portal/start" || path === "/api/portal/stop") return error("portal_unsupported", "The demo opens no public address.", 409);

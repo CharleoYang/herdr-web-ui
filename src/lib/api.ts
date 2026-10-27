@@ -85,7 +85,6 @@ import { SUPPORTED_AGENT_KINDS } from "../../shared/supported-agents.ts";
 import type { PaneScrollInfo } from "../../shared/herdr-api.generated.ts";
 import { readInstalledNotes, readUpdateNotes, type HerdrUpdateStatus, type InstalledNotes, type UpdateNotes, type UpdateRequest, type UpdateStatus } from "../../shared/update.ts";
 import type { AlertPrefs } from "../../shared/notify-policy.ts";
-import type { TelemetryChange, TelemetryStatus } from "../../shared/telemetry.ts";
 import type { VoiceConfigUpdate, VoiceStatus } from "../../shared/voice.ts";
 import { MAX_ATTACHMENT_BYTES } from "../../shared/attachments.ts";
 import { t } from "./i18n.ts";
@@ -201,17 +200,6 @@ export async function shareSeen(finish: SeenFinish): Promise<void> {
   throw await errorFrom(url, response);
 }
 
-export async function fetchTelemetry(): Promise<TelemetryStatus | null> {
-  try { return await getJson<TelemetryStatus>("/api/telemetry"); }
-  catch (error) { if (error instanceof ApiError && error.status === 404) return null; throw error; }
-}
-
-export async function changeTelemetry(change: TelemetryChange): Promise<TelemetryStatus> {
-  const url = "/api/telemetry";
-  const response = await fetch(url, { method: "POST", headers: { "content-type": "application/json", "x-herdr-update": "1" }, body: JSON.stringify(change) });
-  if (!response.ok) throw await errorFrom(url, response);
-  return (await response.json()) as TelemetryStatus;
-}
 
 /**
  * A non-2xx answer from the Ovis API. `code` is the server's error-envelope
@@ -330,9 +318,9 @@ interface ConversationAnswer {
 const conversationAnswers = new Map<string, ConversationAnswer>();
 const CONVERSATION_ANSWERS_KEPT = 24;
 /** …and this much of them: enough for the panes of ten open tabs at the default page size. */
-const CONVERSATION_ANSWERS_BYTES = 64 * 1024 * 1024;
+export const CONVERSATION_ANSWERS_BYTES = 64 * 1024 * 1024;
 /** One pane's page is a page, not a session: past this a page is fetched again rather than kept. */
-const CONVERSATION_ANSWER_MAX_BYTES = 8 * 1024 * 1024;
+export const CONVERSATION_ANSWER_MAX_BYTES = 8 * 1024 * 1024;
 /** The panes of the tabs the chat has open: their answers go last when the cache must make room. */
 const pinnedConversations = new Set<string>();
 

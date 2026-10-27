@@ -88,7 +88,7 @@ function exportedNames(file: string, text: string): string[] {
 
 describe("the core's boundary", () => {
   it("is reached from outside only through server/core/index.ts", () => {
-    const outside = files("{server,src,shared,scripts,site,telemetry,app}/**/*.{ts,tsx,mts,cts,js,jsx,mjs,cjs}").filter((file) => !file.startsWith("server/core/"));
+    const outside = files("{server,src,shared,scripts,site,app}/**/*.{ts,tsx,mts,cts,js,jsx,mjs,cjs}").filter((file) => !file.startsWith("server/core/"));
     fail(outside.flatMap((file) => reachesIntoCore(file, read(file))),
       "Import the core from server/core/index.ts. Its modules share the state they own by reference; reaching one from outside lets that state be held or changed where its owner does not look.");
     expect(outside).toContain("server/index.ts");

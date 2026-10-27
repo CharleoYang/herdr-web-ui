@@ -8,7 +8,7 @@ import { handleIntegrationsRequest } from "./integrations-routes.ts";
 import { randomBytes, randomUUID } from "node:crypto";
 import { OrderSequence } from "./order-sequence.ts";
 import { readHerdrProfiles, type HerdrMachineProfile } from "./herdr-profiles.ts";
-import { accessSync, constants, readFileSync, rmSync } from "node:fs";
+import { accessSync, constants, rmSync } from "node:fs";
 import { dirname, join } from "node:path";
 
 import type { DevicePairedEvent, HealthAuth, PendingMessage, SecuritySummary } from "../shared/protocol.ts";
@@ -46,7 +46,6 @@ import { attachableIdentity } from "./pty/sidecar.ts";
 import { connectUpdater, handleUpdateRequest, type UpdateService } from "./update-api.ts";
 import { handleHerdrUpdateRequest, HerdrUpdater } from "./herdr-update.ts";
 import { handlePortalRequest, PortalService } from "./portal.ts";
-import { handleTelemetryRequest, Telemetry } from "./telemetry.ts";
 import { handleUsageRequest, UsageService } from "./usage.ts";
 import { CLIProxyService } from "./cliproxy.ts";
 import { CLIProxyRoutes } from "./cliproxy-routes.ts";
@@ -152,8 +151,6 @@ export function createServer(
     herdrUpdate?: HerdrUpdater;
     /** a public address through Portal (server/portal.ts); unset, the app offers none. Tests pass one that runs a stand-in portal. */
     portal?: PortalService;
-    /** anonymous install and update counts (server/telemetry.ts); unset, the server sends none and answers 404. Only the real entrypoint passes one. */
-    telemetry?: Telemetry;
     /** plan limits of the AI subscriptions signed in here; tests pass one without real sign-ins */
     usage?: UsageService;
     /** Tests supply an isolated proxy service, never a user's configured instance. */
@@ -313,7 +310,7 @@ export function createServer(
       try {
         pairedDevice = devices.match(deviceCookieValue(parseCookies(request.headers.get("cookie"))));
       } catch (error) {
-        // First-cookie confirmation is an authorization write, not best-effort telemetry.
+        // First-cookie confirmation is an authorization write, not best-effort logging.
         return errorResponse(error);
       }
       const requestShape = { loopback, forwarded, funnel, tailscaleLogin, forwardedFor, serveOnly };
@@ -473,7 +470,6 @@ export function createServer(
         return handlePortalRequest(request, pathname, options.portal, { port: bunServer.port ?? DEFAULT_PORT, ...portalGuards() });
       }
       if (pathname === "/api/connection-diagnostics") { setRequestRoute(pathname); return clientConnectionLog.handle(request, client ?? "unknown"); }
-      if (pathname === "/api/telemetry") { setRequestRoute(pathname); return handleTelemetryRequest(request, options.telemetry); }
       // what every browser of this server shares; a watching device reads it and cannot change it (above)
       if (pathname === "/api/preferences") { setRequestRoute(pathname); return handlePreferencesRequest(request, preferences); }
       // the finishes read in some browser of this server; a watching device reads them and cannot add to them (above)
@@ -717,12 +713,10 @@ if (import.meta.main) {
   // resolved once, for the same reason as in createServer
   const stateDir = defaultStateDir();
   const updates = connectUpdater();
-  const version = (JSON.parse(readFileSync(join(import.meta.dir, "..", "package.json"), "utf8")) as { version: string }).version;
-  const telemetry = new Telemetry({ stateDir, version, env: process.env, fetch, previousVersion: () => updates.installed().previous_version });
   const portal = new PortalService({ stateDir });
   let instance: ReturnType<typeof createServer>;
   try {
-    instance = createServer({ updates, herdrUpdate: new HerdrUpdater(), portal, telemetry, registerBridge: true, herdrProfiles: readHerdrProfiles, shellAgents: new ShellAgentLocator(), stateDir, siblingStateDir: siblingStateDir(stateDir) });
+    instance = createServer({ updates, herdrUpdate: new HerdrUpdater(), portal, registerBridge: true, herdrProfiles: readHerdrProfiles, shellAgents: new ShellAgentLocator(), stateDir, siblingStateDir: siblingStateDir(stateDir) });
   } catch (err) {
     const { code, syscall } = err as { code?: string; syscall?: string };
     // only the bind itself: a permission error reading a state file keeps its own message and path
@@ -737,12 +731,10 @@ if (import.meta.main) {
     console.error(`Ovis cannot listen on ${host}:${port}: ${reason}.`);
     process.exit(1);
   }
-  telemetry.start();
   let stopping = false;
   const shutdown = () => {
     if (stopping) return;
     stopping = true;
-    telemetry.stop();
     instance.stop();
     // Attach sidecars need ~1.2s to release herdr's exclusive client slot; Portal unregisters from
     // its relay, and the pipes it logs to must outlive it

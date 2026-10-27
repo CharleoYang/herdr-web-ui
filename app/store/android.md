@@ -130,27 +130,22 @@ emulator; no real PC or session is in them.
 **Data safety** (as of 1.0 (2), with push). Google counts as collected anything the
 app sends off the phone, wherever it goes, so what travels to the user's own PC counts too. Its
 exception for data a user sends to their own storage needs an app that "never collects or
-accesses" that data, and Ovis shows it, so it does not apply. Three routes leave the phone:
+accesses" that data, and Ovis shows it, so it does not apply. Two routes leave the phone:
 
 - **To the user's own PC**: everything the app shows and sends while it is open.
-- **On to the developer, from the PC**: the Ovis server on the PC sends anonymous usage counts to
-  the developer's telemetry Worker (`server/telemetry.ts`, `telemetry/worker.ts`). The client the
-  phone opens tells the PC its settings (`TelemetryNotice` in
-  `src/components/TelemetryControls.tsx`), and the PC puts the settings of the last browser or
-  phone that told it into those counts. Details below.
 - **To the developer's push relay, from the phone**: once alerts are turned on, the app registers
   its FCM push token with `push.ovis.sh` (`push-relay/`), which keeps it to forward the PC's
-  end-to-end encrypted alerts through FCM.
+  end-to-end encrypted alerts through FCM. No analytics or usage counts are sent anywhere.
 
 Answers:
 
 - *Does your app collect or share any of the required user data types?* **Yes.**
 - *Is all of the user data collected by your app encrypted in transit?* **No** (a plain `http`
-  address on a home network is allowed; over Tailscale and `https` it is encrypted; the usage
-  counts go to the developer over `https`).
+  address on a home network is allowed; over Tailscale and `https` it is encrypted; the push
+  token goes to the developer over `https`).
 - *Do you provide a way for users to request that their data is deleted?* **No** (what goes to the
-  PC is kept on the user's own computer; the usage counts hold no account or contact to find a
-  person by).
+  PC is kept on the user's own computer; the only developer-side record is the push token, dropped
+  when alerts are turned off).
 - Data types, each **collected, not shared, not processed ephemerally**:
 
 | Data type | What it is in Ovis | Required or optional | Purpose |
@@ -161,33 +156,17 @@ Answers:
 | Audio > Music files, Other audio files | audio files the user attaches in the composer | optional, user-initiated | App functionality |
 | Files and docs | files the user attaches in the composer, and files opened in the file viewer | optional, user-initiated | App functionality |
 | App activity > Other user-generated content | what is typed into terminals | required | App functionality |
-| App activity > App interactions | the app settings the user chose (theme, font sizes, language, alert and voice options and the like), in the PC's usage counts to the developer | optional (can be turned off) | Analytics |
-| Device or other IDs | the sign-in cookie a PC gives the phone when it is paired (to the PC); the random ID the PC makes for its usage counts (to the developer); the phone's FCM push token, kept by the developer's push relay to forward the PC's encrypted alerts, only once alerts are turned on | required (cookie); optional (ID, push token) | App functionality (cookie, push token); Analytics (ID) |
-| Location > Approximate location | the country (two letters) the developer's receiver reads from the address the usage counts come from; the address is not stored | optional (can be turned off) | Analytics |
+| Device or other IDs | the sign-in cookie a PC gives the phone when it is paired (to the PC); the phone's FCM push token, kept by the developer's push relay to forward the PC's encrypted alerts, only once alerts are turned on | required (cookie); optional (push token) | App functionality |
 | App info and performance > Diagnostics | connection traces the page reports to the PC for troubleshooting | required | Analytics |
 
 The composer's attachment picker takes any file (`src/components/Composer.tsx`,
 `uploadPaneImage` in `src/lib/api.ts`), so every file-like type above is listed as optional and
 user-initiated: nothing is sent unless the user picks it. None of it is "shared": the PC is the
 user's own, the transcription provider is one the user chose and is sent to on the user's own
-action, and the developer's receiver and push relay run on Cloudflare, and FCM carries the
-encrypted alerts, as service providers.
+action, the developer's push relay runs on Cloudflare, and FCM carries the encrypted alerts, as
+service providers.
 
-**The usage counts, in full** (with the push token above, the only data that reaches the
-developer):
-
-- **When**: one event when the server is installed and one per new version, plus one message per
-  UTC day it is in use. Nothing goes out before the client has shown its one-line notice ("Ovis
-  sends anonymous usage counts"), and the first event waits 10 minutes after that, so it can be
-  turned off first.
-- **On or off**: **on by default (opt-out)**. The switch is under Settings > About > Anonymous
-  usage counts, in the PC's browser and in the app alike, next to the exact messages. The PC's
-  owner can also block it with `OVIS_TELEMETRY=0` or `DO_NOT_TRACK=1`.
-- **What they hold**: a random ID made on the PC, the Ovis version, the PC's operating system and
-  CPU type, how Ovis was installed, the allowlisted settings snapshot of the last browser or phone
-  that opened it (no free-form text, paths or account names), and the kinds of coding agents
-  running (such as `claude`). The receiver adds the country and never stores the address. Never
-  included: pane names, paths, terminal content, code or messages.
+Nothing else reaches the developer: the app sends no usage counts, no settings and no location.
 
 `https://ovis.sh/privacy/` (and `/ko/privacy/`) says the same.
 

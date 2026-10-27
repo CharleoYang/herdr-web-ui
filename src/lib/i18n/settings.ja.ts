@@ -1,7 +1,7 @@
 /**
  * Japanese for the keys only the settings files use:
  * components/SettingsDialog.tsx (with THEME_NAMES), components/KeyBarSettings.tsx,
- * components/SettingsControls.tsx, components/TelemetryControls.tsx, lib/paletteSettings.ts.
+ * components/SettingsControls.tsx, lib/paletteSettings.ts.
  * Register and fixed terms follow ../i18n.ja.ts; a key another feature also uses goes there.
  */
 export const SETTINGS_JA: Record<string, string> = {
@@ -218,15 +218,6 @@ export const SETTINGS_JA: Record<string, string> = {
   "A chip above the message box puts the prompt Claude Code suggests next into the box. With a keyboard, Tab does it.": "入力欄の上のチップで、Claude Code が次に提案するプロンプトを入力欄に入れます。キーボードでは Tab で入れます。",
   "Show above the message box": "入力欄の上に表示",
   "Restore defaults": "デフォルトに戻す",
-  "Ovis sends anonymous usage counts.": "Ovis は匿名の利用集計を送信します。",
-  "What is sent": "送信内容",
-  "Anonymous usage counts": "匿名の利用集計",
-  "Turned off on this PC by OVIS_TELEMETRY=0, DO_NOT_TRACK or a CI environment.": "この PC では OVIS_TELEMETRY=0、DO_NOT_TRACK または CI 環境によりオフになっています。",
-  "Send anonymous usage counts": "匿名の利用集計を送る",
-  "Once on install and once per update, with the last browser's app settings, and once a day you open the app, with the kinds of coding agents running in herdr (such as claude or codex). Custom fonts, shortcuts and replies are reported only as customization flags or counts, never their text. Account identifiers, terminal content and files are excluded. The receiver stores the country, not the IP address.": "インストール時に 1 回、更新ごとに 1 回、最後に使用したブラウザーのアプリ設定とともに送信し、アプリを開いた日に 1 回、herdr で動いているコーディングエージェントの種類（claude や codex など）とともに送信します。カスタムフォント、ショートカット、返信は、内容そのものではなく、カスタマイズの有無を示すフラグまたは件数としてのみ報告されます。アカウント識別子、ターミナルの内容、ファイルは含まれません。受信側が保存するのは国であり、IP アドレスではありません。",
-  "Once a day you open the app:": "アプリを開いた日に 1 回:",
-  "The receiver adds the country this message comes from (two letters, such as KR). It does not store the address.": "受信側が、このメッセージの送信元の国（KR のような 2 文字）を付け加えます。アドレスは保存しません。",
-  "This version has already been counted. The next event is sent after an update.": "このバージョンは集計済みです。次の送信は更新の後です。",
   "Agent integrations": "エージェント連携",
   "This PC's bridge does not offer agent integrations yet. It will after its next runtime update.": "この PC のブリッジはまだエージェント連携に対応していません。次のランタイム更新後に利用できます。",
   "herdr's integrations let it resume each agent's session after a restart. This page only reads them: run a command in a terminal on the PC herdr runs on, then reopen this page.": "herdr の連携があると、再起動後に各エージェントのセッションを再開できます。このページは状態を読むだけです。herdr が動いている PC のターミナルでコマンドを実行してから、このページを開き直してください。",

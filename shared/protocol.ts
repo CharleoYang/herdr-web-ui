@@ -144,11 +144,6 @@ export type { DevicePairedEvent, Machine, MachineEvent, MachineRoster, PaneTarge
  *         and authenticated (watch devices included). 400 invalid_trace, 408 trace_timeout (the
  *         body took over 10 s to arrive), 413 trace_too_large, 429 trace_rate_limited. At most 16
  *         events and 8192 bytes; never input or credentials.
- *  GET    /api/telemetry                 -> TelemetryStatus (shared/telemetry.ts), no-store
- *  POST   /api/telemetry                 -> TelemetryStatus; TelemetryChange (shared/telemetry.ts):
- *         { enabled?, notice_seen?: true, notice_version?, settings? }. A notice acknowledgement
- *         requires the current NOTICE_VERSION. X-Herdr-Update: 1 and same-origin.
- *         404 from a server that sends no telemetry.
  *  GET    /api/agents                    -> { agents: AgentKind[] } (herdr's agent manifests: the
  *         kinds `agent.start` accepts, plus omo and gjc when they are on this server's PATH,
  *         each with `installed`: whether its command is on this server's PATH; for the

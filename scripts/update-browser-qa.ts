@@ -49,7 +49,7 @@ try {
   supervisor = Bun.spawn([process.execPath, "server/managed.ts"], {
     cwd: install, stdout: log, stderr: log,
     env: { ...process.env, HOST: "127.0.0.1", PORT: String(port), OVIS_TOKEN: "",
-      OVIS_AUTO_UPDATE: "0", OVIS_TELEMETRY: "0", OVIS_STATE_DIR: join(temp, "state") },
+      OVIS_AUTO_UPDATE: "0", OVIS_STATE_DIR: join(temp, "state") },
   });
   const status = async (): Promise<UpdateStatus | null> => {
     try { return await (await fetch(`${origin}/api/updates`)).json() as UpdateStatus; } catch { return null; }

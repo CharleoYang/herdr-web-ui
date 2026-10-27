@@ -302,8 +302,7 @@ visibility/online flags, socket states, probe timing, pending counts and numeric
 The browser's online flag is not proof of network reachability; reports are marked client-reported.
 
 Reports never include message/secret text, payloads, terminal output, close reasons, URLs,
-credentials or PC names. They are unrelated to anonymous install/update telemetry and never leave
-this server. Browser storage is not used. Reports are best effort: a failed HTTP attempt retains
+credentials or PC names. They never leave this server. Browser storage is not used. Reports are best effort: a failed HTTP attempt retains
 bounded metadata for a later connection event, but a full app/page restart can lose unsent records.
 The HTTP attempt is bounded to five seconds and uses same-origin credentials, no redirects and
 keepalive for pagehide. Explicit disposal stops new reports; no user input is retained or retried.
@@ -536,9 +535,7 @@ after changing the staged session. Files, images, push and remote PCs are not pa
    English lists under New features, Improvements and Bug fixes, then the version's whole
    changelog section folded under **Full changelog**.
    When the release guards (below) say so, the same PR raises `REMOTE_BUNDLE_VERSION` in
-   `shared/machines.ts`, and after deploying the telemetry Worker
-   ([telemetry/README.md](../telemetry/README.md#deploy)) commits `telemetry/deployed.json` written by
-   `bun scripts/release-guards.ts --worker-deployed`.
+   `shared/machines.ts`.
 2. Merge it after CI passes.
 3. If it raised `REMOTE_BUNDLE_VERSION` to N, push the tag `remote-vN` on the merged commit and wait
    for the **Remote PC bundles** workflow to publish it ([remote PCs](remote-pcs.md)). Merge nothing
@@ -574,9 +571,7 @@ that matches its server (step 3). See [remote PCs](remote-pcs.md).
 
 `scripts/release-guards.ts` fails a release PR (CI's Fast checks) and the Release run when the bundle's
 inputs changed since the published `remote-vN` without a raised `REMOTE_BUNDLE_VERSION`, when the raised
-one is not published yet (Release only), when `telemetry/worker.ts` or `shared/telemetry.ts` changed
-since the deploy recorded in `telemetry/deployed.json` ([telemetry/README.md](../telemetry/README.md#deploy)),
-or when the step 1 metadata is incomplete. In CI only the change that bumps the version is checked;
+one is not published yet (Release only), or when the step 1 metadata is incomplete. In CI only the change that bumps the version is checked;
 PRs merged before the Release run pass, and the Release run checks the whole tree again.
 
 ## Growth snapshot
@@ -613,11 +608,7 @@ exit 2 still writes both files when every traffic endpoint fails. Exit 3 writes 
 including no traffic-only snapshot, and preserves any previous output unchanged. This takes
 precedence over exit 2 if both stars and traffic fail. Exit 1 covers usage, repository access and
 output errors. Both files are staged before publication; a CSV write or replacement failure
-does not publish new JSON. No failed run reaches encryption or upload in the workflow. Installs and
-daily actives by country come from the telemetry database instead:
-run `bunx wrangler login` from `telemetry/` once, then
-`bun scripts/telemetry-report.ts --out <file.md>` from the repository root
-([telemetry/README.md](../telemetry/README.md#reading-the-counts)).
+does not publish new JSON. No failed run reaches encryption or upload in the workflow.
 
 ## Pull requests and CI
 
@@ -854,7 +845,7 @@ do; measure setup, test execution and retries separately when comparing speed. S
 [scripts/self-hosted-runner/README.md](../scripts/self-hosted-runner/README.md).
 
 `scripts/ci-tests.ts` discovers all `.test.ts` files under
-src/shared/server/scripts/telemetry/push-relay/integrations.
+src/shared/server/scripts/push-relay/integrations.
 Files named `*.contract.test.ts`, tests under `server/herdr/` and `server/pty/`, and
 `server/updater.test.ts` (which includes real bridge restart/rollback cases) belong
 to integration; everything else belongs to unit. Name new live-server tests

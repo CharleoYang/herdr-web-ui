@@ -9,7 +9,7 @@ import { fail, files, lineOf, read, repo, stripComments } from "./source-scan.ts
 // Repo-wide rules from AGENTS.md that used to be prose only. Each failure says what to change;
 // client rules are in src/conventions.test.ts, server rules in server/conventions.test.ts.
 
-const SOURCES = [...files("{src,server,shared,scripts,site,telemetry,integrations}/**/*.{ts,tsx,mjs,js}"), "vite.config.ts"];
+const SOURCES = [...files("{src,server,shared,scripts,site,integrations}/**/*.{ts,tsx,mjs,js}"), "vite.config.ts"];
 
 /** Module specifiers of static imports and re-exports, side-effect imports and `import("…")` with a literal. */
 const SPECIFIER = /(?:^|[\s;])(?:import|export)\s[^;]*?\sfrom\s*["']([^"']+)["']|(?:^|[\s;])import\s*["']([^"']+)["']|\bimport\(\s*["']([^"']+)["']\s*\)/gm;
@@ -186,10 +186,9 @@ describe("names from before Ovis", () => {
     "install.sh": "reads the old settings of an earlier install",
     "install.ps1": "reads the old settings of an earlier install",
     "docs/guide.md": "tells users the old names still work",
-    "shared/telemetry.ts": "pinned to the deployed telemetry Worker, so not even a comment changes",
   };
-  // released notes keep the names they shipped with; telemetry/ is the deployed Worker's source
-  const HISTORY = [":!CHANGELOG.md", ":!release-summaries.json", ":!changelog.d", ":!telemetry"];
+  // released notes keep the names they shipped with
+  const HISTORY = [":!CHANGELOG.md", ":!release-summaries.json", ":!changelog.d"];
 
   it("appear only where an older install hands them in", () => {
     const grep = spawnSync("git", ["grep", "--untracked", "-I", "-l", "-E", "HERDR_WEB_[A-Z0-9_]+|herdr_web_(token|device)|herdr-web-ui[:]|[/\"'`][.]herdr-web-ui([^a-z.-]|$)", "--", ".", ...HISTORY], { cwd: repo, encoding: "utf8" });

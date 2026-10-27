@@ -21,7 +21,7 @@ also opens the door to features a home-screen web app cannot have.
 | Where the code lives | `app/` in this repo | The app and the web client change together. App builds are not a required check. |
 | Who serves the UI | The PC, as today | The UI and the server ship together, so they never disagree on the wire contract. The app holds only the native shell, the connect screen and the demo. |
 | Notifications | In the first release, through an APNs relay | A WKWebView app gets no Web Push, so the app needs Apple's push service, and only a key held by the project can sign for it. |
-| Notification privacy | End-to-end encrypted | The relay only forwards what it cannot read, as the telemetry Worker never reads what it does not need. |
+| Notification privacy | End-to-end encrypted | The relay only forwards what it cannot read. |
 | Builds | Xcode on the macbook | See the iOS QA notes; Capacitor needs a Mac for iOS. |
 
 ## How it fits
@@ -66,9 +66,9 @@ choices) and changes little:
 6. APNs telling the relay a token is gone becomes a 410 to the PC, which already deletes a gone
    subscription.
 
-The relay's code lives in this repo next to `telemetry/`, in
+The relay's code lives in this repo, in
 [`push-relay/`](../push-relay/README.md), open so anyone can run their own, and keeps no logs,
-like the telemetry Worker. It answers at `push.ovis.sh`. Its APNs key is a secret of the
+It answers at `push.ovis.sh`. Its APNs key is a secret of the
 project's Cloudflare account (`APNS_KEY`).
 
 Android takes the same steps through Firebase Cloud Messaging, in the same Worker: the app

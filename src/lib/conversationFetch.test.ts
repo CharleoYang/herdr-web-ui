@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, spyOn } from "bun:test";
 
-import { fetchPaneConversation, conversationAnswerBytes, peekPaneConversation } from "./api.ts";
+import { CONVERSATION_ANSWER_MAX_BYTES, CONVERSATION_ANSWERS_BYTES, fetchPaneConversation, conversationAnswerBytes, peekPaneConversation } from "./api.ts";
 import { ConversationRefresh } from "./conversationRefresh.ts";
 import type { ConversationResponse } from "../../shared/protocol.ts";
 
@@ -72,19 +72,21 @@ describe("conversation polling", () => {
 
   it("gives up the oldest answers when they outgrow the byte budget, not only when there are too many", async () => {
     const asked = new Map<string, string | null>();
-    // ~3 MiB of turns per pane: a third of the cache budget, so four of them do not fit
-    const filler = "x".repeat(3 * 1024 * 1024);
+    // pages just under one pane's cap, enough of them to overrun the whole budget
+    const pageBytes = Math.floor(CONVERSATION_ANSWER_MAX_BYTES * 0.9);
+    const panes = Math.floor(CONVERSATION_ANSWERS_BYTES / pageBytes) + 1;
+    const filler = "x".repeat(pageBytes);
     globalThis.fetch = (async (url: string, init?: RequestInit) => {
       const etag = new Headers(init?.headers).get("if-none-match");
       asked.set(String(url), etag);
       if (etag !== null) return new Response(null, { status: 304, headers: { etag } });
-      return new Response(JSON.stringify({ source: "claude-transcript", turns: [{ text: filler }], cursor: null, filler }), { status: 200, headers: { etag: `"${asked.size}"` } });
+      return new Response(JSON.stringify({ source: "claude-transcript", turns: [{ text: filler }], cursor: null }), { status: 200, headers: { etag: `"${asked.size}"` } });
     }) as typeof fetch;
-    for (let pane = 0; pane < 5; pane++) await fetchPaneConversation(`big:p${pane}`);
+    for (let pane = 0; pane < panes; pane++) await fetchPaneConversation(`big:p${pane}`);
     asked.clear();
     // the newest panes are still cached, the ones the budget pushed out are not
-    await fetchPaneConversation("big:p4");
-    expect([...asked.values()]).toEqual([`"5"`]);
+    await fetchPaneConversation(`big:p${panes - 1}`);
+    expect([...asked.values()]).toEqual([`"${panes}"`]);
     asked.clear();
     await fetchPaneConversation("big:p0");
     expect([...asked.values()]).toEqual([null]);

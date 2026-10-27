@@ -321,8 +321,6 @@ There is no single place for a new agent. These files each need it:
   message at launch.
 - [`shared/supported-agents.ts`](../shared/supported-agents.ts): `SUPPORTED_AGENT_KINDS`, the
   agents the app treats as its own.
-- [`shared/telemetry.ts`](../shared/telemetry.ts): `TELEMETRY_HARNESSES`, or the agent counts as
-  `other`.
 - The agent-specific branches of [`server/prompt.ts`](../server/prompt.ts),
   [`server/core/composer.ts`](../server/core/composer.ts) and
   [`server/core/pending.ts`](../server/core/pending.ts) where its prompt, input box or queue
