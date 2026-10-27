@@ -274,6 +274,26 @@ export function composerDelivery(agent: string | null, status?: AgentStatus): "q
 }
 
 /**
+ * Whether Claude can take a message now, whatever herdr reports. herdr's Claude manifest reads a
+ * braille spinner in the window title (osc_title_working, 1100) and "Waiting for N background agents
+ * to finish" (background_agents_working, 965) as working, both above the idle prompt box
+ * (live_prompt_box, 950): a main agent that ended its turn while a subagent it started still runs is
+ * reported as working, and the composer holds the message. The screen decides instead: the input row
+ * is at rest (lib/inputRow.ts `ready`), and no live turn says how to interrupt it. A turn that is
+ * still running keeps one of those markers, and a blocked form asks for esc.
+ */
+export function claudeMainAtRest(row: string | null, lines: readonly string[]): boolean {
+  if (row !== "ready") return false;
+  const recent = lines.filter((line) => line.trim().length > 0).slice(-12);
+  for (const line of recent) {
+    if (/esc to (?:interrupt|cancel)/i.test(line)) return false;
+    // the shape of a running turn's own line, which its summary separates with an ellipsis
+    if (/(?:^|\s)[*·✢✳✶✻✽●◐◓◑◒]\s+\S.*…(?:\s+\(\d+[smh](?:\s|·)|\s*$)/u.test(line)) return false;
+  }
+  return true;
+}
+
+/**
  * The sentence in the status content, if any. The reconnecting sentence is said once: it is the
  * placeholder while the box is empty, and moves here once there is a draft, which hides the
  * placeholder. It is said instead of an upload's, never both: the attachment's own tile says
