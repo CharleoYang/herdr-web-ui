@@ -655,6 +655,22 @@ describe("connection-owned pending input", () => {
     } finally { session.mockRestore(); }
   }, 30_000);
 
+  it("commits a message whose hookless Claude session cannot be read only after its own paste is in (control #2125)", async () => {
+    const f = await setup("claude-session-unread-after-paste");
+    // the recorder runs as `claude`; its PID record is supplied, and can no longer be read once the bridge pasted
+    const session = spyOn(claudeStore, "claudeForegroundSession").mockImplementation(async (processes) =>
+      processes.some((entry) => entry.name === "claude") && !herdrWrites.includes(`text ${f.pane}`) ? "11111111-1111-4111-8111-111111111111" : null);
+    try {
+      const message = await f.queue(2125, "for the session read before the paste");
+      const settled = f.socket.event((frame) => frame.messages.some((entry) => entry.id === message.id && (entry.state === "held" || entry.state === "uncertain"))
+        || frame.removed?.some((entry) => entry.id === message.id) === true);
+      await f.state("idle");
+      expect((await settled).removed ?? []).toContainEqual({ id: message.id, outcome: "sent" }); // neither held nor left uncertain
+      await f.waitBytes("\r");
+      expect(f.bytes()).toBe(`${paste(message.text)}\r`); // Enter follows its own paste, once
+    } finally { session.mockRestore(); }
+  }, 30_000);
+
   for (const originalFirst of [false, true]) it(`regression: two connections share refusal then retry a new attempt once (original first=${originalFirst})`, async () => {
     const rule = "\u2500".repeat(60), footer = "[Haiku 4.5] \u2502 project";
     const f = await setup("copy-retry", "claude", `  \u273b Cooked for 1s\n${rule}\n\u276f occupied draft\n${rule}\n  ${footer}\n`);
