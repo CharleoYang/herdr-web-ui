@@ -520,9 +520,10 @@ export function createSubmitText({ options, lastTyped, attachments, terminalAtta
             await Bun.sleep(options.submitDelayMs ?? SUBMIT_DELAY_MS);
             await revalidate();
             if (!allowed()) throw new HerdrError("cancelled", "The message's sender may no longer type into this pane");
+            const sentAt = Date.now();
             await paneSendKeys(paneId, ["Enter"], undefined, allowed);
             const final = recorded(skillsNotAttached(command, missed));
-            noteSubmitted(paneId, text, final);
+            noteSubmitted(paneId, text, final, sentAt);
             watch?.commit(final, prompt, attached);
             return;
           } catch (error) {
@@ -535,11 +536,12 @@ export function createSubmitText({ options, lastTyped, attachments, terminalAtta
         const watch = pane ? startOpenCodeWatch(pane, command, options.openCodeStateDir) : null;
         try {
           inTime();
+          const sentAt = Date.now();
           const delivery = agentPrompt(paneId, closeMention(sent), undefined, mayType);
           // which agent process got it, read alongside the delivery for the outcome's row, never before it
           bindCommandProcess(paneId, command, seen);
           await delivery;
-          noteSubmitted(paneId, sent, recorded(command));
+          noteSubmitted(paneId, sent, recorded(command), sentAt);
           if (command) watch?.commit(command, [{ pasted: closeMention(sent) }], []);
           return;
         } catch (error) {
@@ -556,8 +558,9 @@ export function createSubmitText({ options, lastTyped, attachments, terminalAtta
       if (fromTerminal && !sentText.includes("\n") && sentText.length > TYPED_LINE_MAX) {
         try {
           inTime();
+          const sentAt = Date.now();
           await agentPrompt(paneId, closeMention(sentText), undefined, mayType);
-          noteSubmitted(paneId, sentText, recorded(command));
+          noteSubmitted(paneId, sentText, recorded(command), sentAt);
           return;
         } catch (error) {
           if (refused !== undefined) throw refused;
@@ -575,8 +578,9 @@ export function createSubmitText({ options, lastTyped, attachments, terminalAtta
       // fixed wait: a TUI busy with the paste takes an Enter in the same chunk for a newline (SUBMIT_DELAY_MS)
       await Bun.sleep(options.submitDelayMs ?? SUBMIT_DELAY_MS);
       authorize();
+      const sentAt = Date.now();
       await paneSendKeys(paneId, ["Enter"], undefined, mayType).catch(refusal);
-      noteSubmitted(paneId, sentText, recorded(command));
+      noteSubmitted(paneId, sentText, recorded(command), sentAt);
     } catch (error) {
       if (clearedDraft) {
         throw new HerdrError("submit_partial", "Claude Code's terminal draft was cleared or may have changed, but sending was not confirmed. Your chat text stayed here. Check the terminal before sending again.");
