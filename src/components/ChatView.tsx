@@ -32,7 +32,7 @@ import { copyText } from "../lib/clipboard.ts";
 import { attachmentFileName, mentionFileName, type GalleryImage } from "../lib/imageViewer.ts";
 import { useMachineApi } from "../lib/machineContext.tsx";
 import { toTranscriptMessages, type TranscriptMessage } from "../lib/transcript.ts";
-import { isLiveWorkTurn, isWaitingWorkTurn, formatWorkDuration, splitTurn, turnSegments, type WorkSegment, todoGroups, visibleWorkParts, workFailed, workStartsOpen, workSummary, type TodoAttempt, type TodoGroup, type ToolPart as ToolPartType } from "../lib/workBlocks.ts";
+import { isLiveWorkTurn, isWaitingWorkTurn, formatWorkDuration, runNames, splitTurn, turnSegments, type WorkSegment, todoGroups, visibleWorkParts, workFailed, workStartsOpen, workSummary, type TodoAttempt, type TodoGroup, type ToolPart as ToolPartType } from "../lib/workBlocks.ts";
 import { phaseRows, planRows, taskRows, todoRows, type ChecklistRow } from "../lib/checklist.ts";
 import { isTodoTool, parseTodoAnswer, todoCallSummary, type TodoItem, type TodoStatus } from "../lib/todos.ts";
 import { formatGoalTime, turnGoal, type GoalState, type GoalStatus } from "../lib/goals.ts";
@@ -1014,6 +1014,15 @@ function noticeLabel(t: ReturnType<typeof useT>, notice: Extract<ConversationPar
 // a turn that did not change keeps its object across polls: skip re-rendering it
 export const Turn = memo(function Turn({ paneId, turn, rowKey, live, waiting, showThinking, skills = null, userSkills = null, outcome = null, outcomeActions = null, onRewindInTerminal = null }: TurnProps) {
   const t = useT();
+  const memory = useContext(ChatRowMemoryContext);
+  // what the drawn runs were named, by part index; the row's memory takes it once the turn is drawn
+  const named = useRef<Map<number, string> | null>(null);
+  named.current = null;
+  useLayoutEffect(() => {
+    if (memory === null || named.current === null) return;
+    memory.runs.clear();
+    for (const [index, name] of named.current) memory.runs.set(index, name);
+  });
   // under the turn, not in its meta row: that row fades out once the pointer and focus leave
   const [copyFailed, setCopyFailed] = useChatRowToggle("copy-failed", false);
   const copyError = copyFailed && <p className="chat-copy-error" role="alert">{t("Couldn't copy. Select the text and copy it manually.")}</p>;
@@ -1083,12 +1092,14 @@ export const Turn = memo(function Turn({ paneId, turn, rowKey, live, waiting, sh
   // The runs before it have the agent's words after them: they are done, read Worked and fold.
   const head = runs.filter((run) => visibleWorkParts(run.parts, showThinking).length > 0).at(-1) ?? runs.at(-1);
   const work = turnWork(turn.parts, rowKey);
+  // a run keeps its block and fold while its parts change (runNames); the stand-in is named by the
+  // part that will start the turn's first run, and is drawn only while the turn has none
+  const names = runNames(runs, work.at, memory?.runs ?? new Map());
+  named.current = new Map(runs.flatMap((run, index) => run.parts.map((part) => [work.at.get(part)!, names[index]!] as const)));
   // `null`: the head standing in while the running turn has no work yet
   const block = (run: WorkSegment | null) => {
     const isHead = run === null || run === head;
-    // a run is named by its first part, so it keeps its block and fold when an earlier run splits
-    // or grows; the stand-in by the part that will start the turn's first run, which takes its place
-    const key = `work:${run?.start ?? turn.parts.length}`;
+    const key = run === null ? `work:${turn.parts.length}` : names[runs.indexOf(run)]!;
     return <WorkBlockView key={key} paneId={paneId} parts={run?.parts ?? []} work={work} memoryKey={key}
       duration={isHead ? formatWorkDuration(turn.ts, turn.end_ts ?? null) : null} live={live && isHead} waiting={waiting && isHead}
       // a settled turn folds its work, unless words the agent said last are in its final run

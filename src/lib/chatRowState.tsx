@@ -4,6 +4,8 @@ import { createContext, useCallback, useContext, useState, type ComponentProps }
 export interface ChatRowMemory {
   readonly toggles: Map<string, boolean | null>;
   readonly outputs: Map<string, string>;
+  /** an agent turn's part index → the name of the run of work it was in when last drawn (runNames) */
+  readonly runs: Map<number, string>;
 }
 
 export const ChatRowMemoryContext = createContext<ChatRowMemory | null>(null);
