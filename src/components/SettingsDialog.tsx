@@ -1022,6 +1022,9 @@ function SidebarPcsGroup({ machines }: { machines: readonly Machine[] }) {
   );
 }
 
+/** a set-aside copy of machines.json (the PCs added in this app), not of herdr-profile-state.json */
+const heldAddedPcs = (name: string): boolean => name.startsWith("machines.json.");
+
 function RemotePcsPage({ actions, machines, pcSettings, pcSettingsError, onPcSettings }: { actions: AppActions; machines: readonly Machine[]; pcSettings: MachineSettings | null; pcSettingsError: string | null; onPcSettings: (patch: Partial<MachineSettings>) => void }) {
   const t = useT();
   return (
@@ -1036,9 +1039,13 @@ function RemotePcsPage({ actions, machines, pcSettings, pcSettingsError, onPcSet
           <Toggle label={t("Update PC bridges automatically")} checked={pcSettings.auto_update_bridges} onChange={(auto_update_bridges) => onPcSettings({ auto_update_bridges })} />
         </SettingsRow>
       )}
-      {/* a crash can leave the saved PCs unreadable: the server set the file aside and started without them */}
-      {pcSettings?.set_aside && pcSettings.set_aside.length > 0 && <p className="settings-item settings-hint">
-        {t("Saved PC data was damaged and could not be read when the app started. It was set aside as {files}; add any missing PC again.", { files: pcSettings.set_aside.join(", ") })}
+      {/* a crash can leave the saved PCs unreadable: the server set the file aside and started without them.
+          machines.json held the PCs added here; herdr-profile-state.json only the permission to connect to herdr's own */}
+      {pcSettings?.set_aside?.some(heldAddedPcs) && <p className="settings-item settings-hint">
+        {t("Saved PC data was damaged and could not be read when the app started. It was set aside as {files}; add any missing PC again.", { files: pcSettings.set_aside.filter(heldAddedPcs).join(", ") })}
+      </p>}
+      {pcSettings?.set_aside?.some((name) => !heldAddedPcs(name)) && <p className="settings-item settings-hint">
+        {t("The permission to connect to the PCs saved in herdr was damaged and could not be read when the app started. It was set aside as {files}; choose Connect on those PCs again.", { files: pcSettings.set_aside.filter((name) => !heldAddedPcs(name)).join(", ") })}
       </p>}
       {pcSettingsError && <p className="settings-item settings-hint" role="alert">{pcSettingsError}</p>}
     </SettingsGroup>

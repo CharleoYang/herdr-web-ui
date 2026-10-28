@@ -110,6 +110,16 @@ The update path never takes over a terminal or stops herdr sessions.
 
 PC registrations and last snapshots persist in `<stateDir>/machines.json`; `OVIS_STATE_DIR` chooses the state directory. A disconnected PC retains its last roster with controls disabled. Retries back off from 1 second to 60 seconds. Other PCs keep working. Reconnection never changes a non-empty selection or sends held input. Composer drafts, held messages, terminal drafts, lenses, recent panes and notification identities include both machine and pane. Held messages have an explicit **Send now** action.
 
+`machines.json` and `herdr-profile-state.json` are replaced durably (a private temporary file,
+flushed, then renamed), and only when what they hold changed. If a crash still leaves one that is
+not JSON (an unclean shutdown can leave it all NUL bytes), the app does not refuse to start: it
+moves that file aside, bytes untouched and mode `0600`, to `<name>.corrupt-<time>` in the same
+folder, logs why, and starts without what it held. Every copy keeps its own name, so a later one
+never replaces an earlier one; delete them once you no longer need them. Until the next restart,
+**Settings > Remote PCs** names the copies: after `machines.json`, add the missing PCs again; after
+`herdr-profile-state.json`, choose **Connect** again on the PCs saved in herdr. A file that is JSON
+of another shape (perhaps from a newer version) still stops the start and is left as it is.
+
 A PC set up at another SSH address (destination, port or session) in its dialog moves there only once
 that setup connects. Until then, and after a setup there that is cancelled or fails, the PC keeps the
 address it had: `machines.json`, its reconnects and its updates that ask nobody use only that one, and
