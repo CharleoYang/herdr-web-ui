@@ -63,6 +63,8 @@ interface Runtime {
    * Ends with the connection (disconnect): a cancelled, failed or superseded setup leaves the PC as it was (#2075).
    */
   move?: { herdr?: Machine["herdr"]; snapshot?: SessionSnapshot; ownOvisAt?: SshTarget | null };
+  /** a snapshot or status of the PC itself reached this server since it started: its finish epoch is not a saved one (finishEpochs) */
+  heard?: true;
 }
 interface JobState {
   update: boolean;
@@ -431,6 +433,18 @@ export class MachineManager {
   }
   private runtime(machine: Machine): Runtime { return { machine, attempts: 0, generation: 0, refreshing: false, refreshQueued: false, snapshotRevision: 0, terminals: new Set() }; }
   list(): Machine[] { return [this.local, ...[...this.machines.values()].map((r) => r.machine)]; }
+  /**
+   * Each PC's finish epoch as the PC told it since this server started (server/seen.ts). A snapshot restored from
+   * machines.json names none: it is saved a moment after it changes, so it can name a herdr run the PC has since left,
+   * and the read finishes of the run it is in would be dropped as over (#1468).
+   */
+  finishEpochs(): Map<string, string> {
+    const epochs = new Map<string, string>();
+    const add = (machine: Machine) => { if (machine.snapshot?.finish_epoch) epochs.set(machine.id, machine.snapshot.finish_epoch); };
+    add(this.local);
+    for (const runtime of this.machines.values()) if (runtime.heard) add(runtime.machine);
+    return epochs;
+  }
   subscribe(listener: (event: MachineEvent) => void): () => void {
     this.listeners.add(listener);
     listener({ type: "machines", machines: this.list() });
@@ -612,7 +626,7 @@ export class MachineManager {
         // all or nothing: one that cannot be completed or saved leaves the PC as it was, trying its own address (#2075)
         const move = runtime.move;
         runtime.move = undefined;
-        const left = { target: runtime.machine.target, error: runtime.machine.error, herdr: runtime.machine.herdr, snapshot: runtime.machine.snapshot, ownOvisAt: runtime.ownOvisAt };
+        const left = { target: runtime.machine.target, error: runtime.machine.error, herdr: runtime.machine.herdr, snapshot: runtime.machine.snapshot, ownOvisAt: runtime.ownOvisAt, heard: runtime.heard };
         try {
           runtime.machine.target = target;
           if (move) {
@@ -633,6 +647,7 @@ export class MachineManager {
           if (move) {
             Object.assign(runtime.machine, { target: left.target, error: left.error, herdr: left.herdr, snapshot: left.snapshot });
             if (left.ownOvisAt) runtime.ownOvisAt = left.ownOvisAt; else delete runtime.ownOvisAt;
+            if (left.heard) runtime.heard = true; else delete runtime.heard;
           }
           throw error;
         }
@@ -1214,9 +1229,9 @@ export class MachineManager {
       try { message = JSON.parse(String(event.data)); } catch { return; }
       // session-changed queues one follow-up, but lets the active roster publish.
       if (["snapshot", "pane-status", "pane-exited"].includes(message.type)) runtime.snapshotRevision++;
-      if (message.type === "snapshot" && this.admitRemote(runtime, message.snapshot)) { runtime.machine.snapshot = message.snapshot; this.push.seed(forAlerts(message.snapshot.panes), runtime.machine.id, runtime.machine.name); this.emit(); }
+      if (message.type === "snapshot" && this.admitRemote(runtime, message.snapshot)) { runtime.machine.snapshot = message.snapshot; runtime.heard = true; this.push.seed(forAlerts(message.snapshot.panes), runtime.machine.id, runtime.machine.name); this.emit(); }
       if (message.type === "pane-status") {
-        if (runtime.machine.snapshot) runtime.machine.snapshot = snapshotAfterStatus(runtime.machine.snapshot, message);
+        if (runtime.machine.snapshot) { runtime.machine.snapshot = snapshotAfterStatus(runtime.machine.snapshot, message); runtime.heard = true; }
         // a snapshot held for health is older than this frame too: published later, it keeps the status
         if (runtime.candidate) runtime.candidate = snapshotAfterStatus(runtime.candidate, message);
         void this.push.onStatus(message.pane_id, alertStatus(message.agent_status, message.background_wait), runtime.machine.id).catch(() => {});
@@ -1365,6 +1380,7 @@ export class MachineManager {
   private publish(runtime: Runtime, snapshot: SessionSnapshot): void {
     if (runtime.move) { runtime.move.snapshot = snapshot; return; }
     runtime.machine.snapshot = snapshot;
+    runtime.heard = true;
     this.saveSoon();
     this.push.seed(forAlerts(snapshot.panes), runtime.machine.id, runtime.machine.name);
   }

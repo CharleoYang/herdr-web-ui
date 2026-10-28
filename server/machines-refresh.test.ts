@@ -289,6 +289,20 @@ describe("machine snapshot refresh races", () => {
     expect(runtime.machine.snapshot?.panes[0]?.finish_id).toBe(4);
   });
 
+  it("names a remote PC's finish epoch for read finishes only once the PC told it, never from a saved snapshot", async () => {
+    const { manager, drive } = await fixture();
+    const saved = { ...snapshot("done"), finish_epoch: "saved-run" };
+    drive.machines.set("saved", drive.runtime({ id: "saved", name: "Saved PC", kind: "ssh", enabled: true, state: "disconnected", error: null, snapshot: saved }));
+    expect(manager.list().find((machine) => machine.id === "saved")?.snapshot?.finish_epoch).toBe("saved-run");
+    expect(manager.finishEpochs().has("saved")).toBe(false);
+
+    const { manager: live, drive: liveDrive, remote, runtime } = await remoteFixture();
+    const current = { ...snapshot("done"), finish_epoch: "remote-server" };
+    remote.set(current);
+    await liveDrive.refresh(runtime);
+    expect(live.finishEpochs().get("remote")).toBe("remote-server");
+  });
+
   it("keeps a newer local status and retries the invalidated snapshot", async () => {
     const { manager, drive, local, rosters } = await fixture();
     local.hold();
