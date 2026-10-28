@@ -222,6 +222,14 @@ describe("browser lane assignment", () => {
     expect(onDisk.filter((script) => !reached.has(script) && !MANUAL_BROWSER_SCRIPTS.includes(script))).toEqual([]);
   });
 
+  // With no CHECK_DIR or CI, both runners hand every script an empty UI_EVIDENCE_DIR, and the
+  // parallel one an empty CHECK_BROWSER_EVIDENCE_DIR too. `??` keeps that empty path, so the script
+  // writes into the checkout or fails to create it (#1554).
+  it("takes an empty evidence folder as unset in every script the lane runs", () => {
+    const keepsEmpty = /(?:UI|CHECK_BROWSER)_EVIDENCE_DIR["']?\]?\s*\?\?/;
+    expect([...laneReach(lane)].filter((script) => keepsEmpty.test(readFileSync(join(import.meta.dir, "..", script), "utf8")))).toEqual([]);
+  });
+
   it("keeps the manual list to scripts that exist and that CI does not run", () => {
     const reached = laneReach(lane);
     expect(MANUAL_BROWSER_SCRIPTS.filter((script) => !onDisk.includes(script) || reached.has(script))).toEqual([]);
