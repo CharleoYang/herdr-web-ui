@@ -104,6 +104,8 @@ function pc(remote: Remote, options: { registered?: boolean; autoUpdate?: boolea
   };
   /** the next roster read at an SSH destination waits for its release, which answers it, fails it with a status, or gives another roster */
   const heldSessions = new Map<string, { reached: ReturnType<typeof Promise.withResolvers<void>>; gate: ReturnType<typeof Promise.withResolvers<number | object>> }>();
+  /** the roster an SSH destination answers from now on, instead of the fixture's own */
+  const rosters = new Map<string, object>();
   /** the next health call at an SSH destination waits for its release, which answers the boot id of the server there */
   const heldHealth = new Map<string, { reached: ReturnType<typeof Promise.withResolvers<void>>; gate: ReturnType<typeof Promise.withResolvers<string>> }>();
   SshConnection.prototype.forward = async function (this: SshConnection, local: number, port: number) {
@@ -151,7 +153,7 @@ function pc(remote: Remote, options: { registered?: boolean; autoUpdate?: boolea
         if (typeof answer === "object") return Response.json({ snapshot: answer });
         if (answer !== 200) return new Response("unavailable", { status: answer });
       }
-      if (path === "/api/session") return Response.json({ snapshot: { panes: [], workspaces: [], fixture_at: at } });
+      if (path === "/api/session") return Response.json({ snapshot: rosters.get(at) ?? { panes: [], workspaces: [], fixture_at: at, finish_epoch: `run@${at}` } });
       if (path === "/ws" && server.upgrade(request, { data: undefined })) return;
       return new Response("not found", { status: 404 });
     }, websocket: { open(ws) { if (away) ws.close(); else sockets.add(ws); }, close(ws) { sockets.delete(ws); }, message() {} } }));
@@ -178,6 +180,8 @@ function pc(remote: Remote, options: { registered?: boolean; autoUpdate?: boolea
       cleanups.push(() => held.gate.resolve(200));
       return { reached: held.reached.promise, release: (answer: number | object = 200) => held.gate.resolve(answer) };
     },
+    /** every roster read at `at` from now on answers this one */
+    set(at: string, roster: object) { rosters.set(at, roster); },
   };
   const health = {
     /** hold the next health call at `at` until `release`, which answers that the server there booted as `boot` */
@@ -414,6 +418,8 @@ describe("a PC whose own Ovis is away (#2047)", () => {
       clock += 10_000; manager.retryNow(MACHINE_ID);
       await until((machine) => machine.state === "connected");
       expect(new Set(destinations)).toEqual(new Set(["fixture@pc.invalid"]));
+      // the herdr run read there was never the PC's: a read at its own address ends none of its read finishes (#2206)
+      expect(manager.finishEnded(MACHINE_ID, "run@other@second.invalid")).toBe(false);
       // the other address's Ovis is gone now, leaving this app's runtime and a bridge's descriptor whose process is
       // gone, so a restart that read it there would start this app's bridge unasked
       remote.elsewhere = "stale-bridge";
@@ -472,6 +478,35 @@ describe("a PC whose own Ovis is away (#2047)", () => {
     expect(adopted.snapshot).toMatchObject({ fixture_at: "other@second.invalid" });
     manager.patch(MACHINE_ID, { name: "Home server" });
     expect(stored()).toMatchObject({ target: { destination: "other@second.invalid" }, snapshot: { fixture_at: "other@second.invalid" } });
+  });
+
+  it("keeps a moved PC's herdr run its own server's once the move connects, so a later read of that server ends it for good (#2206)", async () => {
+    const { manager, session, health, settled, now, until } = pc({ status: managedOffer(), bundle: REMOTE_BUNDLE_VERSION });
+    await until((machine) => machine.state === "connected");
+    const roster = (finish_epoch: string) => ({ panes: [], workspaces: [], order_epoch: "boot-b", read_seq: 1, finish_epoch, fixture_at: "other@second.invalid" });
+    session.set("other@second.invalid", roster("B"));
+    // the other address's server is proved (a browser asks which server answers) while its roster is still being read
+    const read = session.hold("other@second.invalid");
+    const job = manager.setup({ machine_id: MACHINE_ID, destination: "other@second.invalid" });
+    await read.reached;
+    const proof = health.hold("other@second.invalid");
+    const asked = manager.verifySourceBoot(MACHINE_ID);
+    await proof.reached;
+    proof.release("boot-b");
+    expect(await asked).toEqual({ boot_id: "boot-b" });
+    read.release();
+    expect((await settled(job)).phase).toBe("connected");
+    expect(now().snapshot).toMatchObject({ order_epoch: "boot-b", finish_epoch: "B" });
+    // herdr restarts there: that server's next read names run C, and B is over for good
+    const drive = manager as unknown as { machines: Map<string, unknown>; refresh(runtime: unknown): Promise<void> };
+    session.set("other@second.invalid", roster("C"));
+    await drive.refresh(drive.machines.get(MACHINE_ID));
+    expect(now().snapshot?.finish_epoch).toBe("C");
+    // a read of B delivered late is refused, whatever its order pair says
+    session.set("other@second.invalid", roster("B"));
+    await drive.refresh(drive.machines.get(MACHINE_ID));
+    expect(now().snapshot?.finish_epoch).toBe("C");
+    expect(manager.finishEnded(MACHINE_ID, "B")).toBe(true);
   });
 
   it("is not unlearnt by an update cancelled before it answered: once that Ovis is away, the PC waits for it", async () => {

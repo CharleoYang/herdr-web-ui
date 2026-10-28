@@ -1299,8 +1299,12 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   capped at 2,000 keys, oldest first, never pruned by a tab's pane or PC roster. A record this
   browser writes is also sent to its server (`POST /api/seen`, shared/seen.ts), which keeps the
   greatest finish per `(PC, epoch, pane)` in `seen.json` (500 records, oldest first out; a PC's
-  records of an epoch other than the one the PC told this server since it started, never a snapshot
-  restored from `machines.json`, are neither handed out nor taken, and the next write drops them) and hands
+  records of a herdr run known to have ended are neither handed out nor taken, and the next write
+  drops them: this server's own PC is only in the run its finish epoch names now, an earlier
+  process's included; another PC's run ended once a read that started after every report this server
+  held of it named another run. A snapshot restored from `machines.json` or a report that may be late
+  proves no run ended; a late snapshot or status of a run its own server was read moving on from is
+  neither kept nor told, as `server/finish-epoch-ledger.ts` says) and hands
   them to every browser as `seen` events on `/api/machines/events`: all of them when the stream
   opens, then each change. A received record is laid over this browser's own with the same
   max-finish rule, so it can mark a finish read, never bring a dot back. Each finish is sent once
