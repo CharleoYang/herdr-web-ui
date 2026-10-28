@@ -41,6 +41,49 @@ export const ATTACH_HOLD_MS = 100;
  * not start the hold. A refusal and a screen both begin with something else.
  */
 const ATTACH_PREAMBLE_RE = /^(?:\x1b\[(?:\?[\d;]+[hl]|\d* q))*(?:\x1b(?:\[(?:\?[\d;]*|\d+ ?| )?)?)?$/;
+/**
+ * Whole control sequences and controls, which say nothing about whether the attach took: a CSI, an
+ * OSC or string (BEL or ST ended), any other escape (`ESC 7`, `ESC ( B`) and C0 controls
+ */
+const ATTACH_CONTROL_HEAD_RE = /^(?:\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[P^_X][^\x1b]*\x1b\\|\x1b(?![[\]P^_X])[ -/]*[0-~]|[\x00-\x1a\x1c-\x1f\x7f])*/;
+/** how herdr's refusal line starts: its CLI's error prefix, or the bare words */
+const ATTACH_REFUSAL_LEADS = ["herdr: ", "terminal attach"];
+
+/**
+ * Printable screen text past the control sequences that no refusal line can start with: herdr is
+ * drawing the screen, so the attach took and its bytes need not wait out the hold (#1642). Anything
+ * a refusal may still turn out to be (`h`, `herdr: ser`, a sequence not ended yet) waits.
+ */
+export function attachScreenStarted(held: string): boolean {
+  const rest = held.replace(ATTACH_CONTROL_HEAD_RE, "");
+  if (rest === "" || rest.startsWith("\x1b")) return false;
+  // herdr's words anywhere in it (a sequence cut short can swallow the line's first letter) wait out the hold
+  return !ATTACH_REFUSAL_LEADS.some((lead) => rest.includes(lead) || lead.startsWith(rest));
+}
+
+/**
+ * Where a refusal line may begin in output that came after an early release: the refusal is the
+ * attach's last line, so only a line herdr's words start and nothing follows, or the start of those
+ * words at the very end. -1 when there is none.
+ */
+export function refusalLineStart(text: string): number {
+  let at = -1;
+  for (const lead of ATTACH_REFUSAL_LEADS) {
+    for (let found = text.indexOf(lead); found !== -1; found = text.indexOf(lead, found + 1)) {
+      if (/^[^\r\n]*[\r\n]*$/.test(text.slice(found))) {
+        at = at === -1 ? found : Math.min(at, found);
+        break;
+      }
+    }
+    for (let length = Math.min(text.length, lead.length - 1); length > 0; length--) {
+      if (text.endsWith(lead.slice(0, length))) {
+        at = at === -1 ? text.length - length : Math.min(at, text.length - length);
+        break;
+      }
+    }
+  }
+  return at;
+}
 /** how often a terminal another web bridge holds is tried again, while clients here still want it */
 export const ATTACH_HELD_RETRY_MS = 3_000;
 /**
@@ -290,6 +333,26 @@ export function createSpawnAttachment({ attachments, retiringAttachments, termin
         // A pane may print the same bytes without exiting: never keep its text indefinitely.
         if (outputTail.pending) tailTimer = setTimeout(flushTail, holdFor);
       };
+      // After an early release, until the hold would have ended, what may be a refusal line waits
+      // for the exit: a refusal is dropped then, anything else is passed on when the window ends.
+      let guardUntil = 0;
+      let guarded = "";
+      let guardTimer: ReturnType<typeof setTimeout> | undefined;
+      const flushGuard = (): void => {
+        clearTimeout(guardTimer);
+        const data = guarded;
+        guarded = "";
+        if (data) publish(data);
+      };
+      const guard = (data: string): void => {
+        clearTimeout(guardTimer);
+        const text = guarded + data;
+        const at = Date.now() < guardUntil ? refusalLineStart(text) : -1;
+        guarded = at === -1 ? "" : text.slice(at);
+        const visible = at === -1 ? text : text.slice(0, at);
+        if (visible) publish(visible);
+        if (guarded) guardTimer = setTimeout(flushGuard, Math.max(0, guardUntil - Date.now()));
+      };
       /** ended before its exit came: what it still prints is no attach's */
       let retired = false;
       /** a synthetic retirement calls ended before killing; the process's later onExit is the same end */
@@ -300,7 +363,7 @@ export function createSpawnAttachment({ attachments, retiringAttachments, termin
         // a read that ended inside what could have been a probe is output after all
         const data = held + probes.flush();
         held = null;
-        if (data) publish(data);
+        if (data) guard(data);
       };
       const took = (): void => {
         // a closed attachment's kill skips onExit, which would clear this timer: a newer
@@ -354,9 +417,13 @@ export function createSpawnAttachment({ attachments, retiringAttachments, termin
         trying = false;
         clearTimeout(holdTimer);
         clearTimeout(tailTimer);
+        clearTimeout(guardTimer);
         clearTimeout(attachment.recovery);
         attachment.recovery = undefined;
         if (attachments.get(paneId) !== attachment) return;
+        // what an early release kept back is herdr's refusal or takeover words, or the pane's own output
+        if (code !== 0 && (ATTACH_REFUSING_RE.test(output) || isTakeoverExit(output))) guarded = "";
+        else flushGuard();
         if (attachment.ready) {
           attachment.recovering = true;
           broadcast(paneId, { type: "input-ready", pane_id: paneId, ready: false });
@@ -481,6 +548,9 @@ export function createSpawnAttachment({ attachments, retiringAttachments, termin
       if (!Bun.which(command, { PATH: process.env["PATH"] ?? "", cwd: process.env["HOME"] ?? "/" })) {
         throw new HerdrError("attach_failed", `herdr could not be started: ${command} is not an executable on the server's PATH (set OVIS_HERDR_BIN to herdr's full path)`);
       }
+      // the grid this attach starts at: a resize before its screen is applied by herdr after that screen
+      const startCols = attachment.cols;
+      const startRows = attachment.rows;
       const session = new PtySession({
         command,
         // --takeover goes after the id: before it, herdr reads the id as an unknown option
@@ -502,12 +572,21 @@ export function createSpawnAttachment({ attachments, retiringAttachments, termin
           } else data = probes.flush() + data;
           if (!data) return;
           output = (output + data).slice(-1024);
-          if (held === null) return publish(data);
+          if (held === null) return guard(data);
           held += data;
           if (!holding && !ATTACH_PREAMBLE_RE.test(held)) {
             holding = true;
             heldSince = Date.now();
             holdTimer = setTimeout(took, holdFor);
+          }
+          // a screen, not a refusal: the attach took, and a tab switch waits on it. A pane another
+          // bridge held keeps the whole hold: a displacement right after its screen spends no click
+          // a pane resized since the attach started keeps the whole hold: herdr's first screen is
+          // still the old grid, and input sent at once would reach the program before the new one
+          if (holding && !attachment.held && attachment.cols === startCols && attachment.rows === startRows && attachScreenStarted(held)) {
+            clearTimeout(holdTimer);
+            guardUntil = heldSince + holdFor;
+            took();
           }
         },
         onExit: ended,
