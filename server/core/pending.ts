@@ -365,29 +365,34 @@ export function createPendingDelivery({ options, clients, attachments, sight, se
    * runs now: the reads are made again from what is, so a replacement that came meanwhile is never checked against
    * the old process's birth. While the foreground keeps changing, the latest process with no birth.
    */
-  async function currentIdentity(paneId: string, bound: number | null = null): Promise<{ pane: HerdrPane; identity: PendingIdentity; shellPid: number | null; processes: ProcessInfo | undefined }> {
+  async function currentIdentity(paneId: string, bound: number | null = null): Promise<{ pane: HerdrPane; identity: PendingIdentity; shellPid: number | null; processes: ProcessInfo | undefined;
+    /** the process is the OmO holding a session, under the start its holder record was checked against */
+    held: { pid: number; started: number | null } | null }> {
     // The same normalized snapshot the client sees includes a known Codex finish that
     // herdr reports as unknown. Nothing is inferred from a bare unknown state.
     const pane = (await clientSnapshot()).panes.find((candidate) => candidate.pane_id === paneId);
     if (!pane) throw new HerdrError("pane_not_found", `pane ${paneId} not found`);
     const base = pendingIdentity(pane);
-    const pick = async (info: ProcessInfo | undefined): Promise<number | null> => {
-      const held = base.agent === "omo" ? await heldOmoProcess(pane, info?.foreground_processes ?? []) : null;
-      return agentProcessInFront(info, base.agent, bound, held)?.pid ?? info?.foreground_processes?.[0]?.pid ?? null;
+    const pick = async (info: ProcessInfo | undefined): Promise<{ pid: number | null; held: { pid: number; started: number | null } | null }> => {
+      // the bound process first while it holds one: two holders listed in another order keep the bound one (#2190)
+      const held = base.agent === "omo" ? await heldOmoProcess(pane, info?.foreground_processes ?? [], undefined, bound) : null;
+      return { pid: agentProcessInFront(info, base.agent, bound, held?.pid)?.pid ?? info?.foreground_processes?.[0]?.pid ?? null, held };
     };
     const inFront = (info: ProcessInfo | undefined, pid: number | null): boolean =>
       pid === null ? (info?.foreground_processes ?? []).length === 0 : (info?.foreground_processes ?? []).some((entry) => entry.pid === pid);
     let info = await paneProcessInfo(paneId);
     for (let attempt = 1; ; attempt++) {
-      const pid = await pick(info);
+      const { pid, held } = await pick(info);
       const processBirth = pid === null ? null : await processStartedAtAsync(pid);
       // Claude's own PID record says which session it runs, also without herdr's hook
       const claudeSession = base.agent === "claude" ? await claudeForegroundSession(info?.foreground_processes ?? []) : null;
       const after = await paneProcessInfo(paneId);
       const settled = inFront(after, pid);
       if (settled || attempt === 3) {
-        const processPid = settled ? pid : await pick(after);
-        return { pane, shellPid: after?.shell_pid ?? null, processes: after, identity: {
+        const processPid = settled ? pid : (await pick(after)).pid;
+        // a holder only as checked, with the birth read for it since: a pid reused in between is no holder
+        const processHeld = settled && held?.pid === pid && held.started !== null && held.started === processBirth ? held : null;
+        return { pane, shellPid: after?.shell_pid ?? null, processes: after, held: processHeld, identity: {
           ...base, processPid, processBirth: settled ? processBirth : null,
           omoSession: omo.sessionOf(paneId)?.sessionId ?? null,
           claudeSession: settled ? claudeSession : null,
@@ -407,9 +412,9 @@ export function createPendingDelivery({ options, clients, attachments, sight, se
       throw new HerdrError("pending_target_changed", "The pane's terminal or agent session changed; review the message before sending it again");
     }
   }
-  async function pendingContext(owner: Client, paneId: string, lease: PendingLease, identity?: PendingIdentity, pasted = false): Promise<{ pane: HerdrPane; identity: PendingIdentity; working: boolean; screen: string; processes: ProcessInfo | undefined }> {
+  async function pendingContext(owner: Client, paneId: string, lease: PendingLease, identity?: PendingIdentity, pasted = false): Promise<{ pane: HerdrPane; identity: PendingIdentity; working: boolean; screen: string; processes: ProcessInfo | undefined; held: { pid: number; started: number | null } | null }> {
     authorizePending(owner, paneId, lease);
-    const { pane, identity: current, processes } = await currentIdentity(paneId, identity?.processPid ?? null);
+    const { pane, identity: current, processes, held: holder } = await currentIdentity(paneId, identity?.processPid ?? null);
     if (identity && !samePendingIdentity(identity, current)) {
       throw new HerdrError(TARGET_CHANGED.code, TARGET_CHANGED.message);
     }
@@ -445,7 +450,7 @@ export function createPendingDelivery({ options, clients, attachments, sight, se
     // the screen and card reads above awaited: what they were read for must still be in front
     await stillInFront(paneId, current.processPid);
     authorizePending(owner, paneId, lease);
-    return { pane, identity: current, working: current.agent !== null && (pane.agent_status === "working" || collapsed), screen, processes };
+    return { pane, identity: current, working: current.agent !== null && (pane.agent_status === "working" || collapsed), screen, processes, held: holder };
   }
   /**
    * The live screen for claudeInputDraft, and the viewport's colors when viewportShowsLive verifies
@@ -484,8 +489,9 @@ export function createPendingDelivery({ options, clients, attachments, sight, se
       // catalog budget, at the pane's own version) is openCodeSkillsToType's, as for any other send
       const opencode = await openCodeSkillsToType(context.pane, prepareCommandSend(context.pane, text, context.screen), text, context.screen, options.openCodeStateDir);
       let command = opencode.sent;
-      // the process this message goes to, from the identity read above: recording reads nothing more before the write
-      bindCommandProcess(paneId, command, context.processes, context.pane);
+      // the process this message goes to, from the identity read above: recording reads nothing more before the write,
+      // and an OmO's holder is the one checked there, never read again (#2190)
+      bindCommandProcess(paneId, command, context.processes, context.pane, context.identity.agent === "omo" ? context.held : undefined);
       const skills = opencode.skills;
       let attached: string[] = [];
       let prompt: PromptPiece[] = [{ pasted: closeMention(sent) }];

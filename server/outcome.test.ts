@@ -4,7 +4,7 @@ import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { HerdrPane, PanePromptResponse, SlashCommand } from "../shared/protocol.ts";
-import { commandInvocations, commandOutcome, CommandReservations, ownsCommandDialog, type CommandSend } from "./outcome.ts";
+import { commandInvocations, commandOutcome, CommandReservations, ownsCommandDialog, WINDOW_MS, type CommandSend } from "./outcome.ts";
 import { parsePrompt } from "./dialogs/live.ts";
 import { finishPrompt, type DialogReader } from "./dialogs/shared.ts";
 import { bindCommandProcess, commandSendFrom, handlePromptRequest, noteCommandEvidence, noteSubmitted } from "./prompt.ts";
@@ -910,6 +910,61 @@ Enter to select · ↑/↓ to navigate · Esc to cancel
     const prompt = parsePrompt("claude", later);
     expect(prompt).toMatchObject({ kind: "question" });
     expect(ownsCommandDialog(second, prompt!, later, registry.readerFor(prompt!.responder)!, readers)).toBe(false);
+  });
+
+  it("gives a later send no terminal command's question through an echo count inherited from screens read the other way (#2207)", () => {
+    // as above, the second send's echoes were counted as drawn; once the first send's reservation expires, the third's
+    // screens, read alike, are cut, and the second's count would let the third skip its own echo for the next one
+    const edge = (text: string, panel = "") => `${text.padEnd(99)}\u2502${panel}`;
+    const top = Array.from({ length: 7 }, (_, index) => edge(`fixture-row-${index}`, index === 0 ? "1 file changed +2" : ""));
+    const skill = [{ ...row("review"), source: "skill" as const }];
+    const first = { ...send("/review", "claude", skill), id: "first", screen: top.join("\n") };
+    const second = { ...send("/review", "claude", skill), id: "second", at: at + 1,
+      screen: [...top, edge("\u276f /review", " 3 +three"), edge("\u25cf Reviewed."), edge("fixture-tail")].join("\n") };
+    const third = { ...send("/review", "claude", skill), id: "third", at: at + WINDOW_MS,
+      screen: [...second.screen.split("\n"), edge("\u276f /review"), edge("\u25cf Reviewed again."), edge("third-tail")].join("\n") };
+    const question = ["\u2610 Dataset", "", "Which evaluation dataset should we use?", "", "\u276f 1. LM-O", "  2. YCB-V",
+      "  3. Type something.", "\u2500".repeat(28), "  4. Chat about this", "", "Enter to select \u00b7 \u2191/\u2193 to navigate \u00b7 Esc to cancel"];
+    // the third send's own result, then the same command typed in the terminal, which asks
+    const later = [...third.screen.split("\n"), edge("\u276f /review"), edge("\u25cf Reviewed a third time."), edge("\u276f /review"),
+      ...question.map((line) => edge(line))].join("\n");
+    const reservations = new CommandReservations();
+    const readers = registry.readersFor("claude");
+    reservations.add(first, readers);
+    reservations.add(second, readers);
+    expect(second.countedCut).toBe(false);
+    reservations.add(third, readers);
+    expect(third.countedCut).toBe(true);
+    const prompt = parsePrompt("claude", later);
+    expect(prompt).toMatchObject({ kind: "question" });
+    expect(ownsCommandDialog(third, prompt!, later, registry.readerFor(prompt!.responder)!, readers)).toBe(false);
+  });
+
+  it("still gives a send its own question after a send counted the other way whose result was seen and whose screen scrolled off", () => {
+    const edge = (text: string, panel = "") => `${text.padEnd(99)}\u2502${panel}`;
+    const top = Array.from({ length: 7 }, (_, index) => edge(`fixture-row-${index}`, index === 0 ? "1 file changed +2" : ""));
+    const skill = [{ ...row("review"), source: "skill" as const }];
+    const first = { ...send("/review", "claude", skill), id: "first", screen: top.join("\n") };
+    const second = { ...send("/review", "claude", skill), id: "second", at: at + 60_000,
+      screen: [...top, edge("\u276f /review", " 3 +three"), edge("\u25cf Reviewed."), edge("old-tail")].join("\n") };
+    const third = { ...send("/review", "claude", skill), id: "third", at: at + WINDOW_MS,
+      screen: [...Array.from({ length: 7 }, (_, index) => edge(`fresh-row-${index}`)), edge("fresh-tail")].join("\n") };
+    const reservations = new CommandReservations();
+    const readers = registry.readersFor("claude");
+    reservations.add(first, readers);
+    reservations.add(second, readers);
+    // Claude's own records acknowledge both earlier sends: neither still owes an echo
+    const acknowledged = (time: number) => JSON.stringify({ type: "user", timestamp: new Date(time).toISOString(), message: { content: "/review" } });
+    first.outcome = commandOutcome("p", first, { now: at + 60_020, transcript: acknowledged(at + 10) });
+    second.outcome = commandOutcome("p", second, { now: at + 60_020, transcript: acknowledged(at + 60_010) });
+    expect(second.outcome.state).toBe("result-observed");
+    reservations.add(third, readers);
+    const question = ["\u2610 Dataset", "", "Which evaluation dataset should we use?", "", "\u276f 1. LM-O", "  2. YCB-V",
+      "  3. Type something.", "\u2500".repeat(28), "  4. Chat about this", "", "Enter to select \u00b7 \u2191/\u2193 to navigate \u00b7 Esc to cancel"];
+    const later = [third.screen, edge("\u276f /review"), ...question.map((line) => edge(line))].join("\n");
+    const prompt = parsePrompt("claude", later);
+    expect(prompt).toMatchObject({ kind: "question" });
+    expect(ownsCommandDialog(third, prompt!, later, registry.readerFor(prompt!.responder)!, readers)).toBe(true);
   });
 
   it("completes a named Claude model card through the real answer handler", async () => {

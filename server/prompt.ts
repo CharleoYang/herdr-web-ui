@@ -109,8 +109,17 @@ function outcomeProcess(info: ProcessInfo | undefined, agent: string, bound?: nu
 }
 
 /** The OmO process holding a session among `info`'s, for an OmO send only; read without holding the event loop. */
-const heldOmoOf = async (pane: HerdrPane | null | undefined, agent: string, info: ProcessInfo | undefined): Promise<number | null> =>
+const heldOmoOf = async (pane: HerdrPane | null | undefined, agent: string, info: ProcessInfo | undefined): Promise<{ pid: number; started: number | null } | null> =>
   pane && agent === "omo" ? await heldOmoProcess(pane, info?.foreground_processes ?? []).catch(() => null) : null;
+
+/**
+ * outcomeProcess for a send, the OmO holder keyed by the start its holder check verified: a pid reused between that
+ * check and this read is another process, which the next poll tells apart (checkBoundProcess), never the holder (#2190).
+ */
+function sentToProcess(info: ProcessInfo | undefined, agent: string, held: { pid: number; started: number | null } | null): { pid: number; started: number | null; held?: true } | null {
+  const found = outcomeProcess(info, agent, undefined, held?.pid ?? null);
+  return found?.held && held ? { ...found, started: held.started } : found;
+}
 
 /** How long a poll waits for a send's process binding before it judges that send without one, this time. */
 const BINDING_WAIT_MS = 250;
@@ -137,9 +146,12 @@ const sameProcess = (a: { pid: number; started: number | null }, b: { pid: numbe
  * starts alongside delivery and can answer after a replacement: a process that started at or after the send never
  * received it, so the send is left unidentified rather than bound to it. Outside Linux and macOS no start time is
  * known and the answer is taken as the send-time one. `pane`: the pane the send went to, which places an OmO's
- * session holder (heldOmoProcess).
+ * session holder (heldOmoProcess). `held`: that holder as the caller already checked it (a queued send's pending
+ * context), or null when its process is no holder: then no holder is read again, so two holders listed in another
+ * order meanwhile cannot move the send to the other one (#2190).
  */
-export function bindCommandProcess(paneId: string, command: PaneCommandSend | undefined, seen?: ProcessInfo, pane?: HerdrPane | null): void {
+export function bindCommandProcess(paneId: string, command: PaneCommandSend | undefined, seen?: ProcessInfo, pane?: HerdrPane | null,
+  held?: { pid: number; started: number | null } | null): void {
   const visibility = command?.visibility;
   if (!command || !visibility || visibility.process !== undefined || visibility.binding) return;
   const sentAt = Date.now();
@@ -147,12 +159,12 @@ export function bindCommandProcess(paneId: string, command: PaneCommandSend | un
     if (seen) {
       // the /proc start-time read waits until delivery has its turn
       await Promise.resolve();
-      visibility.process = outcomeProcess(seen, command.agent, undefined, await heldOmoOf(pane, command.agent, seen));
+      visibility.process = sentToProcess(seen, command.agent, held !== undefined ? held : await heldOmoOf(pane, command.agent, seen));
       if (!visibility.process) visibility.unmatched = true;
       return;
     }
     const info = await paneProcessInfo(paneId).catch(() => undefined);
-    const found = outcomeProcess(info, command.agent, undefined, await heldOmoOf(pane, command.agent, info));
+    const found = sentToProcess(info, command.agent, held !== undefined ? held : await heldOmoOf(pane, command.agent, info));
     const startedBy = found ? await processStartUpperBoundAsync(found.pid) : null;
     visibility.process = found && (startedBy === null || startedBy < sentAt) ? found : null;
     if (!found) visibility.unmatched = true;
