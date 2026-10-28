@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
 
-import { formatWorkDuration, splitTurn, todoGroups, visibleWorkParts, workFailed, workStartsOpen, workSummary, type ToolPart } from "./workBlocks.ts";
+import { formatWorkDuration, latestWorkPart, splitTurn, todoGroups, visibleWorkParts, workFailed, workStartsOpen, workSummary, type ToolPart } from "./workBlocks.ts";
 import type { ConversationPart } from "../../shared/protocol.ts";
 
 const tool = (name: string, summary = name): Extract<ConversationPart, { kind: "tool" }> => ({ kind: "tool", name, summary, input: "{}", output: "" });
@@ -174,6 +174,29 @@ describe("visibleWorkParts", () => {
     expect(visibleWorkParts([skill, thinking("hm")], false)).toEqual([]);
     expect(visibleWorkParts([skill, thinking("hm")], true)).toEqual([thinking("hm")]);
     expect(visibleWorkParts([tool("read")], false)).toEqual([tool("read")]);
+  });
+
+  it("draws the recorded ask only when no prompt card holds it: the card is its one reading", () => {
+    const ask = tool("ask");
+    expect(visibleWorkParts([ask, tool("read")], false)).toEqual([ask, tool("read")]);
+    expect(visibleWorkParts([ask, tool("read")], false, true)).toEqual([tool("read")]);
+    // an ask by another name (OmO, Claude Code) is the same reading
+    expect(visibleWorkParts([tool("AskUserQuestion"), tool("ask_user_question")], false, true)).toEqual([]);
+  });
+});
+
+describe("latestWorkPart", () => {
+  it("keeps the newest tool call a folded live block would draw", () => {
+    const skill: ConversationPart = { kind: "skill", skill: { name: "review", evidence: "invocation", status: "loaded" } };
+    const read = tool("read"), bash = tool("bash"), todo = tool("TodoWrite");
+    expect(latestWorkPart([read, bash, skill, thinking("hm"), text("done")])).toBe(bash);
+    // a plan update is the pinned list's, not the block's one visible row
+    expect(latestWorkPart([read, todo])).toBe(read);
+  });
+
+  it("has no row before the agent called a tool", () => {
+    expect(latestWorkPart([])).toBeNull();
+    expect(latestWorkPart([thinking("hm"), text("looking")])).toBeNull();
   });
 });
 

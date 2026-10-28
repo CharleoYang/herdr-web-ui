@@ -44,7 +44,9 @@ describe("a past question tool call", () => {
   });
 
   test("ignores a recommendation that names no option", () => {
-    for (const recommended of [2, -1, 0.5, "0"]) {
+    // a recorded call keeps the index as text (`"0"`, the shape omp's transcript holds), which is read
+    expect(askedQuestions("ask", { questions: [{ question: "Q?", recommended: "1", options: [{ label: "A" }, { label: "B" }] }] })?.[0]?.recommended).toBe(1);
+    for (const recommended of [2, -1, 0.5, "1.5", "x"]) {
       expect(askedQuestions("ask", { questions: [{ question: "Q?", recommended, options: [{ label: "A" }, { label: "B" }] }] })?.[0]?.recommended).toBeNull();
     }
   });

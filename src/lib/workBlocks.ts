@@ -1,5 +1,6 @@
 import type { ConversationPart, ConversationTurn } from "../../shared/protocol.ts";
 import { turnSkills } from "./skillActivity.ts";
+import { isAskTool } from "../../shared/askQuestions.ts";
 import { isTodoTool, todoSnapshot, type TodoItem } from "./todos.ts";
 import { t } from "./i18n.ts";
 
@@ -183,8 +184,30 @@ export function todoGroups(parts: readonly ConversationPart[], rowKey: string): 
 }
 
 /** The rows a work block draws: skills are chips beside the prompt, thinking only when shown. */
-export function visibleWorkParts(parts: ConversationPart[], showThinking: boolean): ConversationPart[] {
-  return parts.filter((part) => part.kind !== "skill" && (showThinking || part.kind !== "thinking"));
+/**
+ * The rows a work block draws. `whileAsking` is the prompt card's turn: the card is the ask's one
+ * reading while it is up, so the recorded call is not drawn again beside it (its arguments are
+ * still streaming in, and would read as raw text under the questions).
+ */
+export function visibleWorkParts(parts: ConversationPart[], showThinking: boolean, whileAsking = false): ConversationPart[] {
+  return parts.filter((part) => part.kind !== "skill"
+    && (showThinking || part.kind !== "thinking")
+    && !(whileAsking && part.kind === "tool" && isAskTool(part.name)));
+}
+
+/**
+ * The newest tool call a folded, still-working block keeps in view: one line for what the agent is
+ * doing now, while the rest of the turn's rows stay folded. Todo calls are left out (the pinned plan
+ * shows them), as are skills and reasoning; only a row the block would draw counts.
+ */
+export function latestWorkPart(parts: readonly ConversationPart[], skip?: ReadonlySet<ConversationPart>): ToolPart | null {
+  for (let index = parts.length - 1; index >= 0; index--) {
+    const part = parts[index]!;
+    // a part a run groups is drawn by the run's own row when the block opens, never on its own:
+    // the fold keeps a row the open block would draw, so it never shows the two differently
+    if (part.kind === "tool" && !part.skill && !isTodoTool(part.name) && skip?.has(part) !== true) return part;
+  }
+  return null;
 }
 
 /**

@@ -27,9 +27,12 @@ const ASK_TOOLS: ReadonlySet<string> = new Set(["ask", "ask_user", "ask_user_que
 
 const optionalText = (value: unknown): value is string | null | undefined => value == null || typeof value === "string";
 
+/** Whether a tool call is an agent asking the reader a question. */
+export function isAskTool(tool: string): boolean { return ASK_TOOLS.has(tool); }
+
 /** A question tool's questions, or null for another tool or arguments not in a shape it asks with. */
 export function askedQuestions(tool: string, args: unknown): AskedQuestion[] | null {
-  if (!ASK_TOOLS.has(tool) || args === null || typeof args !== "object") return null;
+  if (!isAskTool(tool) || args === null || typeof args !== "object") return null;
   if (tool === "ask_user") {
     const input = args as Record<string, unknown>;
     if (typeof input["question"] !== "string" || !input["question"].trim()) return null;
@@ -56,12 +59,15 @@ export function askedQuestions(tool: string, args: unknown): AskedQuestion[] | n
       if (typeof option["label"] !== "string" || !option["label"].trim() || !optionalText(option["description"]) || !optionalText(option["preview"])) return null;
       options.push({ label: option["label"], description: option["description"] || null, preview: option["preview"] || null });
     }
-    const recommended = question["recommended"];
+    // omp records it as a number, and as `"0"` in the arguments its transcript keeps
+    const recorded = question["recommended"];
+    const recommended = Number.isInteger(recorded) ? recorded as number
+      : typeof recorded === "string" && /^\d+$/u.test(recorded) ? Number(recorded) : null;
     asked.push({
       header: question["header"] || null,
       question: question["question"],
       multi: question["multi"] === true || question["multiSelect"] === true,
-      recommended: Number.isInteger(recommended) && (recommended as number) >= 0 && (recommended as number) < options.length ? recommended as number : null,
+      recommended: recommended !== null && recommended >= 0 && recommended < options.length ? recommended : null,
       options,
     });
   }
