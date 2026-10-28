@@ -35,7 +35,7 @@
  */
 
 import { createHash, randomUUID } from "node:crypto";
-import { closeSync, constants, fstatSync, openSync, readFileSync, readlinkSync, readSync, realpathSync, statSync } from "node:fs";
+import { closeSync, fstatSync, openSync, readFileSync, readSync, realpathSync, statSync } from "node:fs";
 import nodePath, { basename, dirname, relative, sep, type PlatformPath } from "node:path";
 import { authorizedTranscript } from "./transcript-store.ts";
 
@@ -44,6 +44,7 @@ import { herdrRpc, paneProcessInfo, paneRead, paneScrollInfo, sessionSnapshot, t
 import { resolveAgent } from "./pane-context.ts";
 import { codexFreshSession, codexHistorySegments, createCodexTranscriptParser, codexOutputText, codexTranscriptPath, defaultCodexHome, forgetAllCodexState, forgetCodexStateFor, paneCodexHome, parseCodexTranscript, readRange } from "./codex.ts";
 import { CODEX_IMAGE_REF, CODEX_TOOL_IMAGE_REF, codexOutputPicture, codexTranscriptImage, DataUrlPictureScan, finish, finishAsync, forgetOmpBlobTypes, InlinePictureScan, MAX_IMAGE_BYTES, ompBlobAnchor, ompBlobDigest, ompBlobPictureSteps, type Steps } from "./codex-images.ts";
+import { type Held, heldOpenPlatform, openHeldDirectory } from "./held-open.ts";
 import { AmbiguousClaudeStore, claudeAttachSession, claudeProcessSession, claudeTranscriptFile, defaultClaudeConfigDir, forgetClaudeSessionFile, forgetClaudeSessions, isClaudeProcess, processClaudeConfigDir } from "./claude-store.ts";
 import { forgetGjcPane, forgetGjcState, gjcPidUnderShell, gjcTranscriptForPane, isGjcProcess, storeRelative } from "./gjc-runtime.ts";
 import { isOmoProcess, omoProcessIdentity, omoSessionForPane, processEnviron } from "./omo.ts";
@@ -1065,20 +1066,20 @@ export function betweenAuthorizationForTests(between: ((stage: "before" | "after
  * and held to be the root named; the path down to the transcript is opened component by component
  * through descriptors, no link followed, and must reach the file authorized; the blob store is then
  * opened beside the held root, by the root's own parent. So nothing swapped above the store, before or
- * after this, can lend another store's identity. Linux only (Node has no descriptor-relative open
- * elsewhere: openBlob); there, and for a layout with no blob store, `blobs` is null and no blob is read.
+ * after this, can lend another store's identity. Only where a directory can be held and opened through
+ * (held-open.ts: Linux, macOS, Windows); elsewhere, and for a layout with no blob store, `blobs` is null
+ * and no blob is read.
  */
 export function ompAuthorizedTranscript(authorized: { path: string; root: string; identity: string }): { path: string; blobs: string | null } {
-  return { path: authorized.path, blobs: process.platform === "linux" ? ompBlobIdentity(authorized) : null };
+  return { path: authorized.path, blobs: heldOpenPlatform(process.platform) ? ompBlobIdentity(authorized) : null };
 }
 
 function ompBlobIdentity({ path, root, identity }: { path: string; root: string; identity: string }): string | null {
   const parts = relative(root, path).split(sep);
   // omp's managed store: <data>/sessions/<cwd>/<id>.jsonl, or a subagent's file a level below it
   if (basename(root) !== "sessions" || parts.length < 2 || parts.length > 3) return null;
-  const held: number[] = [];
-  const open = (at: string, flags: number) => { const fd = openSync(at, flags | constants.O_NOFOLLOW); held.push(fd); return fd; };
-  const identityOf = (fd: number) => { const stat = fstatSync(fd); return `${stat.dev}:${stat.ino}`; };
+  const held: Held[] = [];
+  const keep = (entry: Held) => { held.push(entry); return entry; };
   try {
     // one descriptor of the agent data directory, opened once and held: the transcript and the blob store
     // are both reached from it, so a directory renamed or moved after this open moves neither
@@ -1086,18 +1087,15 @@ function ompBlobIdentity({ path, root, identity }: { path: string; root: string;
     // trusted, as the user's own arrangement then (a process that can rename inside it runs as the user);
     // from this open on, nothing is reached by path again
     betweenAuthorization?.("before");
-    const data = open(dirname(root), constants.O_RDONLY | constants.O_DIRECTORY);
-    if (readlinkSync(`/proc/self/fd/${data}`) !== dirname(root)) return null;
+    const data = keep(openHeldDirectory(dirname(root)));
+    if (!data.isAt(dirname(root))) return null;
     betweenAuthorization?.("after");
-    let at = open(`/proc/self/fd/${data}/sessions`, constants.O_RDONLY | constants.O_DIRECTORY);
-    for (const [index, name] of parts.entries()) {
-      const last = index === parts.length - 1;
-      at = open(`/proc/self/fd/${at}/${name}`, constants.O_RDONLY | (last ? constants.O_NONBLOCK : constants.O_DIRECTORY));
-    }
+    let at = keep(data.open("sessions", "directory"));
+    for (const [index, name] of parts.entries()) at = keep(at.open(name, index === parts.length - 1 ? "file" : "directory"));
     // the very file authorized, under this data directory's own sessions
-    if (identityOf(at) !== identity) return null;
-    return identityOf(open(`/proc/self/fd/${data}/blobs`, constants.O_RDONLY | constants.O_DIRECTORY));
-  } catch { return null; } finally { for (const fd of held) closeSync(fd); }
+    if (at.stat().identity !== identity) return null;
+    return keep(data.open("blobs", "directory")).stat().identity;
+  } catch { return null; } finally { for (const entry of held) entry.close(); }
 }
 
 async function ompTranscriptPath(paneId: string, cwd: string): Promise<{ path: string; blobs: string | null }> {
