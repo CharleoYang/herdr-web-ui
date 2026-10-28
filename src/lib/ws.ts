@@ -750,6 +750,11 @@ export class HerdrSocket {
     };
   }
 
+  /** Whether this tab holds an attach for the pane (attached and not let go of). */
+  isAttached(paneId: string): boolean {
+    return this.attached.has(paneId);
+  }
+
   detach(paneId: string): void {
     this.outputSeen.delete(paneId);
     this.inputReady.delete(paneId);
