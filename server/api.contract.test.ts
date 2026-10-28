@@ -733,6 +733,15 @@ describe("update API", () => {
       // a wrong bridge token is refused like any other, and the token opens no other update route
       expect((await call("/api/updates", `Bearer ${"c".repeat(64)}`)).status).toBe(401);
       for (const path of ["/api/updates/notes", "/api/updates/installed", "/api/updates/check", "/api/herdr/update"]) expect((await call(path, `Bearer ${bridge}`)).status).toBe(401);
+      // only the read and the install it grants, each by its own method and with no query (#2054)
+      const send = (method: string, path: string, body?: string) => fetch(`http://127.0.0.1:${own.port}${path}`, {
+        method, ...(body === undefined ? {} : { body }), headers: { authorization: `Bearer ${bridge}`, "x-herdr-update": "1", "content-type": "application/json" },
+      });
+      const install = JSON.stringify({ expected_revision: offered });
+      for (const [method, path, body] of [["GET", "/api/updates?anything=1"], ["HEAD", "/api/updates"], ["POST", "/api/updates", install], ["DELETE", "/api/updates"],
+        ["GET", "/api/updates/install"], ["PUT", "/api/updates/install", install], ["POST", "/api/updates/install?anything=1", install]] as const) {
+        expect({ method, path, status: (await send(method, path, body)).status }).toEqual({ method, path, status: 401 });
+      }
       expect(requests).toHaveLength(1);
     } finally { own.stop(); rmSync(ownState, { recursive: true, force: true }); }
   });
