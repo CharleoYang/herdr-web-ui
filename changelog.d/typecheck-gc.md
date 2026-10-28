@@ -1,3 +1,4 @@
 ### Maintenance
-- Native TypeScript checks use less CPU with `GOGC=400`, trading some RAM for fewer collections
-  while retaining GC for concurrent CI runners. Caller `GOGC` and `GOMEMLIMIT` settings are preserved.
+- Native TypeScript checks use less CPU with `GOGC=400` and at most 32 Go scheduler threads,
+  retaining GC for concurrent CI runners. Caller `GOGC`, `GOMAXPROCS`, and `GOMEMLIMIT`
+  settings are preserved.
