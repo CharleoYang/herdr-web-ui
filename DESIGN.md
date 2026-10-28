@@ -1757,7 +1757,8 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   (lib/repoDiffFind.ts: added, removed and unchanged lines, an unchanged line once on its new
   side), literally and case-sensitively, never the mounted rows, so a match folded away or
   outside the window of rows is found; a match on a folded line turns Fold context off, and the
-  row is brought to the middle by the same measured reveal as a virtualized source, and an
+  row is brought to the middle by the same measured reveal as a virtualized source (a wrapped row
+  taller than the view by the match's own lines, so a match near its end is not left below), and an
   unwrapped row is scrolled across until the match is in view beside the line numbers. The active
   row gets an inset `--accent` ring (only its side's column in split) and its text is painted in
   reverse through a CSS highlight, so it is not told by the tint alone. Enter / Shift+Enter step
