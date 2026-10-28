@@ -797,6 +797,38 @@ describe("claudeTranscriptFile", () => {
       } finally { chmodSync(locked, 0o700); }
     });
 
+    it("follows the very branch file it checked, not the same id in a project a cwd names first (#2118)", async () => {
+      const { dir, projects, folder } = setup();
+      const branch = branched(folder, BRANCH, SESSION);
+      mkdirSync(join(projects, claudeProjectDir("/w/first")));
+      branched(join(projects, claudeProjectDir("/w/first")), BRANCH, null);
+      expect(await claudeTranscriptFile(dir, SESSION, ["/w/first", "/w/project"], join(dir, ".claude"), BRANCH)).toBe(branch);
+    });
+
+    it("takes the branch's parent only from its own first conversation record (#2118)", async () => {
+      const { dir, folder, original } = setup();
+      const store = join(dir, ".claude");
+      const path = join(folder, `${BRANCH}.jsonl`);
+      const write = (...entries: Record<string, unknown>[]) => writeFileSync(path, entries.map((entry) => JSON.stringify(entry)).join("\n") + "\n");
+      // metadata before the conversation names the parent; the conversation does not
+      write({ type: "file-history-snapshot", forkedFrom: { sessionId: SESSION } }, { type: "user", message: { content: "hi" }, sessionId: BRANCH });
+      expect(await claudeTranscriptFile(dir, SESSION, ["/w/project"], store, BRANCH)).toBe(original);
+      // a first record of another session's
+      forgetClaudeSessions();
+      write({ type: "user", message: { content: "hi" }, sessionId: OTHER, forkedFrom: { sessionId: SESSION } });
+      expect(await claudeTranscriptFile(dir, SESSION, ["/w/project"], store, BRANCH)).toBe(original);
+    });
+
+    it("reads a branch's head again once it was written afresh in the same file (#2118)", async () => {
+      const { dir, folder, original } = setup();
+      const store = join(dir, ".claude");
+      const branch = branched(folder, BRANCH, OTHER);
+      expect(await claudeTranscriptFile(dir, SESSION, ["/w/project"], store, BRANCH)).toBe(original);
+      // the same inode, written again from the start
+      branched(folder, BRANCH, SESSION, "Reply with exactly the word ALPHA, again");
+      expect(await claudeTranscriptFile(dir, SESSION, ["/w/project"], store, BRANCH)).toBe(branch);
+    });
+
     it("follows no branch whose first record is not all written, or not within the bytes it reads (control)", async () => {
       const { dir, folder, original } = setup();
       const store = join(dir, ".claude");

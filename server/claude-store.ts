@@ -549,14 +549,16 @@ const BRANCH_HEAD_BYTES = 1024 * 1024;
 /** Branches of branches followed back towards the session Herdr reported. */
 const MAX_BRANCH_DEPTH = 8;
 const MAX_BRANCH_PARENTS = 256;
-/** Transcript file → the session its copied records came from; a transcript's start never changes once written. */
-const branchParents = new Map<string, { dev: number; ino: number; parent: string | null }>();
+/** Transcript file → the session its copied records came from, with the head that said so, checked again on each use. */
+const branchParents = new Map<string, { dev: number; ino: number; length: number; digest: string; parent: string | null }>();
+const headDigest = (bytes: Uint8Array): string => createHash("sha256").update(bytes).digest("hex");
 
 /**
  * The session `/branch` copied this transcript from: Claude Code (2.1.311) writes the conversation so far into a
- * new transcript in the same project, each copied record carrying `forkedFrom.sessionId`, and goes on in it. Null
- * when its first conversation record names no such session, or when that record is not within BRANCH_HEAD_BYTES
- * (no guess on a cut record). Non-blocking and no symlinks, as readSmallFile.
+ * new transcript in the same project, each copied record carrying `forkedFrom.sessionId`, and goes on in it. Only
+ * the first conversation record (user or assistant) decides, and only when it is the file's own session's: Null when
+ * it names no such session, belongs to another, or is not within BRANCH_HEAD_BYTES (no guess on a cut record).
+ * Non-blocking and no symlinks, as readSmallFile.
  */
 async function branchedFrom(path: string): Promise<string | null> {
   let file;
@@ -565,7 +567,12 @@ async function branchedFrom(path: string): Promise<string | null> {
     const info = await file.stat();
     if (!info.isFile()) return null;
     const known = branchParents.get(path);
-    if (known && known.dev === info.dev && known.ino === info.ino) return known.parent;
+    if (known && known.dev === info.dev && known.ino === info.ino && info.size >= known.length) {
+      // the same file, unless its head was written again: reading the head back costs that one record
+      const head = Buffer.alloc(known.length);
+      const { bytesRead } = await file.read(head, 0, head.length, 0);
+      if (bytesRead === head.length && headDigest(head) === known.digest) return known.parent;
+    }
     const bytes = Buffer.alloc(Math.min(info.size, BRANCH_HEAD_BYTES));
     let length = 0;
     while (length < bytes.length) {
@@ -573,18 +580,19 @@ async function branchedFrom(path: string): Promise<string | null> {
       if (bytesRead === 0) break;
       length += bytesRead;
     }
-    const text = bytes.subarray(0, length).toString("utf8");
+    const own = basename(path, ".jsonl");
     // only whole lines: the last one may still be being written, or cut by the cap
-    for (const line of text.slice(0, text.lastIndexOf("\n") + 1).split("\n")) {
+    let end = 0;
+    for (let next = bytes.indexOf(10, 0); next !== -1 && next < length; end = next + 1, next = bytes.indexOf(10, end)) {
+      const line = bytes.subarray(end, next).toString("utf8");
       if (!line.includes('"type"')) continue;
-      let entry: { type?: unknown; forkedFrom?: { sessionId?: unknown } | null };
+      let entry: { type?: unknown; sessionId?: unknown; forkedFrom?: { sessionId?: unknown } | null };
       try { entry = JSON.parse(line); } catch { return null; }
+      if (entry.type !== "user" && entry.type !== "assistant") continue;
       const parent = entry.forkedFrom?.sessionId;
-      const answer = typeof parent === "string" && SESSION_ID.test(parent) ? parent
-        : entry.type === "user" || entry.type === "assistant" ? null : undefined;
-      if (answer === undefined) continue;
+      const answer = entry.sessionId === own && typeof parent === "string" && SESSION_ID.test(parent) ? parent : null;
       if (branchParents.size >= MAX_BRANCH_PARENTS) branchParents.delete(branchParents.keys().next().value!);
-      branchParents.set(path, { dev: info.dev, ino: info.ino, parent: answer });
+      branchParents.set(path, { dev: info.dev, ino: info.ino, length: next + 1, digest: headDigest(bytes.subarray(0, next + 1)), parent: answer });
       return answer;
     }
     return null;
@@ -617,6 +625,7 @@ async function darwinProcessStart(pid: number): Promise<string | null> {
 
 /** Drops what a project scan remembered about one transcript file: the scan runs again if it is ever asked for. */
 export function forgetClaudeSessionFile(path: string): void {
+  branchParents.delete(path);
   for (const [key, value] of found) if (value === path) found.delete(key);
 }
 
@@ -1134,9 +1143,9 @@ export async function claudeTranscriptFile(
     return null;
   };
 
-  const follow = async (start: string, seen: Set<string>): Promise<string | null> => {
+  const follow = async (start: string, seen: Set<string>, from?: string): Promise<string | null> => {
     seen.add(start);
-    let path = await locate(start);
+    let path = from ?? await locate(start);
     while (path !== null) {
       const next = await continuedInSession(path);
       if (next === null || seen.has(next)) return path;
@@ -1158,12 +1167,14 @@ export async function claudeTranscriptFile(
     const candidate = join(dirname(path), `${id}.jsonl`);
     try { return await isFile(candidate) ? candidate : null; } catch { return null; }
   };
-  let branch = await inProject(live);
+  const livePath = await inProject(live);
+  let branch = livePath;
   for (let depth = 0; branch !== null && depth < MAX_BRANCH_DEPTH; depth++) {
     const parent = await branchedFrom(branch);
     if (parent === null) return path;
     if (seen.has(parent)) {
-      try { return await follow(live, seen) ?? path; } catch { return path; }
+      // from the very file found to be the branch: the same id may name another file elsewhere
+      try { return await follow(live, seen, livePath!) ?? path; } catch { return path; }
     }
     branch = await inProject(parent);
   }
