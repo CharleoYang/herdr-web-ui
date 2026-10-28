@@ -6,7 +6,7 @@ import type { PaneSubmitRetention } from "./paneSubmitRetention.ts";
 import { pendingMessages, UNCONFIRMED_SEND } from "./pendingMessages.ts";
 import { paneStorageId } from "../../shared/machines.ts";
 import { rememberWaitingSend, waitingKey } from "./sentWaiting.ts";
-import { sendLeftTheBox } from "./sendUncertain.ts";
+import { sendLeftTheBox, uncertainSend } from "./sendUncertain.ts";
 import { composerDrafts } from "./composerDraft.ts";
 import type { AgentStatus, InteractivePrompt, PromptAnswer } from "../../shared/protocol.ts";
 import type { HerdrSocket, SubmitDelivery, SubmitResult } from "./ws.ts";
@@ -141,8 +141,8 @@ export function useComposerSends(deps: ComposerSendsDeps) {
       const result = submitComposerMessage(text, delivery, delivery === "immediate" ? clearDraft : undefined, sendAnyway);
       return result === null ? false : result.then(async (answer) => {
         if (!answer.ok) {
-          // the terminal cleared the draft but its Enter never answered: the box decides
-          if (answer.code === "submit_partial") {
+          // the draft cleared without a receipt, or herdr went under the write: the box decides
+          if (uncertainSend(answer.code, answer.message)) {
             const delivered = await settledAs(text);
             if (delivered === true) return true;
           }

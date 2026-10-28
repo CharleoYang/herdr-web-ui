@@ -30,6 +30,10 @@ import { parsePiAsk } from "./dialogs/pi-ask.ts";
 import { navigatePiAsk } from "./dialogs/pi-ask-navigate.ts";
 import { gjcCustomEditorMatches, parseFallbackPrompt } from "./dialogs/fallback.ts";
 import { SUGGESTION_READ_MS, claudeHeldIsGrey, claudeInputBoxText, claudeInputDraft, claudeRestoredDraft, parseClaudeSuggestion, viewportShowsLive } from "./claude-input.ts";
+import { editorBoxText } from "./agent-input-box.ts";
+
+/** The agents whose editor is the rows between its last two full-width rules (server/agent-input-box.ts). */
+const EDITOR_BOX_AGENTS: ReadonlySet<string> = new Set(["omp", "pi", "omo", "gjc", "codex"]);
 import { OMO_FORM_RE, omoAskOf, omoAsksFor } from "./omo-questions.ts";
 import { codexQueuedPrompt, queuedQuestionCount, type QueueFront } from "./codex-queue.ts";
 import { OpenCodePromptState } from "./opencode-prompt.ts";
@@ -1097,11 +1101,15 @@ export async function handlePromptRequest(request: Request, url: URL, options: P
       // slow read of it (a herdr without ansi reads, a busy one) leaves the prompt answer as it is,
       // on time.
       // a send whose receipt never came asks for the box itself (`draft=1`): a box that no longer
-      // holds the message means it left, whatever the status says
+      // holds the message means it left, whatever the status says. Claude draws its own box; omp,
+      // pi and OmO draw theirs between two full-width rules (server/agent-input-box.ts)
       const wantsDraft = url.searchParams.get("draft") === "1";
-      const draftScreen = wantsDraft && agent === "claude"
-        ? await paneRead({ paneId, source: "visible", format: "ansi", timeoutMs: SUGGESTION_READ_MS }).then((read) => read.text, () => null)
+      const draftAgent = agent === "claude" || EDITOR_BOX_AGENTS.has(agent);
+      const draftScreen = wantsDraft && draftAgent
+        ? await paneRead({ paneId, source: "visible", format: agent === "claude" ? "ansi" : "text", timeoutMs: SUGGESTION_READ_MS }).then((read) => read.text, () => null)
         : null;
+      const draft = draftScreen === null ? null
+        : agent === "claude" ? claudeInputBoxText(draftScreen) : editorBoxText(draftScreen);
       const box = prompt === null && agent === "claude" && (status === "idle" || status === "done")
         ? await paneRead({ paneId, source: "visible", format: "ansi", timeoutMs: SUGGESTION_READ_MS })
           .then((read) => read.text, () => null)
@@ -1109,7 +1117,7 @@ export async function handlePromptRequest(request: Request, url: URL, options: P
       const outcomes = await commandOutcomes(paneId, read.pane, read.prompt, read.screen, readSendId, options.codexHome, read.snapshot);
       return jsonResponse({
         prompt,
-        ...(wantsDraft ? { draft: draftScreen === null ? null : claudeInputBoxText(draftScreen) } : {}),
+        ...(wantsDraft ? { draft } : {}),
         suggestion: box === null ? null : parseClaudeSuggestion(box),
         restored: box === null ? null : await restoredOnLiveScreen(paneId, box).catch(() => null),
         ...(outcomes.length ? { outcomes: watching ? outcomes.map(({ preview: _preview, result_text: _resultText, ...outcome }) => outcome) : outcomes } : {}),

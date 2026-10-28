@@ -20,3 +20,17 @@ export function sendLeftTheBox(sent: string, draft: string | null): boolean {
   // something else is in the box: ours may have been replaced rather than sent, so this is no proof
   return false;
 }
+
+/**
+ * Whether a refusal leaves the delivery unknown, so the pane's box can decide it. Two shapes:
+ * - `submit_partial`: the draft was cleared without an Enter receipt;
+ * - a herdr connection that closed under a write (`closed`, `socket_error`): herdr may have typed
+ *   the words before it went, and only the box can say. Its message names the call it lost.
+ * A refusal from anything else (a read, a queue check, an agent that refused the prompt outright)
+ * stays a refusal.
+ */
+export function uncertainSend(code: string, message: string): boolean {
+  if (code === "submit_partial") return true;
+  if (code !== "closed" && code !== "socket_error") return false;
+  return /answering (?:agent\.prompt|pane\.send_text|pane\.send_keys)\b/u.test(message);
+}
