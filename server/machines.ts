@@ -1022,17 +1022,25 @@ export class MachineManager {
       signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(BRIDGE_ANSWER_MS)]) : AbortSignal.timeout(BRIDGE_ANSWER_MS) });
     let port = descriptor.port;
     let url: string | null = null;
+    const take = (told: { port?: unknown; serving_url?: unknown } | null | undefined) => {
+      if (typeof told?.port === "number" && Number.isInteger(told.port) && told.port >= 1 && told.port <= 65535) port = told.port;
+      const serving = told?.serving_url;
+      if (typeof serving === "string" && serving.length <= 300 && /^https:\/\/[^\s/?#@]+(?:\/[^\s]*)?$/.test(serving)) url = serving;
+    };
     // where it answers, as it tells it: a relayed bridge (#1960) registers another port than its own.
-    // A server that wants its token tells nothing, and the descriptor's port stands
-    try {
-      const response = await get("/api/access");
-      if (response.ok) {
-        const access = await readCappedJson<{ port?: unknown; tailscale?: { serving_url?: unknown } } | null>(response, REMOTE_LIMITS.ownUpdates);
-        if (typeof access?.port === "number" && Number.isInteger(access.port) && access.port >= 1 && access.port <= 65535) port = access.port;
-        const serving = access?.tailscale?.serving_url;
-        if (typeof serving === "string" && serving.length <= 300 && /^https:\/\/[^\s/?#@]+(?:\/[^\s]*)?$/.test(serving)) url = serving;
-      } else await discard(response);
-    } catch { /* the address stays the descriptor's */ }
+    // This app's server tells it with its update status, to this token (#2191); an older one only on
+    // GET /api/access, which it opens to the tunnel only without OVIS_TOKEN. One that tells nothing
+    // keeps the descriptor's port
+    const locate = async (status: Partial<UpdateStatus> | null) => {
+      if (typeof status === "object" && status !== null && "port" in status) { take(status); return; }
+      try {
+        const response = await get("/api/access");
+        if (response.ok) {
+          const access = await readCappedJson<{ port?: unknown; tailscale?: { serving_url?: unknown } } | null>(response, REMOTE_LIMITS.ownUpdates);
+          take({ port: access?.port, serving_url: access?.tailscale?.serving_url });
+        } else await discard(response);
+      } catch { /* the address stays the descriptor's */ }
+    };
     const answer = (status: Partial<UpdateStatus> | null, reason: string | null): RemoteOvis => ({
       version: releaseVersion(status?.current_version), latest_version: releaseVersion(status?.latest_version),
       updatable: reason === null, reason, address: `${sshHost(target.destination)}:${port}`, url,
@@ -1050,7 +1058,14 @@ export class MachineManager {
     };
     // a check for releases (its own, every 5 minutes) offers nothing while it runs: its answer is waited for
     let told = await read();
-    for (const until = Date.now() + this.ownUpdateCheckMs; "status" in told && told.status?.phase === "checking" && Date.now() < until && !signal?.aborted;) { await this.pause(signal); told = await read(); }
+    // the last status that told where it answers: a later read that fails does not take it back
+    let located = "status" in told ? told.status : null;
+    for (const until = Date.now() + this.ownUpdateCheckMs; "status" in told && told.status?.phase === "checking" && Date.now() < until && !signal?.aborted;) {
+      await this.pause(signal);
+      told = await read();
+      if ("status" in told && typeof told.status === "object" && told.status !== null && "port" in told.status) located = told.status;
+    }
+    await locate(located);
     if ("refused" in told) return answer(null, told.refused);
     const status = told.status;
     if (status?.managed !== true) return answer(status, `That PC's Ovis does not update itself: ${remoteWords(status?.blocked_reason) ?? "it was not started by its updater."}`);

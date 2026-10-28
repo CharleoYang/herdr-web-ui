@@ -145,7 +145,9 @@ A verified runtime is installed into a checksum-addressed directory before the s
 An independently managed server is detected before downloading or installing a remote bundle, and
 nothing of this app's is ever installed over it or restarted in its place. When it is older than
 this app, the connection server asks it through the SSH tunnel how it updates (its own
-`GET /api/updates`, with the token its bridge descriptor holds). If it updates itself (a managed
+`GET /api/updates`, with the token its bridge descriptor holds; the answer to that token also says
+the port it listens on and the HTTPS address Tailscale serves it at, for the card's address and
+link). If it updates itself (a managed
 install, not blocked, with a newer release on offer that it installs by revision), the PC's card
 offers **Update this PC's Ovis to vX**, and with **Update PC bridges automatically** on it runs
 unasked. That update asks the server to install the exact release its own updater offers

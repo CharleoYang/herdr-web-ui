@@ -27,8 +27,8 @@ interface Remote {
   status: UpdateStatus | null;
   /** what its install route answers, one per request (the last repeats); 202 when unset */
   install?: { status: number; code?: string }[];
-  /** what its status says before it was asked to install, one answer per read; then `status` */
-  beforeInstall?: Partial<UpdateStatus>[];
+  /** what its status says before it was asked to install, one answer per read (null: a 503); then `status` */
+  beforeInstall?: (Partial<UpdateStatus> | null)[];
   /** a route that answers with a redirect to `to` instead */
   redirect?: { path: string; to: string };
   /** the pid its new bridge registers with */
@@ -37,7 +37,8 @@ interface Remote {
   replacementBundle?: string;
   /** the bundle version its new bridge answers with, when it differs from the one it registered (a replacement race) */
   replacementLiveBundle?: string;
-  access?: Record<string, unknown>;
+  /** what its GET /api/access answers; null answers 401, as a server that opens it only to its own token */
+  access?: Record<string, unknown> | null;
   bundle?: string;
   /** what its status says once asked to install, one answer per read (the last repeats); it restarts on the new version after `restartAfter` reads, never without */
   afterInstall?: { statuses: Partial<UpdateStatus>[]; restartAfter?: number };
@@ -114,14 +115,17 @@ function pc(remote: Remote, options: { registered?: boolean; autoUpdate?: boolea
       requests.push(`${request.method} ${path}`);
       if (request.headers.get("authorization") !== `Bearer ${descriptor.token}`) return new Response("unauthorized", { status: 401 });
       if (remote.redirect?.path === path) return new Response(null, { status: 307, headers: { location: remote.redirect.to } });
-      if (path === "/api/access") return remote.access ? Response.json(remote.access) : new Response("not found", { status: 404 });
+      if (path === "/api/access") return remote.access ? Response.json(remote.access) : new Response(remote.access === null ? "unauthorized" : "not found", { status: remote.access === null ? 401 : 404 });
       if (path === "/api/updates" && request.method === "GET" && installed && remote.afterInstall) {
         const { statuses, restartAfter } = remote.afterInstall;
         const answer = { ...remote.status, ...statuses[Math.min(readsSinceInstall, statuses.length - 1)] };
         if (++readsSinceInstall === restartAfter) restart();
         return Response.json(answer);
       }
-      if (path === "/api/updates" && request.method === "GET" && !installed && readsBefore < (remote.beforeInstall?.length ?? 0)) return Response.json({ ...remote.status, ...remote.beforeInstall![readsBefore++] });
+      if (path === "/api/updates" && request.method === "GET" && !installed && readsBefore < (remote.beforeInstall?.length ?? 0)) {
+        const before = remote.beforeInstall![readsBefore++];
+        return before === null ? new Response("unavailable", { status: 503 }) : Response.json({ ...remote.status, ...before });
+      }
       if (path === "/api/updates" && request.method === "GET") return remote.status ? Response.json(remote.status) : Response.json({ error: { code: "unauthorized", message: "token required" } }, { status: 401 });
       if (path === "/api/updates/install" && request.method === "POST") {
         expect(request.headers.get("x-herdr-update")).toBe("1");
@@ -682,6 +686,22 @@ describe("a PC whose own Ovis is older than this app", () => {
     const { until } = pc({ status: { ...unmanagedUpdateStatus() }, access: { port: OWN_PORT, tailscale: { serving_url: "http://plain.example" } } });
     const waiting = await until((machine) => machine.action_required === "setup");
     expect(waiting.remote_ovis).toMatchObject({ address: `pc.invalid:${OWN_PORT}`, url: null });
+  });
+
+  it("takes where it answers from its update status when its GET /api/access wants its own token (#2191)", async () => {
+    const { requests, until } = pc({ status: managedOffer({ port: OWN_PORT, serving_url: "https://home-server.example.ts.net" }), access: null }, { autoUpdate: false });
+    const waiting = await until((machine) => machine.action_required === "update_bridge");
+    expect(waiting.remote_ovis).toMatchObject({ updatable: true, address: `pc.invalid:${OWN_PORT}`, url: "https://home-server.example.ts.net" });
+    // it told both with its status: the route its token keeps closed to the bridge's is not asked
+    expect(requests).not.toContain("GET /api/access");
+  });
+
+  it("keeps where it answers when a read after a check for releases fails", async () => {
+    const { until } = pc({ status: managedOffer({ port: OWN_PORT, serving_url: "https://home-server.example.ts.net" }), access: null,
+      beforeInstall: [{ phase: "checking", available: false, latest_revision: null }, null] }, { autoUpdate: false, ownUpdate: { pollMs: 5 } });
+    const waiting = await until((machine) => machine.action_required === "setup");
+    expect(waiting.remote_ovis).toMatchObject({ updatable: false, address: `pc.invalid:${OWN_PORT}`, url: "https://home-server.example.ts.net" });
+    expect(waiting.remote_ovis?.reason).toMatch(/did not tell its update status \(503\)/);
   });
 
   it("tells a first connect the same, on the job the dialog reads", async () => {
