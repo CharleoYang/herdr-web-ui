@@ -174,6 +174,14 @@ describe("a claude attach pane's job (#1645)", () => {
     expect(claudeAttachArgs(["claude", "attach", "dc56"])).toEqual(first("dc56"));
     expect(claudeAttachArgs(["claude", "attach", "release notes"])).toEqual(first("release notes"));
     expect(claudeAttachArgs(["claude", "attach", "release", "notes"])).toEqual(first("release", false));
+    // debug options and --setting-sources after a name: Claude still reads it as a name (#1876)
+    for (const after of [["--debug"], ["-d", "api,hooks"], ["--debug=api"], ["-d2e"], ["--debug-to-stderr", "--setting-sources", "user,project"], ["--setting-sources=user"]]) {
+      expect(claudeAttachArgs(["claude", "attach", "release", ...after])).toEqual(first("release"));
+    }
+    // anything else after it keeps the terminal
+    for (const after of [["--verbose"], ["--setting-sources"], ["--debug", "api", "notes"], ["-d", "--verbose"], ["--model", "opus"]]) {
+      expect(claudeAttachArgs(["claude", "attach", "release", ...after])).toEqual(first("release", false));
+    }
     // root options before it, each with the values it takes
     expect(claudeAttachArgs(["claude", "--model", "opus", "attach", JOB])).toEqual(behind);
     expect(claudeAttachArgs(["claude", "--model=opus", "--dangerously-skip-permissions", "attach", JOB])).toEqual(behind);
@@ -425,6 +433,20 @@ describe("a claude attach pane's job (#1645)", () => {
     expect(await claudeAttachSession(dir, process.pid, ["claude", "attach", "aaaa"])).toEqual({ session: null });
     expect(await claudeAttachSession(dir, process.pid, ["claude", "attach", "nothing"])).toEqual({ session: null });
     expect(await claudeAttachSession(dir, process.pid, ["claude", "--resume", SESSION])).toBeNull();
+  });
+
+  // the test process stands in for the client; its own CLAUDE_CONFIG_DIR would name another store
+  it.skipIf(Boolean(process.env["CLAUDE_CONFIG_DIR"]))("pins queued input to the session of the job an attach client opened (#1876)", async () => {
+    const home = mkdtempSync(join(tmpdir(), "ovis-claude-attach-home-"));
+    roots.push(home);
+    const dir = join(home, ".claude");
+    job(dir, JOB, { sessionId: `${JOB}-6228-4376-a66c-ad9820b26f37`, resumeSessionId: SESSION });
+    const client = { pid: process.pid, name: "claude", argv0: "claude", argv: ["claude", "attach", JOB] };
+    expect(await claudeForegroundSession([client], home)).toBe(SESSION);
+    // a job with no session (a shell command) pins none, as does a client not alone in the pane
+    job(dir, JOB, { command: "sleep 100", sessionId: undefined });
+    expect(await claudeForegroundSession([client], home)).toBeNull();
+    expect(await claudeForegroundSession([client, { ...client, pid: process.pid + 1 }], home)).toBeNull();
   });
 
   // CLAUDE_CODE_SESSION_KIND=bg makes Claude read no subcommand behind options: it runs an interactive Claude
@@ -692,6 +714,25 @@ describe("claudeTranscriptFile", () => {
       expect(await claudeTranscriptFile(dir, SESSION, ["/w/project"])).toBe(original);
       writeFileSync(join(state, "state.json"), JSON.stringify({ linkScanPath: job }));
       expect(await claudeTranscriptFile(dir, SESSION, ["/w/project"])).toBe(job);
+    });
+
+    it.skipIf(!NATIVE)("reads the job's state bounded, and no FIFO in its place, without blocking (#1876)", async () => {
+      const { home: dir, projects } = home();
+      const folder = join(projects, claudeProjectDir("/w/project"));
+      mkdirSync(folder, { recursive: true });
+      const original = resumed(folder);
+      const job = join(folder, `${BG}.jsonl`);
+      writeFileSync(job, "{}");
+      const state = join(dir, ".claude", "jobs", "8b80137e");
+      mkdirSync(state, { recursive: true });
+      // larger than a job's state: not read to agree
+      writeFileSync(join(state, "state.json"), JSON.stringify({ linkScanPath: job, output: "x".repeat(256 * 1024) }));
+      expect(await claudeTranscriptFile(dir, SESSION, ["/w/project"])).toBe(original);
+      rmSync(join(state, "state.json"));
+      expect(Bun.spawnSync(["mkfifo", join(state, "state.json")]).exitCode).toBe(0);
+      const started = Date.now();
+      expect(await claudeTranscriptFile(dir, SESSION, ["/w/project"])).toBe(original);
+      expect(Date.now() - started).toBeLessThan(2000);
     });
   });
 

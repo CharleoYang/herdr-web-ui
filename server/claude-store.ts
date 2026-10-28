@@ -533,7 +533,10 @@ async function backgroundJobTranscript(path: string, configDir: string): Promise
   if (matches.length !== 1) return null;
   const job = join(dirname(path), matches[0]!);
   try {
-    const state = JSON.parse(await readFile(join(configDir, "jobs", id, "state.json"), "utf8")) as { linkScanPath?: unknown };
+    // bounded, and no FIFO or link in its place: a state that cannot be read so cannot agree (#1876)
+    const raw = await readSmallFile(join(configDir, "jobs", id, "state.json"), MAX_JOB_STATE_BYTES);
+    if (raw === null) return null;
+    const state = JSON.parse(raw) as { linkScanPath?: unknown };
     if (typeof state.linkScanPath === "string" && state.linkScanPath !== job) return null;
   } catch (error) {
     if (!(error instanceof SyntaxError || absent(error))) return null;
@@ -759,6 +762,26 @@ const JOB_ID_START = /^[a-f0-9]{1,8}$/;
 
 const optionLike = (arg: string): boolean => arg.length > 1 && arg.startsWith("-");
 
+/**
+ * Whether every argument from `at` on is a debug option, or `--setting-sources` with its value: Claude
+ * reads those wherever they stand, and still reads the argument before them as a job's name (#1876).
+ * Any other argument there keeps the pane on its terminal.
+ */
+function onlyDebugOptions(args: readonly string[], at: number): boolean {
+  for (let index = at; index < args.length; index++) {
+    const arg = args[index]!;
+    if (arg === "-d2e" || arg === "--debug-to-stderr" || arg.startsWith("--debug=") || arg.startsWith("--setting-sources=")) continue;
+    if (arg === "-d" || arg === "--debug") {
+      const next = args[index + 1];
+      if (next !== undefined && !optionLike(next)) index++;
+      continue;
+    }
+    if (arg === "--setting-sources" && args[index + 1] !== undefined && !optionLike(args[index + 1]!)) { index++; continue; }
+    return false;
+  }
+  return true;
+}
+
 /** The index of the last argument the option at `at` takes: its own, when it takes no value. */
 function optionEnd(args: readonly string[], at: number): number {
   const option = args[at];
@@ -802,8 +825,8 @@ export type ClaudeAttach = { ref: string; behindOptions: boolean; byName: boolea
  * `node <script>` for an npm install); null for any other Claude. `attach` is the first argument that
  * is neither an option nor an option's value. With root options before it, each must be one Claude
  * allows there and the job must be named by its whole eight-digit id. With none, the argument may be
- * the start of an id, or, when nothing follows it, part of a job's name: Claude also lets debug
- * options and `--setting-sources` follow a name, which this reads as no name (#1645).
+ * the start of an id, or, when nothing but debug options and `--setting-sources` follow it, part of a
+ * job's name (#1645, #1876).
  */
 export function claudeAttachArgs(argv: readonly string[] | null | undefined): ClaudeAttach | null {
   const program = argv?.[0];
@@ -814,7 +837,7 @@ export function claudeAttachArgs(argv: readonly string[] | null | undefined): Cl
   const ref = args[at + 1];
   // help, an unknown option or nothing: Claude prints its usage and exits
   if (ref === undefined || ref === "" || ref.startsWith("-")) return null;
-  if (at === 0) return { ref, behindOptions: false, byName: args.length === 2 };
+  if (at === 0) return { ref, behindOptions: false, byName: onlyDebugOptions(args, 2) };
   if (args[at - 1] === "--" || !JOB_ID.test(ref)) return null;
   for (let index = 0; index < at; index = optionEnd(args, index) + 1) {
     if (!optionBeforeVerb(args[index]!)) return null;
@@ -1046,8 +1069,9 @@ export async function claudeAttachSession(
 
 /**
  * The session a pane's one Claude process names in its own PID record, which Claude rewrites when
- * /clear or /resume switches it to another session in the same process; null when the pane has no
- * single Claude process or the record cannot be trusted (claudeProcessSession).
+ * /clear or /resume switches it to another session in the same process, or, for a `claude attach`
+ * client, the session of the job it opened (claudeAttachSession); null when the pane has no single
+ * Claude process or neither can be trusted (claudeProcessSession).
  */
 export async function claudeForegroundSession(
   processes: readonly { pid: number; name?: string | null; argv0?: string | null; argv?: readonly string[] | null }[],
@@ -1057,8 +1081,11 @@ export async function claudeForegroundSession(
   if (claude.length !== 1) return null;
   const only = claude[0]!;
   try {
-    const dir = await processClaudeConfigDir(only.pid, only.argv ?? [only.argv0 ?? only.name ?? ""], home);
-    return await claudeProcessSession(home, only.pid, dir || defaultClaudeConfigDir(home));
+    const dir = await processClaudeConfigDir(only.pid, only.argv ?? [only.argv0 ?? only.name ?? ""], home) || defaultClaudeConfigDir(home);
+    // a `claude attach` client keeps no PID record: its job's state names the session it shows (#1876)
+    const attach = await claudeAttachSession(dir, only.pid, only.argv);
+    if (attach !== null) return attach.session;
+    return await claudeProcessSession(home, only.pid, dir);
   } catch {
     // two stores claim the process, or one cannot be read: no session to pin
     return null;
