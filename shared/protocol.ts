@@ -708,6 +708,14 @@ export interface InteractivePrompt {
   /** Claude's plan file behind a plan card, whose whole text is then the body: opened in the file viewer */
   plan_file?: string;
   /**
+   * Claude's own words drawn over its question on the pane's screen, paragraphs parted by a blank line;
+   * lines the pane wrapped are joined back only between plain prose, every other break kept as drawn. Claude Code (2.1.311) writes them to its session file only
+   * with the answer, so until then the card shows them, as read off the screen. Absent when the
+   * screen shows no words of Claude's right over the question, or not where they start; not part
+   * of the card's id.
+   */
+  screen_words?: string;
+  /**
    * The card's own words, which the bridge wrote rather than read off the agent's screen (an Esc
    * offered as Close, a fallback card's title): for each such field above, its English as a key with
    * its values (shared/card-text.ts), so the client shows it in the user's language. A field not

@@ -24,6 +24,7 @@ export const COMPOSER_KO: Record<string, string> = {
   "Skip question": "질문 건너뛰기",
   "Submit ({n})": "제출 ({n})",
   "Or type your own answer": "또는 직접 답을 입력",
+  "From the terminal, until the agent saves this turn": "에이전트가 이 턴을 저장하기 전까지 터미널에서 읽어 보여 줍니다",
   "Questions": "질문 목록",
   "Not answered": "답하지 않음",
   "Note: {note}": "메모: {note}",

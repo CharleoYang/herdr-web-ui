@@ -24,6 +24,7 @@ export const COMPOSER_JA: Record<string, string> = {
   "Skip question": "質問をスキップ",
   "Submit ({n})": "送信 ({n})",
   "Or type your own answer": "または回答を直接入力",
+  "From the terminal, until the agent saves this turn": "ターミナルから読み取った内容です。エージェントがこのターンを保存するまで表示します",
   "Questions": "質問一覧",
   "Not answered": "未回答",
   "Note: {note}": "メモ: {note}",

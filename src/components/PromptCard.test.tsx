@@ -13,12 +13,12 @@ const goal: InteractivePrompt = {
   own_text: { title: { key: "Goal active" }, labels: { 0: { key: "Close" } } },
 };
 
-const render = (prompt: InteractivePrompt, languages: string[]): string => {
+const render = (prompt: InteractivePrompt, languages: string[], screenWords: string | null = null): string => {
   const saved = Object.getOwnPropertyDescriptor(navigator, "languages");
   Object.defineProperty(navigator, "languages", { configurable: true, value: languages });
   try {
     return renderToStaticMarkup(createElement(SettingsProvider, { children: createElement(PromptCard, {
-      paneId: "w1:p1", prompt, onPromptChanged: () => {}, onAnswered: () => {},
+      paneId: "w1:p1", prompt, onPromptChanged: () => {}, onAnswered: () => {}, screenWords,
     }) }));
   } finally {
     if (saved) Object.defineProperty(navigator, "languages", saved);
@@ -41,5 +41,23 @@ describe("a prompt card's own words", () => {
   it("shows an older bridge's card, which names no words of its own, as it came", () => {
     const { own_text: _, ...older } = goal;
     expect(render(older, ["ko"])).toContain("<h2>Goal active</h2>");
+  });
+});
+
+describe("Claude's words over its question, read off the screen (#2088)", () => {
+  const asked: InteractivePrompt = {
+    id: "q", agent: "claude", kind: "question", title: "Fix", question: "Which fix do you want?", body: null,
+    options: [{ label: "Patch", description: null }, { label: "Rewrite", description: null }], multi_select: false, custom_option_index: null,
+  };
+
+  it("shows them over the question, saying where they came from in the reader's language", () => {
+    const html = render(asked, ["ko"], "There are two ways to fix it.\n\nPatch adds the newline.");
+    expect(html).toContain("There are two ways to fix it.\n\nPatch adds the newline.");
+    expect(html).toContain(translate("ko", "From the terminal, until the agent saves this turn"));
+    expect(html.indexOf("There are two ways")).toBeLessThan(html.indexOf("Which fix do you want?"));
+  });
+
+  it("shows no words and no caption without them", () => {
+    expect(render(asked, ["en"])).not.toContain("prompt-card-words");
   });
 });

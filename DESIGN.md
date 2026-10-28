@@ -2244,6 +2244,15 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   by assistive tech and not drawn. The question is prose in `--text-strong`. Reference text (the
   command of an approval, a plan, a diff: the prompt's `body`) is the card's one mono box
   (`--bg`, `--fs-xs`); a question in words is never set in mono.
+- Claude's words before its question (#2088): Claude Code 2.1.311 writes a turn's text to its
+  session file only with the answer, so while a question waits the card shows the text the
+  terminal draws right over the question (`screen_words`, read off the screen; the pane's wrapping
+  joined back between plain prose, any other line break kept), over the question in `--text` prose with a `--text-dim` caption that it comes
+  from the terminal. Like the reference text it gives way: eight lines at rest, two at the least,
+  scrolling in itself. It follows Claude Code's own terminal, which keeps those words over its
+  dialog; the Claude app shows them as the turn's text, which the chat shows once the transcript
+  has the turn (then the card leaves its copy out). Words whose start is above the screen are not
+  shown: they cannot be told from the user's own wrapped prompt.
 - Height: at most the larger of 60% of the app's height (`--app-height`, so a phone's keyboard
   counts) and six touch rows (`240px`), at every width. Only the reference text gives way: six
   lines at rest, two at the least (one for a one-line command), scrolling in itself with a fade

@@ -30,9 +30,11 @@ export interface PromptCardProps {
   onTypedAnswerDone?(): void;
   /** the last reads of the screen failed: the question shown may have changed since (an answer is still checked, 409 prompt_changed) */
   stale?: boolean;
+  /** the agent's words over its question, read off the screen while the chat has no record of them (lib/promptText.ts screenWordsToShow) */
+  screenWords?: string | null;
 }
 
-export function PromptCard({ paneId, prompt, onPromptChanged, onAnswered, typedAnswer = null, onTypedAnswerDone, stale = false }: PromptCardProps) {
+export function PromptCard({ paneId, prompt, onPromptChanged, onAnswered, typedAnswer = null, onTypedAnswerDone, stale = false, screenWords = null }: PromptCardProps) {
   const t = useT();
   const { answerPanePrompt } = useMachineApi();
   const [selected, setSelected] = useState<Set<number>>(() => {
@@ -221,6 +223,14 @@ export function PromptCard({ paneId, prompt, onPromptChanged, onAnswered, typedA
         </ol>
       )}
       {navigationBlocked && <p className="prompt-card-hint">{t("Submit or clear edits before switching questions.")}</p>}
+      {/* what the agent said before asking, as the terminal shows it over the question (#2088): the
+          chat gets the agent's own record of it only with the answer */}
+      {screenWords !== null && (
+        <div className="prompt-card-words">
+          <p className="prompt-card-words-text">{screenWords}</p>
+          <p className="prompt-card-hint">{t("From the terminal, until the agent saves this turn")}</p>
+        </div>
+      )}
       {/* a Claude approval's heading is its question too: said once */}
       {prompt.question !== prompt.title && <p className="prompt-card-question">{words.question}</p>}
       {prompt.queued && (
