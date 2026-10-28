@@ -1047,7 +1047,7 @@ describe("terminal attach capability", () => {
     expect(sidecarAvailable({ node: () => true, pty: () => false })).toBe(false);
   });
 
-  it("takes a node for Node only when it answers in time and is not Bun", () => {
+  it("takes a node for Node only when it answers in time, is not Bun and is built for this server's architecture", () => {
     const dir = mkdtempSync(join(tmpdir(), "herdr-sidecar-probe-"));
     const stand = (name: string, body: string) => {
       const path = join(dir, name);
@@ -1056,8 +1056,10 @@ describe("terminal attach capability", () => {
       return path;
     };
     try {
-      expect(isRealNode(stand("node", "echo 22.23.2"))).toBe(true);
-      expect(isRealNode(stand("old-node", "echo 16.20.2"))).toBe(false);
+      expect(isRealNode(stand("node", `echo 22.23.2 ${process.arch}`))).toBe(true);
+      expect(isRealNode(stand("old-node", `echo 16.20.2 ${process.arch}`))).toBe(false);
+      // an x64 Node under Rosetta beside an arm64 server, or the other way round (#596 review)
+      expect(isRealNode(stand("other-arch", `echo 22.23.2 ${process.arch === "x64" ? "arm64" : "x64"}`))).toBe(false);
       expect(isRealNode(stand("bun-as-node", "echo bun"))).toBe(false);
       expect(isRealNode(stand("broken", "exit 1"))).toBe(false);
       expect(isRealNode(join(dir, "absent"))).toBe(false);
