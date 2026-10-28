@@ -429,6 +429,20 @@ describe("numbered lists as agents write them", () => {
   };
   const lists = (source: string) => parseMarkdown(source).map((block) => block.type === "list" ? { start: block.start ?? 1, items: block.items.length } : block.type);
 
+  it("tells the list how many digits its widest number has, as the browser numbers it (#1993)", () => {
+    const digits = (source: string) => render(source).match(/--markdown-list-digits:(\d+)/)?.[1] ?? null;
+    expect(digits("1. a\n2. b")).toBeNull();
+    expect(digits("9. a\n10. b")).toBe("2");
+    expect(digits("99. a\n100. b")).toBe("3");
+    expect(digits("0. a")).toBeNull();
+    expect(digits("- a\n- b")).toBeNull();
+    // a nested list counts its own numbers, not its parent's
+    expect(render("100. a\n    1. b")).toMatch(/--markdown-list-digits:3[^>]*><li><span>a<\/span><ol class="markdown-list"><li>/);
+    // past a 32-bit integer the browser counts from 1, so that start sets no wider indent
+    expect(digits("2147483647. a")).toBe("10");
+    expect(digits("100000000000000000000. a")).toBeNull();
+  });
+
   it("reads a task list item's box as checked or open, and keeps the rest as its text", () => {
     const [block] = parseMarkdown("- [x] done\n- [ ] open\n- [X] also done\n- [ ]\n- [y] not a box\n- plain");
     expect((block as ListBlock).items.map((item) => [item.checked, item.content])).toEqual([
