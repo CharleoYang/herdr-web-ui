@@ -32,42 +32,50 @@ const threadClock = ((): (() => number) | null => {
 })();
 
 /**
- * How many times longer `make(large)` runs than `make(small)` in CPU time, and what the large one
- * returns. A budget in wall-clock milliseconds failed on loaded GitHub runners (1,013 to 1,062 ms
- * against 1,000, #2142) with nothing slower in the code: a busy host stretches the clock while the
- * work waits for a core. CPU time does not stretch that way, but any budget in milliseconds still
- * depends on the runner's processor; the growth from one size to the next does not, and a scan that
- * goes quadratic grows by the square of the step. This thread's CPU time where the system keeps it,
- * else the process's. Each size runs once untimed, then three times, and the least of each is
- * compared: being preempted or slowed only adds time.
+ * How many times longer `make(subject)` runs than `make(reference)` in CPU time, and what the
+ * subject returns. A budget in wall-clock milliseconds failed on loaded GitHub runners (1,013 to
+ * 1,062 ms against 1,000, #2142) with nothing slower in the code: a busy host stretches the clock
+ * while the work waits for a core. CPU time does not stretch that way, but any budget in
+ * milliseconds still depends on the runner's processor, and the growth from a small input to a
+ * five times larger one still moved on a busy runner (3 times as written read 10.8). Against an
+ * input of the same size that the code reads in one pass, a scan that goes quadratic costs a
+ * multiple that grows with the size, while the work both share stays out of the ratio (so a cost
+ * that grows with the length alone, which both inputs share, is not what such a case bounds). This
+ * thread's CPU time where the system keeps it, else the process's. Each input runs once untimed,
+ * then three times, and the least of each is compared: being preempted or slowed only adds time.
  */
-const cpuGrowth = <T,>(make: (size: number) => () => T, small: number, large: number): { result: T; ratio: number } => {
+const cpuRatio = <K, T>(make: (input: K) => () => T, reference: K, subject: K): { result: T; ratio: number } => {
   const now = (): number => {
     if (threadClock !== null) return threadClock();
     const { user, system } = process.cpuUsage();
     return (user + system) / 1000;
   };
-  const runSmall = make(small);
-  const runLarge = make(large);
-  runSmall();
-  const result = runLarge();
-  // a run of a fraction of a millisecond is timed over as many runs as take two; twenty where the
-  // process's clock may count in steps of milliseconds, so no small run reads none
-  const shortest = threadClock === null ? 20 : 2;
+  const runReference = make(reference);
+  const runSubject = make(subject);
+  runReference();
+  const result = runSubject();
+  // a run of a fraction of a millisecond is timed over as many runs as take two; a hundred where
+  // the process's clock may count in steps of about 16 ms (Windows), so a step is a small part
+  // of what any reference reads. The least reference of the three is checked too, not only the
+  // first: runs that got faster after it may read less, or none on that clock, so the whole set
+  // is timed again over twice the runs
+  const shortest = threadClock === null ? 100 : 2;
   let runs = 1;
   const timed = (run: () => T): number => {
     const start = now();
     for (let index = 0; index < runs; index += 1) run();
     return now() - start;
   };
-  while (timed(runSmall) < shortest) runs *= 2;
-  let leastSmall = Infinity;
-  let leastLarge = Infinity;
-  for (let round = 0; round < 3; round += 1) {
-    leastSmall = Math.min(leastSmall, timed(runSmall));
-    leastLarge = Math.min(leastLarge, timed(runLarge));
+  while (timed(runReference) < shortest) runs *= 2;
+  for (;; runs *= 2) {
+    let leastReference = Infinity;
+    let leastSubject = Infinity;
+    for (let round = 0; round < 3; round += 1) {
+      leastReference = Math.min(leastReference, timed(runReference));
+      leastSubject = Math.min(leastSubject, timed(runSubject));
+    }
+    if (leastReference >= shortest) return { result, ratio: leastSubject / leastReference };
   }
-  return { result, ratio: leastLarge / leastSmall };
 };
 
 describe("a Codex process's own store", () => {
@@ -231,15 +239,15 @@ describe("Codex conversation records", () => {
   it("bounds citation parsing with many unmatched backtick lengths", () => {
     const delimiters = (count: number) => "Unmatched delimiters: " + Array.from({ length: count }, (_, i) => "`".repeat(i + 1) + " x ").join("");
     const text = delimiters(1000);
-    // five times the delimiters is 25 times the text: about 12 times the CPU time as written, 120 when
-    // each unmatched delimiter looks for its match in the rest of the text
-    const { result, ratio } = cpuGrowth((count) => {
-      const transcript = jsonl(message("assistant", `${delimiters(count)}<oai-mem-citation>hidden</oai-mem-citation>`));
+    // the text against one as long with no backticks: about 1.3 times the CPU time as written, over
+    // 600 when each unmatched delimiter looks for its match in the rest of the text
+    const { result, ratio } = cpuRatio((ticks: boolean) => {
+      const transcript = jsonl(message("assistant", `${ticks ? text : text.replaceAll("`", "'")}<oai-mem-citation>hidden</oai-mem-citation>`));
       return () => parseCodexTranscript(transcript);
-    }, 200, 1000);
+    }, false, true);
     expect(result[0]?.parts).toEqual([{ kind: "text", text: text.trimEnd() }]);
-    expect(ratio).toBeLessThan(40);
-  });
+    expect(ratio).toBeLessThan(20);
+  }, 30_000);
 
   it("hides injected context, metadata and developer messages while preserving the real request", () => {
     const turns = parseCodexTranscript(jsonl(
@@ -901,29 +909,31 @@ describe("Codex rollout resolution", () => {
 
   it("reads short answers in bounded time however many unclosed links the answers hold", () => {
     const screen = Array.from({ length: 400 }, () => "q".repeat(120)).join("\n");
-    // five times as many: about 3 times the CPU time as written, 15 when cutting at /\]\([^)\s]*\)/
-    // rescans from every unclosed "]("
-    const { result, ratio } = cpuGrowth((unclosed) => {
-      const many = answered(...Array.from({ length: 450 }, () => "](".repeat(unclosed)));
+    // answers of 8,000 characters, all unclosed "](", against answers as long with one closed link:
+    // about 1.5 times the CPU time as written, over 400 when cutting at /\]\([^)\s]*\)/ rescans from
+    // every unclosed "]("
+    const { result, ratio } = cpuRatio((unclosed: boolean) => {
+      const text = unclosed ? "](".repeat(4000) : `](${"a".repeat(7997)})`;
+      const many = answered(...Array.from({ length: 5 }, () => text));
       const candidates = Array.from({ length: 32 }, (_, index) => ({ path: `unclosed-${index}`, text: many }));
       return () => matchShortCodexAnswers(screen, candidates);
-    }, 1000, 5000);
+    }, false, true);
     expect(result).toBeNull();
-    expect(ratio).toBeLessThan(8);
-  });
+    expect(ratio).toBeLessThan(10);
+  }, 30_000);
 
   it("reads short answers in bounded time however many links a large answer has", () => {
     const screen = Array.from({ length: 400 }, () => "q".repeat(120)).join("\n");
-    // five times the links: about 5 times the CPU time as written, 21 when the work per link grows
-    // with the links before it (an unshift)
-    const { result, ratio } = cpuGrowth((links) => {
-      const huge = answered("[abcdefghijklmnop](/a)".repeat(links));
-      const candidates = Array.from({ length: 32 }, (_, index) => ({ path: `large-${index}`, text: huge }));
+    // 40,000 links against an answer as long with one: about 4 times the CPU time as written, over
+    // 200 when the work per link grows with the links before it (an unshift)
+    const { result, ratio } = cpuRatio((links: boolean) => {
+      const huge = answered(links ? "[abcdefghijklmnop](/a)".repeat(40_000) : `${"[abcdefghijklmnop] /a)".repeat(39_999)}[abcdefghijklmnop](/a)`);
+      const candidates = Array.from({ length: 8 }, (_, index) => ({ path: `large-${index}`, text: huge }));
       return () => matchShortCodexAnswers(screen, candidates);
-    }, 8_000, 40_000);
+    }, false, true);
     expect(result).toBeNull();
-    expect(ratio).toBeLessThan(10);
-  });
+    expect(ratio).toBeLessThan(20);
+  }, 30_000);
 
   it("does not bind using user context, tool output or a previous session above the welcome card", () => {
     expect(matchCodexTranscript(answer, [{ path: "user", text: jsonl(message("user", answer)) }])).toBeNull();
