@@ -4,6 +4,7 @@ import { answerFromText, answerRefusal, needsConfirmation, type TypedAnswer } fr
 import { composerDelivery, pendingActionUncertain, submitNotTyped, submitRefusal, type DraftRefusal } from "./compose.ts";
 import type { PaneSubmitRetention } from "./paneSubmitRetention.ts";
 import { pendingMessages } from "./pendingMessages.ts";
+import { rememberWaitingSend, waitingKey } from "./sentWaiting.ts";
 import { composerDrafts } from "./composerDraft.ts";
 import type { AgentStatus, InteractivePrompt, PromptAnswer } from "../../shared/protocol.ts";
 import type { HerdrSocket, SubmitDelivery, SubmitResult } from "./ws.ts";
@@ -132,6 +133,9 @@ export function useComposerSends(deps: ComposerSendsDeps) {
         if (delivery === "immediate" && answer.pending === undefined && !answer.unconfirmed
           && paneRef.current === pane && socketRef.current === socket && sessionRef.current === session) {
           setChatLocalSend((current) => ({ key: current.key + 1, navigationGeneration: navigation }));
+          // the chat shows it until the pane writes it as a turn: Claude starts that turn when the
+          // one it is in ends, and the reader may be on another tab by then
+          if (pane !== null) rememberWaitingSend(waitingKey(machineId, pane), text);
         }
         if (pane !== null && delivery === "immediate" && answer.pending === undefined && !answer.unconfirmed) showSentCommand(pane, text, known, seen);
         return true;

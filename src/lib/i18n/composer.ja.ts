@@ -61,7 +61,6 @@ export const COMPOSER_JA: Record<string, string> = {
   "Not answered": "未回答",
   "Not confirmed: the pane did not confirm this message. Check the terminal before sending it again.": "未確認: ペインがこのメッセージを確認しませんでした。再送信する前にターミナルを確認してください。",
   "Not confirmed: the terminal did not confirm the text. Check it before inserting again.": "未確認: ターミナルがテキストの受信を確認しませんでした。もう一度挿入する前にターミナルを確認してください。",
-  "Not confirmed: the terminal draft was cleared or may have changed. Your message stayed here. Check the terminal before sending again.": "未確認: ターミナルの下書きが消去されたか、変更された可能性があります。メッセージはここに残っています。再送信する前にターミナルを確認してください。",
   "Not inserted: it waited too long behind earlier input, and nothing was typed. Try again.": "未挿入: 先行する入力の後ろで待ちすぎたため、何も入力されていません。もう一度お試しください。",
   "Not inserted: the connection dropped before the text left. Try again.": "未挿入: テキストを送る前に接続が切れました。もう一度お試しください。",
   "Not inserted: the line holds a control character. Remove it, then insert again.": "未挿入: 入力欄に制御文字があります。削除してからもう一度挿入してください。",
@@ -218,4 +217,6 @@ export const COMPOSER_JA: Record<string, string> = {
   "Question {n}": "質問 {n}",
   "Tab switched OpenCode's agent from {from} to {to}. Nothing more was typed. Check the terminal before sending again.": "Tab キーで OpenCode のエージェントが {from} から {to} に切り替わりました。それ以上は入力していません。再送信する前にターミナルを確認してください。",
   "OpenCode attached another skill. Your chat text stayed here. Check the terminal before sending again.": "OpenCode が別のスキルを添付しました。チャットのテキストはここに残っています。再送信する前にターミナルを確認してください。",
+  "Not confirmed: it may already be queued in the terminal. Your message stayed here. Check the terminal before sending again.": "未確認: すでにターミナルで待機している可能性があります。メッセージはここに残しています。再送信の前にターミナルを確認してください。",
+  "Not confirmed: it may already have reached the agent. Check the terminal before sending again.": "未確認: すでにエージェントに届いている可能性があります。再送信の前にターミナルを確認してください。",
 };

@@ -61,7 +61,6 @@ export const COMPOSER_ZH: Record<string, string> = {
   "Not answered": "未回答",
   "Not confirmed: the pane did not confirm this message. Check the terminal before sending it again.": "未确认：窗格未确认此消息。重新发送前请检查终端。",
   "Not confirmed: the terminal did not confirm the text. Check it before inserting again.": "未确认：终端未确认收到文本。请先检查终端，再重新插入。",
-  "Not confirmed: the terminal draft was cleared or may have changed. Your message stayed here. Check the terminal before sending again.": "未确认：终端草稿已被清除或可能发生了变化。您的消息仍保留在这里。再次发送前请检查终端。",
   "Not inserted: it waited too long behind earlier input, and nothing was typed. Try again.": "未插入：在先前输入之后等待过久，未输入任何内容。请重试。",
   "Not inserted: the connection dropped before the text left. Try again.": "未插入：文本发出前连接已断开。请重试。",
   "Not inserted: the line holds a control character. Remove it, then insert again.": "未插入：输入框中有控制字符。删除后请重新插入。",
@@ -218,4 +217,6 @@ export const COMPOSER_ZH: Record<string, string> = {
   "Question {n}": "问题 {n}",
   "Tab switched OpenCode's agent from {from} to {to}. Nothing more was typed. Check the terminal before sending again.": "Tab 键将 OpenCode 的 Agent 从 {from} 切换为 {to}。未继续输入。请先检查终端，再重新发送。",
   "OpenCode attached another skill. Your chat text stayed here. Check the terminal before sending again.": "OpenCode 附加了另一个 Skill。聊天文本仍保留在这里。请先检查终端，再重新发送。",
+  "Not confirmed: it may already be queued in the terminal. Your message stayed here. Check the terminal before sending again.": "未确认：它可能已经在终端里排队。你的消息留在这里。再次发送前请先检查终端。",
+  "Not confirmed: it may already have reached the agent. Check the terminal before sending again.": "未确认：它可能已经送达 agent。再次发送前请先检查终端。",
 };

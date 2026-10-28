@@ -61,7 +61,6 @@ export const COMPOSER_KO: Record<string, string> = {
   "Not answered": "답하지 않음",
   "Not confirmed: the pane did not confirm this message. Check the terminal before sending it again.": "확인되지 않음: 패널이 이 메시지를 확인하지 않았습니다. 다시 보내기 전에 터미널을 확인하세요.",
   "Not confirmed: the terminal did not confirm the text. Check it before inserting again.": "확인되지\u00a0않았습니다: 터미널이\u00a0텍스트를\u00a0받았는지\u00a0모릅니다. 다시\u00a0넣기\u00a0전에\u00a0터미널을\u00a0확인하세요.",
-  "Not confirmed: the terminal draft was cleared or may have changed. Your message stayed here. Check the terminal before sending again.": "확인되지 않음: 터미널 초안이 지워졌거나 변경되었을 수 있습니다. 메시지는 여기에 남아 있습니다. 다시 보내기 전에 터미널을 확인하세요.",
   "Not inserted: it waited too long behind earlier input, and nothing was typed. Try again.": "넣지\u00a0못했습니다: 앞선\u00a0입력\u00a0뒤에서\u00a0너무\u00a0오래\u00a0기다렸습니다. 아무것도\u00a0입력하지\u00a0않았습니다. 다시\u00a0시도하세요.",
   "Not inserted: the connection dropped before the text left. Try again.": "넣지\u00a0못했습니다: 텍스트를\u00a0보내기\u00a0전에\u00a0연결이\u00a0끊겼습니다. 다시\u00a0시도하세요.",
   "Not inserted: the line holds a control character. Remove it, then insert again.": "넣지\u00a0못했습니다: 입력창에\u00a0제어\u00a0문자가\u00a0있습니다. 지운\u00a0뒤\u00a0다시\u00a0넣으세요.",
@@ -218,4 +217,6 @@ export const COMPOSER_KO: Record<string, string> = {
   "Question {n}": "질문 {n}",
   "Tab switched OpenCode's agent from {from} to {to}. Nothing more was typed. Check the terminal before sending again.": "Tab 키로 OpenCode 에이전트가 {from}에서 {to}(으)로 바뀌었습니다. 더 이상 입력하지 않았습니다. 다시 보내기 전에 터미널을 확인하세요.",
   "OpenCode attached another skill. Your chat text stayed here. Check the terminal before sending again.": "OpenCode가 다른 스킬을 첨부했습니다. 채팅 텍스트는 여기에 남아 있습니다. 다시 보내기 전에 터미널을 확인하세요.",
+  "Not confirmed: it may already be queued in the terminal. Your message stayed here. Check the terminal before sending again.": "확인되지 않음: 이미 터미널에 대기 중일 수 있습니다. 메시지는 여기에 남아 있습니다. 다시 보내기 전에 터미널을 확인하세요.",
+  "Not confirmed: it may already have reached the agent. Check the terminal before sending again.": "확인되지 않음: 이미 에이전트에 전달되었을 수 있습니다. 다시 보내기 전에 터미널을 확인하세요.",
 };
