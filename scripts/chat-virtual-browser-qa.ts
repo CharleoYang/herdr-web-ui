@@ -249,6 +249,134 @@ try {
     }
     console.log(`PASS ${width} ${theme}: 100 immutable streaming revisions retain bottom`);
 
+    // #2042: the last row grows with no new data (output rewrapping), so the view glides to the end;
+    // while it glides, a row above the view folds or grows. The list holds the rows on screen where
+    // they were, a move up the reader did not make: following goes on to the end. So does a turn
+    // settling at the end, its work and a block above folding at once. A real upward wheel once it
+    // lands still stops following.
+    for (const change of ["fold-above", "grow-above", "fold-together", "wheel-up"] as const) {
+      const reading = change === "wheel-up";
+      const landed = await page.locator(".chat-view").evaluate(async (node, change) => {
+        if (!(node instanceof HTMLElement)) throw new Error("Missing chat scroller");
+        const frame = () => new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+        const gap = () => node.scrollHeight - node.clientHeight - node.scrollTop;
+        // the next scroll event, or false when none comes in two seconds
+        const scrolled = () => new Promise<boolean>((resolve) => {
+          const timer = setTimeout(() => { node.removeEventListener("scroll", seen); resolve(false); }, 2_000);
+          const seen = () => { clearTimeout(timer); resolve(true); };
+          node.addEventListener("scroll", seen, { once: true });
+        });
+        // the scroll events of this case, for a failure to say how the view moved
+        const moves: string[] = [];
+        const note = () => moves.push(`${Math.round(node.scrollTop)}/${Math.round(gap())}`);
+        node.addEventListener("scroll", note);
+        const fail = (what: string) => new Error(`${change}: ${what}: ${JSON.stringify({ gap: Math.round(gap()), moves: moves.slice(-12) })}`);
+        const view = node.getBoundingClientRect();
+        const rows = [...node.querySelectorAll<HTMLElement>("[data-chat-row]")].sort((a, b) => a.getBoundingClientRect().top - b.getBoundingClientRect().top);
+        const above = rows.filter((row) => row.getBoundingClientRect().bottom < view.top).at(-1);
+        const last = rows.at(-1);
+        if (!above || !last) throw fail("rows above the view and at the end are missing");
+        const block = document.createElement("div");
+        block.className = "qa-row-height";
+        // only the folds need a block there before the glide
+        const folds = change === "fold-above" || change === "fold-together";
+        block.style.height = folds ? "400px" : "0px";
+        if (folds) {
+          // the block to fold, measured and held in place before the glide
+          const moved = scrolled();
+          above.append(block);
+          if (!await moved) throw fail("the list did not hold the view for a taller row above");
+        } else above.append(block);
+        for (let i = 0; i < 120 && gap() > 1; i++) await frame();
+        if (gap() > 1) throw fail("not at the end before the glide");
+        if (change === "fold-together") {
+          // A turn settles at the end: its own work folds in the last row while an earlier block folds
+          // above it, in one layout. The list and the browser both move the view up for it.
+          const work = document.createElement("div");
+          work.className = "qa-row-height";
+          work.style.height = "600px";
+          last.append(work);
+          for (let i = 0; i < 300 && (gap() > 1 || last.getBoundingClientRect().bottom > node.getBoundingClientRect().bottom + 1); i++) await frame();
+          if (gap() > 1) throw fail("not at the end of the grown last row");
+          block.style.height = "0px";
+          work.style.height = "0px";
+          for (let i = 0; i < 300 && gap() > 1 && !document.querySelector(".chat-new-messages"); i++) await frame();
+          node.removeEventListener("scroll", note);
+          return { during: Infinity, gap: Math.round(gap()), stopped: document.querySelector(".chat-new-messages") !== null, moves: moves.slice(-12) };
+        }
+        // The list's own follow from the last update can still be settling (it waits up to 800 ms)
+        // and lands the view at the end at once; grow the row again until the view glides there.
+        const deadline = performance.now() + 5_000;
+        for (;;) {
+          const growth = document.createElement("div");
+          growth.className = "qa-row-height";
+          growth.style.height = "600px";
+          const moved = scrolled();
+          last.append(growth);
+          if (!await moved) throw fail("no scroll toward the grown last row");
+          // the list hands a scroll to the chat in the next animation frame: the chat has seen the
+          // glide under way before anything else moves the view, as it has when a reader's wheel lands
+          await frame();
+          if (gap() > 1) break;
+          if (performance.now() > deadline) throw fail("the view never glided toward the grown last row");
+        }
+        const during = gap();
+        // the wheel is real input, sent from outside the page: Chrome ends its own glide for it
+        if (change === "wheel-up") {
+          node.removeEventListener("scroll", note);
+          return { during, gap: Math.round(gap()), stopped: false, moves: moves.slice(-12) };
+        }
+        block.style.height = change === "fold-above" ? "0px" : "400px";
+        // the end reached, or following stopped
+        for (let i = 0; i < 300 && gap() > 1 && !document.querySelector(".chat-new-messages"); i++) await frame();
+        node.removeEventListener("scroll", note);
+        return { during, gap: Math.round(gap()), stopped: document.querySelector(".chat-new-messages") !== null, moves: moves.slice(-12) };
+      }, change);
+      assert.ok(landed.during > 1, `${change}: the change came while the glide was short of the end: ${JSON.stringify(landed)}`);
+      if (reading) {
+        // the glide over, the reader wheels up: following stops, and the way back shows
+        await settleBottom(page);
+        const box = await page.locator(".chat-view").boundingBox();
+        assert.ok(box);
+        await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+        await page.mouse.wheel(0, -300);
+        await page.getByRole("button", { name: "Jump to latest" }).waitFor();
+      } else {
+        assert.equal(landed.stopped, false, `${change}: following goes on: ${JSON.stringify(landed)}`);
+        assert.ok(landed.gap <= 1, `${change}: following reached the end: ${JSON.stringify(landed)}`);
+      }
+      revision++;
+      await update(page);
+      await page.getByText(`REVISION-${revision}`, { exact: true }).waitFor();
+      assert.equal(await page.getByRole("button", { name: "New messages" }).count(), reading ? 1 : 0, `${change}: the next output ${reading ? "leaves the reader where they went" : "is followed"}`);
+      if (reading) assert.ok((await metrics(page)).bottom > 1, `${change}: output leaves the reader away from the end`);
+      else await settleBottom(page);
+      await page.evaluate(() => document.querySelectorAll(".qa-row-height").forEach((block) => block.remove()));
+      if (reading) await page.getByRole("button", { name: "New messages" }).click();
+      await settleBottom(page);
+    }
+    console.log(`PASS ${width} ${theme}: a row above folding or growing during the follow glide keeps following, as does a fold at the end; an upward wheel stops it`);
+
+    // A scroll that sends no input this page sees (a screen reader's, a Firefox scrollbar's), in small
+    // steps over a transcript that does not shrink: past the layout allowance from the end, following
+    // stops however small each step was (#1902).
+    await page.locator(".chat-view").evaluate(async (node) => {
+      const delivered = () => new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+      for (const step of [30, 30]) {
+        node.scrollTop -= step;
+        node.dispatchEvent(new Event("scroll"));
+        await delivered();
+      }
+    });
+    revision++;
+    await update(page);
+    await page.getByText(`REVISION-${revision}`, { exact: true }).waitFor();
+    assert.equal(await page.getByRole("button", { name: "New messages" }).count(), 1, "small steps without input past the allowance stop following");
+    assert.ok((await metrics(page)).bottom > 48, "output leaves the reader where the steps took them");
+    await page.getByRole("button", { name: "New messages" }).click();
+    await settleBottom(page);
+    console.log(`PASS ${width} ${theme}: small upward steps without input past the layout allowance stop following`);
+
     const height = width === 390 ? 844 : 900;
     await page.evaluate((height) => window.chatQa.resize(height - 180), height);
     await page.waitForFunction((height) => document.querySelector(".terminal-stack")?.getBoundingClientRect().height === height - 180, height);
