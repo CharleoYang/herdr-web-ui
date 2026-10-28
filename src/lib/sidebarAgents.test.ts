@@ -23,15 +23,17 @@ function snapshot(panes: HerdrPane[], agents: AgentInfo[] = []): SessionSnapshot
 }
 
 describe("sidebarAgents", () => {
-  it("uses the API roster and excludes ordinary shells regardless of their status", () => {
+  it("lists every pane, a shell included: with no tab strip the list is the way to its pane", () => {
     const named = pane("named");
     const rows = sidebarAgents(snapshot([
       pane("shell", { agent_status: "working" }),
       pane("waiting-shell", { agent_status: "blocked" }),
       named,
     ], [agent(named, { name: "reviewer" })]));
-    expect(rows.map(({ pane }) => pane.pane_id)).toEqual(["named"]);
-    expect(rows[0]!.agentLabel).toBe("reviewer");
+    expect(rows.map(({ pane }) => pane.pane_id)).toEqual(["shell", "waiting-shell", "named"]);
+    // a shell's row says nothing of an agent: no kind, no name
+    expect(rows[0]).toMatchObject({ canonicalAgent: null, agent: null, agentLabel: null });
+    expect(rows[2]!.agentLabel).toBe("reviewer");
   });
 
   it("includes a recognized OmO pane before herdr registers it, without duplicates", () => {
@@ -88,7 +90,8 @@ describe("paneMark", () => {
     const codex = pane("codex", { agent: "codex" });
     const byPane = new Map(sidebarAgents(snapshot([shell, codex], [agent(codex)])).map((entry) => [entry.pane.pane_id, entry]));
     expect(paneMark(byPane.get("codex"))).toBe("codex");
-    expect(paneMark(byPane.get("shell"))).toBeNull();
+    // a shell's row has an entry now, and still names no agent: no mark is drawn for it
+    expect(paneMark(byPane.get("shell"))).toBe("");
   });
 
   it("falls back to the name of an agent herdr lists without a kind", () => {

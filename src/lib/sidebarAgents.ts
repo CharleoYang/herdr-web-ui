@@ -37,7 +37,8 @@ export function sidebarAgents(snapshot: SessionSnapshot | null): SidebarAgent[] 
     seen.add(pane.pane_id);
     const agent = agentByPane.get(pane.pane_id) ?? null;
     const workspace = workspaceById.get(pane.workspace_id);
-    if (!workspace || (!agent && !nonblank(pane.agent))) return;
+    // every pane is a row: with no tab strip, the list is the only way to a shell's pane
+    if (!workspace) return;
     const canonicalAgent = nonblank(pane.agent) ?? nonblank(agent?.agent);
     const tab = tabById.get(pane.tab_id);
     rows.push({

@@ -55,4 +55,12 @@ export const SIDEBAR_JA: Record<string, string> = {
   "Collapse": "折りたたむ",
   "Expand": "展開",
   "Shell": "シェル",
+  "New {agent} tab": "{agent} のタブを開く",
+  "Move to workspace: {workspace}": "{workspace} へ移動",
+  "A tab needs a name.": "タブには名前が必要です。",
+  "Close tab": "タブを閉じる",
+  "Tab name": "タブ名",
+  "Move tab left": "タブを左に移動",
+  "Move tab right": "タブを右に移動",
+  "Rename failed: {reason}": "名前を変更できませんでした: {reason}",
 };

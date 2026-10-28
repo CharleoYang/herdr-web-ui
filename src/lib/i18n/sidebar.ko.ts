@@ -55,4 +55,12 @@ export const SIDEBAR_KO: Record<string, string> = {
   "Collapse": "접기",
   "Expand": "펼치기",
   "Shell": "셸",
+  "New {agent} tab": "{agent} 탭 열기",
+  "Move to workspace: {workspace}": "{workspace} (으)로 이동",
+  "A tab needs a name.": "탭 이름을 입력하세요.",
+  "Close tab": "탭 닫기",
+  "Tab name": "탭 이름",
+  "Move tab left": "탭을 왼쪽으로 이동",
+  "Move tab right": "탭을 오른쪽으로 이동",
+  "Rename failed: {reason}": "이름 바꾸기 실패: {reason}",
 };

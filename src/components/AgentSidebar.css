@@ -423,3 +423,71 @@
   .agent-row:enabled:active { opacity: 1; }
   .agent-item:has(> .agent-row:enabled:active) { background: var(--side-hover); }
 }
+
+/* A head and its + on one line (the strip's + lived once per strip; it lives at the head of the
+   place it opens in). The tree's lines keep the head's own width: the + takes what the fold leaves. */
+.agent-workspace-line,
+.agent-kind-line {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+.agent-workspace-line > .agent-workspace-header,
+.agent-kind-line > .agent-kind-header {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.agent-head-add {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: var(--side-row);
+  height: var(--side-row);
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+}
+
+.agent-head-add svg {
+  width: var(--space-4);
+  height: var(--space-4);
+}
+
+.agent-head-add:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+@media (hover: hover) {
+  /* quiet until the head is read: a row of + marks would compete with the names */
+  .agent-head-add { opacity: 0; }
+  .agent-workspace-line:hover .agent-head-add,
+  .agent-kind-line:hover .agent-head-add,
+  .agent-head-add:focus-visible { opacity: 1; }
+}
+
+/* the tab's name, edited in the row the strip would have held */
+.agent-tab-rename {
+  flex: 1 1 auto;
+  min-width: 0;
+  margin: var(--space-1) 0;
+  font: inherit;
+  font-size: var(--fs-sm);
+}
+
+.agent-item.is-renaming {
+  padding-inline: var(--space-2);
+}
+
+/* what a tab action answered when it failed: said under the head, where the row's own note lives */
+.agent-tab-note {
+  margin: 0 var(--side-gutter) var(--space-2);
+  color: var(--danger, var(--error));
+  font-size: var(--fs-xs);
+}

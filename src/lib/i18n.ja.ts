@@ -157,7 +157,6 @@ const BASE: Record<string, string> = {
   "Detached HEAD": "分離した HEAD",
   "Delete": "削除",
   "Close": "閉じる",
-  "Rename failed: {reason}": "名前を変更できませんでした: {reason}",
 
   // ---- PCs sidebar ----
   "Connecting…": "接続しています…",

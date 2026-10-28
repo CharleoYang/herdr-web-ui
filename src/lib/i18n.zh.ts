@@ -159,7 +159,6 @@ const BASE: Record<string, string> = {
   "Detached HEAD": "游离 HEAD",
   "Delete": "删除",
   "Close": "关闭",
-  "Rename failed: {reason}": "重命名失败：{reason}",
 
   // ---- PCs sidebar ----
   "Connecting…": "正在连接…",

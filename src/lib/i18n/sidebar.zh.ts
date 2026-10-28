@@ -55,4 +55,12 @@ export const SIDEBAR_ZH: Record<string, string> = {
   "Collapse": "折叠",
   "Expand": "展开",
   "Shell": "Shell",
+  "New {agent} tab": "新建 {agent} 标签页",
+  "Move to workspace: {workspace}": "移到工作区：{workspace}",
+  "A tab needs a name.": "标签页需要一个名称。",
+  "Close tab": "关闭标签页",
+  "Tab name": "标签页名称",
+  "Move tab left": "向左移动标签页",
+  "Move tab right": "向右移动标签页",
+  "Rename failed: {reason}": "重命名失败：{reason}",
 };

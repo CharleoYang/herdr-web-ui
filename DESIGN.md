@@ -779,11 +779,11 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   sidebar's seam runs to the top of the window. Over the pane, the header takes the pane's
   surface: under the chat lens `--bg` with no bottom rule, the transcript scrolling under a
   `--space-5` fade from `--bg`; under the terminal lens, with no pane, or with a pane herdr could
-  not restore, `--term-bg` and the rule. A tab strip takes the same surface as the header over
+  not restore, `--term-bg` and the rule. A pane takes the same surface as the header over
   it from `769px` (`--strip-bg`: `--bg` under the chat lens, `--term-bg` otherwise, `--bg-panel`
   below `769px`) and keeps its hairline, under the chat the one line over the transcript (no
   fade under it). The update notice, the alerts health notice, a PC's action banner and the pairing line (below) are drawn in
-  the pane column, over the tab strip, never across the window: the sidebar and its top row stay
+  the pane column, over its head row, never across the window: the sidebar and its top row stay
   one piece. A device pairing with this server while a window is open (`device-paired` on the
   machines event stream) is one `.update-notice.is-paired` line there: a `--accent` phone glyph
   (`--icon-size`), one sentence naming the device and the time with the warning in words ("If that
@@ -802,7 +802,7 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   ("This PC's bridge does not offer this yet"); the tab's menu says the same at the strip's end. With the
   sidebar collapsed the toggle and the palette sit in the one bar. Below `769px` the header is the `--bg-panel` bar with
   its rule: the installed app's `theme-color` matches it. Over the chat, when the transcript is right
-  under it (no tab strip or notice between), that bar is glass, as an iPhone's is: `--bar-bg` behind
+  under it (no bar or notice between), that bar is glass, as an iPhone's is: `--bar-bg` behind
   `--glass-blur` at `--z-header`, pulled over the pane by its own height (`--header-over`), so the
   transcript scrolls on under it while its first line, the banners and anything else at the pane's
   top start below it. The xterm mount is not fitted under the chat, so this resizes no pty.
@@ -953,7 +953,7 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   Discord's per-channel mute, a checkbox item in the row's own menu, not a per-channel switch
   (Codex's and Claude's apps have no mute of their own); agent-of-empires has a per-channel
   override, which the shared, PC-keyed list replaces.
-  A desktop (`pointer: fine` wider than 768px, the tab strip's rule) draws no row `⋯`: a
+  A desktop (`pointer: fine` wider than 768px, the row's own rule) draws no row `⋯`: a
   right-click or the context-menu key opens the menu, at the pointer or at the row, and dismissal
   returns the focus where it was.
 
@@ -1101,7 +1101,7 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   then ready); a folded worktree parent rolls up its whole group.
   Clicking its name opens the
   selected pane in that workspace, else the last viewed pane, else the pane herdr has focused,
-  else its first pane. Tabs are selected from the tab strip; panes are selected on the canvas or from the command palette.
+  else its first pane. Panes are selected from the sidebar's rows, on the canvas or from the command palette.
 - A top-level workspace row starts with its project's icon in the grid's leading cell, under the
   PC's monitor, or a folder glyph when its folder keeps none; the row's mark and name follow it.
   For a repository workspace with linked worktree workspaces that cell is the group's fold, a
@@ -1477,106 +1477,24 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
 - The browser demo answers `GET /api/agent/commands` with a few fictional skills per agent (`$` ones
   for Codex) and records nothing: a tab started from it is the demo's own new pane.
 
-### Tab strip and pane canvas
-- The tab strip is shown even for one pane, as herdr's TUI shows its single tab and `+`. The `+`
-  is herdr's own new tab: it calls `POST /api/tab/create` with no agent at once, in the workspace's
-  folder, and opens the new shell pane unless another pane was opened meanwhile; a refusal shows
-  in the strip. An agent tab comes from the tab menu's New tab with agent…, which opens the dialog.
-  Tabs retain their names, status dots, active underline, keyboard navigation, rename field and
-  close confirmation. A right-click opens tab actions at the pointer, including Move tab left/right
-  when a neighbouring position exists. Tabs have no close buttons or chevrons. Touch and narrow layouts show a `⋯` beside
-  the selected tab for a trimmed menu, and there a tab is at least `--touch-target` tall and wide, so a one- or
-  two-character name (탭 1) is still a finger's target with the `⋯` a target of its own beside it; a desktop with a mouse draws the same `⋯` on the selected tab, hidden in its place
-  until the strip is hovered or the tab has keyboard focus (Menu / popover). Shift+F10 or the menu key opens the full tab menu from a focused tab.
-  Pane actions are not tab actions. Up to 768px, where a split tab shows one pane at a time, the
-  tab's menu lists the tab's panes first, the open one marked current, over a hairline.
-  Only at these narrow widths does it omit Split and Zoom pane; Unzoom pane stays available whenever the tab is zoomed.
-- Mouse dragging previews an accent insertion line, with edge scrolling for an overflowing strip.
-  The snapshot's tab order is authoritative: a tab's stable `number` is not its place. A drop calls
-  `tab.move` with an insertion boundary before removal, within that workspace and PC. The visible
-  order changes with herdr's snapshot, keeping selection and keyboard focus; a refusal shows an
-  inline error. One request waits for acknowledgement before another move is accepted. Escape,
-  a tab-list change or leaving the workspace cancels an unsent drag. Touch keeps native sideways
-  scrolling and uses Move tab left/right in the selected tab's menu; Alt+Shift+Left/Right provides
-  the same adjacent moves only while a tab has keyboard focus.
-- `PaneCanvas` draws every pane in the active tab at `layouts[].panes[].rect`, normalized to
-  the layout's own area. Panes share thin, square boundaries: `--border-strong` when inactive,
-  `--accent` around the selected pane. The compact header names its pane and, on a screen that takes touch
-  (`any-pointer: coarse`), the ellipsis; a mouse opens the same menu by right-click. Keyboard users
-  tab to the pane's ellipsis, which becomes visible on keyboard focus, and press Enter.
-  Shift+F10 in the terminal goes to the terminal program, not the app menu. A lone or zoomed
-  pane is borderless; its actions live in the tab's `⋯` menu rather than a second ellipsis, on a desktop as on touch.
-- A left click or keyboard focus selects the actual pane. Right-click opens the clicked pane's
-  menu without changing the selected pane: Rename pane, Clear pane name when named, Swap with
-  focused pane when another is selected, Split right, Split down, Zoom/Unzoom pane, Recover
-  unsent text while there is some (Unsent text, below), Close pane. It appears at the pointer, clamped to the window. Up/Down
-  stop at the ends, hover selects, Enter acts, Escape and an outside click dismiss.
-- Split selects the new pane (`focus:true`), like the TUI. Swap exchanges the right-clicked
-  pane with the previously selected pane and retains the browser's selection. On a desktop,
-  dragging a pane's title onto another pane's title in the same tab on the same PC exchanges
-  their positions too. The eligible title is highlighted instead of offering a split-view
-  half. Sidebar drags, drops outside an eligible title, and drops across tabs or PCs keep
-  their existing docking behavior. This follows tmux's explicit `swap-pane` operation,
-  exposed through a title drop like VS Code's editor-group drag targets rather than a new
-  layout setting. Explicit swaps leave herdr's focused pane, tab and workspace where they
-  were: the bridge serializes Ovis focus-changing calls (focus, swaps, split, zoom and close)
-  per herdr socket, reads its focused pane before
-  the native swap, and restores it only after a changed swap if focus still belongs to the
-  swapped source. A later Ovis focus choice runs after the restore and takes precedence.
-  A focus change in herdr's own TUI between the check and restore cannot be serialized by
-  Ovis; eliminating that window needs a native swap that does not move focus.
-  Restoration is best effort: its failure is logged but the committed swap still succeeds.
-  The browser keeps the request-only `movingHerdrFocus` guard used for a split: with
-  Follow herdr focus enabled, a focus event received while a swap is pending can be ignored.
-  A restore event received after its reply can still open the restored pane in the browser.
-  This is the approved fallback after six ordering failures of a client-only restore filter.
-  Native focus events carry no RPC correlation, so the bridge cannot prove which event was
-  caused by restoration. No sequence fields, pane-name tokens, or held/replayed events are
-  added. The root fix needs native `pane.swap focus:false` or correlated event identifiers.
-  A refused title swap shows a layout notice with a localized reason.
-  A close confirms when
-  the pane is busy or is the last pane of the workspace. Rename is herdr's label; clearing it
-  returns to its automatic title. Herdr owns every resulting layout and name.
-- Up to 768px a split has no room: the canvas shows the selected pane alone, full size and
-  borderless as a zoomed one, with no split boundary, and the tab's menu picks another. The
-  other panes stay mounted and hidden at the same full size. This is only what the browser draws:
-  herdr's layout and zoom are not changed, and a wider window draws the split again.
-- Zoom uses herdr's zoom flag and focused pane. The other panes keep their mounted terminals
-  hidden, preserving attachments and drafts; unzoom restores their rectangles. Web selection
-  stays local to this browser and does not change herdr's focus in another client.
-- The other way is opt-in, per device (Settings → Terminal → Follow herdr's focus, off by
-  default): when herdr's own focus moves (a click in its window, `herdr tab focus`, a script's
-  `herdr tab create --focus`), the server's `pane-focused` frame opens that pane here too, only
-  on the PC open here and never for a pane already in front (the selected one or the other split
-  half). It is an automatic pick: no keyboard is raised and no Back entry is added. A split this
-  device asked to open (Split pane right and open it) stays its own pick, keyboard and Back entry
-  included, even when herdr's frame comes before the split's answer: until that request is
-  answered, for 10 s at most, that PC's frames are not followed. A PC on Ovis older than 0.4.13 sends no such frame,
-  which the setting's description says. Off, a browser
-  is a tmux client of a grouped session (its own current window); on, it shares the session's
-  current window as herdr's own window does. The coding-agent apps have no outside focus to follow.
-- Drag the actual split boundary to resize, with an 8px hit region and native 0.1–0.9 ratio
-  limits. Its keyboard separator accepts arrow keys. `layout.set_split_ratio` receives the
-  binary path (false first, true second), at most 30 times a second, one request in flight;
-  release flushes the final ratio. A tab/topology change cancels the drag.
-- Every pane keeps its own xterm, attachment, input ownership, lens, chat state and file-path
-  context. Only the active pane may take keyboard focus after an asynchronous operation.
-- Switching tabs retains an outgoing terminal while its explicit submit awaits a receipt;
-  its chat/input UI is unmounted and its grid is not resized. The receipt settles the original
-  draft before the pane attachment is released. No input is replayed. A canvas that already released
-  its panes while away opens a replacement as view-only until the user returns.
-  An automatic queue also retains its original pane lease until sent, discarded or held.
-- The unlocked app owns one connection per visited PC, shared by its pane mounts. A pane leaving
-  the canvas without an outstanding submit or automatic queue sends detach and loses its
-  automatic-delivery lease, while the PC connection keeps
-  receiving authoritative held/removal receipts. Returning exposes the same pending ID for an
-  explicit Send now. Only an actual disconnect, PC removal, sign-out or app teardown suspends
-  connection proof; reconnect/reload never resumes pending delivery.
-  A newly split pane awaiting its first snapshot does not unmount its siblings. Geometry is
-  fitted inside each rendered pane; layout rectangles are never used as PTY dimensions.
-  A right-click on a pane always opens its menu.
-  Native app shortcuts default to Mod+Shift in the browser, so Ctrl+key continues to reach the PTY;
-  a plain Ctrl/Alt chord is taken only after the user records it and confirms Save anyway.
+### Tabs, and the pane canvas
+- There is no tab strip: the pane list is the way to a tab's pane, and the Agents tree is that list.
+  Every pane is a row (a shell included), so a tab with splits is read as its panes, and the row
+  states its tab in the context line. Selecting a row selects that pane, which is selecting its tab.
+- A `+` stands at each head: a workspace's head opens an empty tab there (`POST /api/tab/create`,
+  herdr's own new tab, in the workspace's folder, no dialog), and a coding agent's head opens a tab
+  running that agent in its first workspace. Both open the new pane unless another pane was opened
+  meanwhile; a refusal is said under the head, where the row's own note lives.
+- A tab's own actions are its row's menu: Rename tab (a field in that row, Enter or a click
+  elsewhere saving it, Escape leaving the name), Move tab left/right while a neighbouring position
+  exists, Move to workspace: {workspace} for each other workspace of the PC, and Close tab. Pane
+  actions are not tab actions.
+- Keyboard: Previous/Next pane (`Mod+Shift+↑/↓`) walk the same list the sidebar draws, which is tab
+  order. The strip's own chords (`Alt+Shift+←/→`, `Shift+F10`) went with it; a Settings binding can
+  put them back on Previous/Next pane. Rename tab stays on its shortcut and the palette, and opens
+  the field in that pane's row.
+- The snapshot's tab order is authoritative: a tab's stable `number` is not its place. Only the
+  row menu's Move tab actions reorder tabs now, one request at a time; a refusal is said inline.
 
 ### Worktree dialog (`.worktree-modal`)
 - From a workspace row's menu, as herdr's prefix+shift+g: **New worktree** asks for the branch
@@ -1813,7 +1731,7 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   at every width, is **Search panes and actions**, which opens the command palette (its shortcut
   as the item's hint where the pointer is fine); then **Find in terminal**, **Browse files** (at
   `<=768px` only: from `769px` Files is the header's own button), **Copy link** and **Alerts**,
-  each under the condition its own button had. New tab stays on the tab strip's `+`. The Alerts item says
+  each under the condition its own button had. New tab stays on the sidebars' `+` and the palette. The Alerts item says
   this device's state in words after its label ("On in the app", "On in this tab", "On, pushed to
   this device", "Off on this device") and switches it: it is a `menuitemcheckbox` with
   `aria-checked` in the popover and a button with `aria-pressed` in the sheet. While alerts are off on this device the
@@ -3310,7 +3228,7 @@ The values are the ones in `src/styles.css`.
   ready and unknown draw nothing there, and unknown uses a dashed badge edge elsewhere.
 - Touch targets grow to `--touch-target`; fields stay `--fs-input` where mobile zoom is a risk.
 - On a touch screen (`hover: none` and `pointer: coarse`) the app is an app, not a page: its
-  chrome (header, sidebar, tab strip, key bar, menus, sheet heads and feet, buttons, tabs, labels)
+  chrome (header, sidebar, key bar, menus, sheet heads and feet, buttons, tabs, labels)
   is not selectable and opens no link callout, while the transcript, code, files and fields are;
   page pinch zoom remains available on ordinary content, while the terminal's two-finger pinch
   sizes its font; landscape does not inflate text. A pressed button dims to `0.55` at once in place

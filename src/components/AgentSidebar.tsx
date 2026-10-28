@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
-import { Bell, BellOff, ChevronDown, ChevronRight, Ellipsis, Layers, Pin, PinOff, Terminal } from "lucide-react";
+import { ArrowLeft, ArrowRight, Bell, BellOff, ChevronDown, ChevronRight, Ellipsis, FolderInput, Layers, Pencil, Pin, PinOff, Plus, Terminal, X } from "lucide-react";
 
 import type { Machine } from "../../shared/machines.ts";
 import { paneStorageId } from "../../shared/machines.ts";
@@ -12,6 +12,9 @@ import { agentKindGroups, agentRoster, workspaceGroups, type AgentRow, type Agen
 import { currentPaneMutes, paneMuteKey, prunePaneMutes, setPaneMutes, subscribePaneMutes, togglePaneMute } from "../lib/paneMutes.ts";
 import { agentContext, agentTabName, paneMark } from "../lib/sidebarAgents.ts";
 import { agentDisplayLabel } from "../lib/compose.ts";
+import { customTabLabel } from "../lib/tabName.ts";
+import { closeTab, createTab, moveTab, moveTabToWorkspace, renameTab } from "../lib/api.ts";
+import { MAX_LABEL_CHARS } from "../../shared/labels.ts";
 import { useSettings } from "../lib/settings.ts";
 import { useSidebarActivity } from "../lib/sidebarActivity.tsx";
 import { machineFilter } from "../lib/sidebarFilter.ts";
@@ -85,6 +88,9 @@ export interface AgentSidebarProps {
   /** this device only watches: it sees the shared mutes and cannot change them */
   watching?: boolean;
   onSelect(machineId: string, paneId: string): void;
+  /** the palette's Rename tab (or F2): the tab of this pane opens its name field, once */
+  renameRequest?: { machineId: string; paneId: string } | null;
+  onRenameHandled?(): void;
 }
 
 /** the width under which the sidebar is a drawer (src/styles.css) */
@@ -103,7 +109,7 @@ interface PinMenu { key: string; anchor: HTMLElement; point?: { x: number; y: nu
  * right-click (or the context-menu key) opens the menu. A row's ⋯, or a right-click on it, opens its
  * menu, which pins or unpins it, and mutes or unmutes its alerts for every browser and device.
  */
-export function AgentSidebar({ machines, selectedMachineId, selectedPaneId, stateWord, watching = false, onSelect }: AgentSidebarProps) {
+export function AgentSidebar({ machines, selectedMachineId, selectedPaneId, stateWord, watching = false, onSelect, renameRequest = null, onRenameHandled }: AgentSidebarProps) {
   const t = useT();
   const listId = useId();
   const [collapsed, setCollapsed] = useState(() => window.matchMedia?.(DRAWER_QUERY).matches === true);
@@ -135,6 +141,11 @@ export function AgentSidebar({ machines, selectedMachineId, selectedPaneId, stat
   // keeps, so a match is seen, not only kept.
   const restGroups = useMemo(() => workspaceGroups(split.rest), [split.rest]);
   const kindGroups = useMemo(() => agentKindGroups(split.rest), [split.rest]);
+  // The tab strip is gone: a name is edited here. `renaming` is the row's field, `settled` the tab
+  // whose edit Enter or Escape already ended (the blur that follows is not a second save).
+  const [renaming, setRenaming] = useState<{ machineId: string; tabId: string; value: string } | null>(null);
+  const settled = useRef<string | null>(null);
+  const [tabNote, setTabNote] = useState<{ machineId: string; text: string } | null>(null);
   const [foldedWorkspaces, setFoldedWorkspaces] = useState<Set<string>>(() => new Set());
   const [foldedKinds, setFoldedKinds] = useState<Set<string>>(() => new Set());
   const toggled = (current: Set<string>, key: string): Set<string> => {
@@ -219,10 +230,31 @@ export function AgentSidebar({ machines, selectedMachineId, selectedPaneId, stat
     // one menu for the ⋯ and a right-click, which opens it at the pointer and leaves the focus where it was
     const toggleMenu = (anchor: HTMLElement, point?: { x: number; y: number }, previousFocus?: HTMLElement | null): void =>
       setMenu(menuOpen ? null : { key: pinKey, anchor, point, previousFocus });
-    return <li className={`agent-item${selected ? " is-selected" : ""}${online ? "" : " is-offline"}${filterContext ? " is-filter-context" : ""}`} key={paneStorageId(machine.id, pane.pane_id)} data-machine={machine.id} data-pane={pane.pane_id} data-pin-key={pinKey}
+    const tab = entry.tab;
+    const editing = tab !== null && tab !== undefined && renaming?.machineId === machine.id && renaming.tabId === tab.tab_id;
+    return <li className={`agent-item${selected ? " is-selected" : ""}${online ? "" : " is-offline"}${filterContext ? " is-filter-context" : ""}${editing ? " is-renaming" : ""}`} key={paneStorageId(machine.id, pane.pane_id)} data-machine={machine.id} data-pane={pane.pane_id} data-pin-key={pinKey}
       onMouseDownCapture={(event) => { if (event.button === 2 || (event.button === 0 && event.ctrlKey)) event.preventDefault(); }}
       onContextMenu={(event) => onRowContextMenu(event, toggleMenu)}>
-      <button type="button" className="agent-select agent-row" disabled={!online} aria-current={selected ? "true" : undefined} title={tooltip} onClick={() => onSelect(machine.id, pane.pane_id)}
+      {editing && tab !== undefined && <input
+        className="input agent-tab-rename"
+        aria-label={t("Tab name")}
+        autoFocus
+        maxLength={MAX_LABEL_CHARS}
+        placeholder={name ?? undefined}
+        value={renaming.value}
+        onFocus={(event) => event.currentTarget.select()}
+        onChange={(event) => setRenaming({ machineId: machine.id, tabId: tab.tab_id, value: event.target.value })}
+        onBlur={() => {
+          if (settled.current === tab.tab_id) { settled.current = null; setRenaming(null); return; }
+          saveRename(machine.id, tab.tab_id, true);
+        }}
+        onKeyDown={(event) => {
+          event.stopPropagation();
+          if (event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229) return;
+          if (event.key === "Enter") saveRename(machine.id, tab.tab_id);
+          if (event.key === "Escape") { settled.current = tab.tab_id; setRenaming(null); }
+        }} />}
+      {!editing && <button type="button" className="agent-select agent-row" disabled={!online} aria-current={selected ? "true" : undefined} title={tooltip} onClick={() => onSelect(machine.id, pane.pane_id)}
         draggable={online}
         // dropped on the pane area, the row opens its pane in half of it (lib/split.ts)
         onDragStart={(event) => {
@@ -231,7 +263,7 @@ export function AgentSidebar({ machines, selectedMachineId, selectedPaneId, stat
         }}>
         {/* a saved roster's state is not news: a PC that is away says nothing about its agents */}
         <AgentRowBody mark={mark} markKind={markKind} title={title} name={name} context={context} tokens={tokens} backgroundTasks={online ? pane.background_tasks : 0} plan={online ? pane.plan : undefined} status={online ? activity.status(machine.id, pane) : undefined} note={filterContext && selected ? t("Selected") : null} muted={muted?.includes(paneMuteKey(machine.id, pane.pane_id)) === true} />
-      </button>
+      </button>}
       <div className="agent-actions">
         <button type="button" className="sidebar-row-action row-menu-toggle" aria-label={t("More for {title}", { title })} aria-haspopup="menu" aria-expanded={menuOpen} onClick={(event) => toggleMenu(event.currentTarget)}>
           <Ellipsis aria-hidden="true" />
@@ -245,6 +277,7 @@ export function AgentSidebar({ machines, selectedMachineId, selectedPaneId, stat
     const groupFolded = !filter.active && foldedWorkspaces.has(group.key);
     const groupId = `${listId}-workspace-${encodeURIComponent(group.key)}`;
     return <li className="agent-workspace" key={group.key} data-machine={group.machine.id} data-workspace={group.workspace.workspace_id}>
+      <div className="agent-workspace-line">
       <button type="button" className="agent-workspace-header" aria-expanded={!groupFolded} aria-controls={groupId} onClick={() => setFoldedWorkspaces((current) => toggled(current, group.key))}>
         {groupFolded ? <ChevronRight className="agent-workspace-caret" aria-hidden="true" /> : <ChevronDown className="agent-workspace-caret" aria-hidden="true" />}
         <span className="agent-workspace-copy">
@@ -254,6 +287,11 @@ export function AgentSidebar({ machines, selectedMachineId, selectedPaneId, stat
         </span>
         {group.rows.length > 1 && <span className="agent-workspace-count" aria-hidden="true">{group.rows.length}</span>}
       </button>
+      {/* the strip's + lived once per strip: it lives at the head of the workspace it opens in */}
+      <button type="button" className="agent-head-add" aria-label={t("New tab")} title={t("New tab")} onClick={() => newTab(group.machine, group.workspace.workspace_id)}>
+        <Plus aria-hidden="true" />
+      </button>
+      </div>
       <ul className="agent-list agent-workspace-rows" id={groupId} hidden={groupFolded}>
         {group.rows.map((row) => agentItem(row, true))}
       </ul>
@@ -276,6 +314,53 @@ export function AgentSidebar({ machines, selectedMachineId, selectedPaneId, stat
     if (control) refocusPin.current = { key: state.key, control };
     togglePin(state.key);
   };
+  // ---- the tab controls the strip used to carry: a new tab at each head, a tab's own actions on its row
+  const api = { closeTab, createTab, moveTab, moveTabToWorkspace, renameTab };
+  const noted = (machineId: string, reason: unknown): void => {
+    setTabNote({ machineId, text: reason instanceof Error ? reason.message : String(reason) });
+  };
+  const newTab = (machine: Machine, workspaceId: string, kind?: string): void => {
+    void api.createTab({ workspace_id: workspaceId, ...(kind ? { agent: { kind } } : {}) }, machine.id).then((created) => {
+      onSelect(machine.id, created.pane_id);
+    }, (reason: unknown) => noted(machine.id, reason));
+  };
+  const beginRename = (machineId: string, tab: { tab_id: string; label: string; number: number }, place: number): void => {
+    settled.current = null;
+    setRenaming({ machineId, tabId: tab.tab_id, value: customTabLabel(tab, place) ?? "" });
+  };
+  // Enter or a click elsewhere saves what was typed; Escape settles first, so the blur after it saves nothing
+  const saveRename = (machineId: string, tabId: string, fromBlur = false): void => {
+    const label = renaming?.value.trim() ?? "";
+    if (label === "") {
+      if (fromBlur) { settled.current = tabId; setRenaming(null); }
+      else setTabNote({ machineId, text: t("A tab needs a name.") });
+      return;
+    }
+    settled.current = tabId;
+    setRenaming(null);
+    void api.renameTab(tabId, label, machineId).catch((reason: unknown) => noted(machineId, reason));
+  };
+  const closeTabOf = (machineId: string, tabId: string): void => {
+    void api.closeTab(tabId, machineId).catch((reason: unknown) => noted(machineId, reason));
+  };
+  const shiftTab = (machineId: string, workspaceId: string, tabId: string, by: number): void => {
+    const tabs = machines.find((machine) => machine.id === machineId)?.snapshot?.tabs.filter((candidate) => candidate.workspace_id === workspaceId) ?? [];
+    const at = tabs.findIndex((candidate) => candidate.tab_id === tabId);
+    const to = at + by;
+    if (at < 0 || to < 0 || to >= tabs.length) return;
+    void api.moveTab(tabId, to, machineId).catch((reason: unknown) => noted(machineId, reason));
+  };
+  // F2 or the palette asks for this pane's tab by name; the request is one-shot
+  useEffect(() => {
+    if (renameRequest === null) return;
+    const machine = machines.find((candidate) => candidate.id === renameRequest.machineId);
+    const pane = machine?.snapshot?.panes.find((candidate) => candidate.pane_id === renameRequest.paneId);
+    const tabs = machine?.snapshot?.tabs.filter((candidate) => candidate.workspace_id === pane?.workspace_id) ?? [];
+    const tab = pane ? tabs.find((candidate) => candidate.tab_id === pane.tab_id) : undefined;
+    if (machine && tab) beginRename(machine.id, tab, tabs.indexOf(tab) + 1);
+    onRenameHandled?.();
+  }, [renameRequest]);
+
   // Settings -> Sidebar rows -> One line: an agent row is one line too, its place dim after its title
   const oneLine = settings.sidebarRows === "one";
   return <section ref={sectionRef} className={`agents-sidebar${folded ? " is-collapsed" : ""}${rows.length === 0 ? " is-empty" : ""}${oneLine ? " is-one-line" : ""}`} aria-label={t("Agents")}>
@@ -292,6 +377,7 @@ export function AgentSidebar({ machines, selectedMachineId, selectedPaneId, stat
         <span>{t(grouping === "workspace" ? "Group by agent" : "Group by workspace")}</span>
       </button>
     </div>
+    {tabNote !== null && tabNote.machineId === selectedMachineId && <p className="agent-tab-note" role="alert">{tabNote.text}</p>}
     <div className="agent-list-contents" id={listId} hidden={folded}>
       <p className={shownEmpty === null ? "visually-hidden" : "agent-empty"} role="status">{shownEmpty}</p>
       {rows.length > 0 && <>
@@ -306,6 +392,7 @@ export function AgentSidebar({ machines, selectedMachineId, selectedPaneId, stat
               const kindFolded = !filter.active && foldedKinds.has(kind.key);
               const kindId = `${listId}-kind-${encodeURIComponent(kind.key)}`;
               return <li className="agent-kind" key={kind.key} data-kind={kind.key}>
+                <div className="agent-kind-line">
                 <button type="button" className="agent-workspace-header agent-kind-header" aria-expanded={!kindFolded} aria-controls={kindId} onClick={() => setFoldedKinds((current) => toggled(current, kind.key))}>
                   {kindFolded ? <ChevronRight className="agent-workspace-caret" aria-hidden="true" /> : <ChevronDown className="agent-workspace-caret" aria-hidden="true" />}
                   {/* a head says the kind as its rows do: no agent of a PC's own is a Shell */}
@@ -313,6 +400,11 @@ export function AgentSidebar({ machines, selectedMachineId, selectedPaneId, stat
                   <span className="agent-workspace-copy"><span className="agent-workspace-name">{agentDisplayLabel(kind.key === "" ? null : kind.key)}</span></span>
                   {kind.rows.length > 1 && <span className="agent-workspace-count" aria-hidden="true">{kind.rows.length}</span>}
                 </button>
+                {/* the same + at a coding agent's head: its first workspace, where that kind runs */}
+                {kind.workspaces[0] !== undefined && <button type="button" className="agent-head-add" aria-label={kind.key === "" ? t("New tab") : t("New {agent} tab", { agent: agentDisplayLabel(kind.key) })} title={kind.key === "" ? t("New tab") : t("New {agent} tab", { agent: agentDisplayLabel(kind.key) })} onClick={() => newTab(kind.workspaces[0]!.machine, kind.workspaces[0]!.workspace.workspace_id, kind.key === "" ? undefined : kind.key)}>
+                  <Plus aria-hidden="true" />
+                </button>}
+                </div>
                 <ul className="agent-list agent-kind-rows" id={kindId} hidden={kindFolded}>
                   {kind.workspaces.map((group) => workspaceItem(group))}
                 </ul>
@@ -331,6 +423,25 @@ export function AgentSidebar({ machines, selectedMachineId, selectedPaneId, stat
         id: "mute", label: menuMuted ? t("Unmute alerts") : t("Mute alerts"), icon: menuMuted ? Bell : BellOff, checked: menuMuted, disabled: watching,
         run: () => toggleMute(menuRow.machine.id, menuRow.entry.pane.pane_id),
       }]),
+      // the tab's own actions: the strip's menu had them, and there is no strip now
+      ...(menuRow?.entry.tab ? (() => {
+        const machine = menuRow.machine;
+        const tab = menuRow.entry.tab!;
+        const tabs = machine.snapshot?.tabs.filter((candidate) => candidate.workspace_id === tab.workspace_id) ?? [];
+        const at = tabs.findIndex((candidate) => candidate.tab_id === tab.tab_id);
+        const others = (machine.snapshot?.workspaces ?? []).filter((workspace) => workspace.workspace_id !== tab.workspace_id);
+        const menuTab = { tab_id: tab.tab_id, label: tab.label, number: tab.number };
+        return [
+          { id: "rename-tab", label: t("Rename tab"), icon: Pencil, run: () => beginRename(machine.id, menuTab, at + 1) },
+          ...(at > 0 ? [{ id: "tab-left", label: t("Move tab left"), icon: ArrowLeft, run: () => shiftTab(machine.id, tab.workspace_id, tab.tab_id, -1) }] : []),
+          ...(at >= 0 && at < tabs.length - 1 ? [{ id: "tab-right", label: t("Move tab right"), icon: ArrowRight, run: () => shiftTab(machine.id, tab.workspace_id, tab.tab_id, 1) }] : []),
+          ...others.map((workspace) => ({
+            id: `tab-to-${workspace.workspace_id}`, label: t("Move to workspace: {workspace}", { workspace: workspace.label }), icon: FolderInput,
+            run: () => { void api.moveTabToWorkspace(tab.tab_id, workspace.workspace_id, machine.id).catch((reason: unknown) => noted(machine.id, reason)); },
+          })),
+          { id: "close-tab", label: t("Close tab"), icon: X, danger: true, run: () => closeTabOf(machine.id, tab.tab_id) },
+        ];
+      })() : []),
     ]} />}
   </section>;
 }

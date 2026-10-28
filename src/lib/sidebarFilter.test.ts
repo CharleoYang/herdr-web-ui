@@ -150,10 +150,11 @@ describe("sidebarFilter", () => {
     // agent rows keep every PC's order and the pin order among them
     const rows = roster.flatMap((machine) => sidebarAgents(machine.snapshot).map((entry) => ({ machine, entry })));
     const keptRows = rows.filter(({ machine, entry }) => machineFilter(filter, machine.id)!.panes.has(entry.pane.pane_id));
-    expect(keptRows.map(({ machine, entry }) => `${machine.id}:${entry.pane.pane_id}`)).toEqual(["local:api:p1", "local:guard:p1", "local:flaky:p1", "local:docs:p1", "build:pay:p1"]);
+    // the shells are rows too: api's zsh beside api's agent, and the build PC's transcripts
+    expect(keptRows.map(({ machine, entry }) => `${machine.id}:${entry.pane.pane_id}`)).toEqual(["local:api:p1", "local:api:p2", "local:guard:p1", "local:flaky:p1", "local:docs:p1", "build:pay:p1", "build:tmp:p1"]);
     const split = splitPinnedRows(keptRows, ["build:pay:p1", "local:flaky:p1"], ({ machine, entry }) => `${machine.id}:${entry.pane.pane_id}`);
     expect(split.pinned.map(({ entry }) => entry.pane.pane_id)).toEqual(["pay:p1", "flaky:p1"]);
-    expect(split.rest.map(({ entry }) => entry.pane.pane_id)).toEqual(["api:p1", "guard:p1", "docs:p1"]);
+    expect(split.rest.map(({ entry }) => entry.pane.pane_id)).toEqual(["api:p1", "api:p2", "guard:p1", "docs:p1", "tmp:p1"]);
   });
 
   it("retains selected nonmatch and ancestors", () => {
@@ -192,8 +193,10 @@ describe("sidebarFilter", () => {
       if (hidden === "guard") expect(found).toEqual(["guard:p1"]);
       else expect({ hidden, found }).toEqual({ hidden, found: [] });
     }
-    // a shell has no row of its own: its title (here a terminal's, or its folder's) finds nothing
-    for (const shellTitle of ["zsh", "transcripts"]) expect(sidebarFilter(shellTitle, roster, nobody, t).matches).toBe(0);
+    // a shell has a row of its own now (there is no tab strip to reach its pane): its title finds it,
+    // while the paths and ids behind it still do not
+    for (const shellTitle of ["zsh", "transcripts"]) expect(sidebarFilter(shellTitle, roster, nobody, t).matches).toBeGreaterThan(0);
+    for (const hiddenShell of ["/srv", "secret-api-folder"]) expect(sidebarFilter(hiddenShell, roster, nobody, t).matches).toBe(0);
     // the labels a row offers are the ones it shows: no path, no id, no environment
     const snapshot = laptop();
     const entry = sidebarAgents(snapshot).find((candidate) => candidate.pane.pane_id === "api:p1")!;
@@ -236,7 +239,7 @@ describe("sidebarFilter", () => {
   it("suggests the names the rows show, never a path", () => {
     const roster = machines();
     const suggested = filterSuggestions(roster, new Map([["local", new Map([["guard", "feat/export-guard"]])]]));
-    expect(suggested).toEqual(["Laptop", "checkout-api", "export-guard", "feat/export-guard", "flaky-retry-test", "docs-site", "Idempotent payments", "Guard the export button", "Fix the flaky retry test", "Proofread the guide", "Build PC", "payments", "scratch", "Nightly settlement"]);
+    expect(suggested).toEqual(["Laptop", "checkout-api", "export-guard", "feat/export-guard", "flaky-retry-test", "docs-site", "Idempotent payments", "zsh", "Guard the export button", "Fix the flaky retry test", "Proofread the guide", "Build PC", "payments", "scratch", "Nightly settlement", "transcripts"]);
     expect(suggested.some((label) => label.includes("/home") || label.includes("/srv") || label.includes(":p"))).toBe(false);
     expect(roster).toEqual(machines());
   });

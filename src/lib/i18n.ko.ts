@@ -155,7 +155,6 @@ const BASE: Record<string, string> = {
   "Detached HEAD": "분리된 HEAD",
   "Delete": "삭제",
   "Close": "닫기",
-  "Rename failed: {reason}": "이름 바꾸기 실패: {reason}",
 
   // ---- PCs sidebar ----
   "Connecting…": "연결 중…",
