@@ -1,11 +1,17 @@
-import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "bun:test";
 import { appendFileSync, chmodSync, existsSync, fstatSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, truncateSync, unlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 
 import * as fileView from "./file-view.ts";
-import { crossSiteFileRead, fileInfo, fileResponse, forgetPageMedia, locateFile, locateFileInFolder, PAGE_MEDIA_LIFETIME_MS, PAGE_MEDIA_PER_RENDER, pageFileHooks, pageMediaResponse, pageMediaSource, resolveFilePath } from "./file-view.ts";
+import { crossSiteFileRead, fileInfo, fileResponse, forgetPageMedia, locateFile, locateFileInFolder, PAGE_MEDIA_LIFETIME_MS, PAGE_MEDIA_PER_RENDER, pageFileHooks, pageMediaResponse, pageMediaSource, resolveFilePath, watchPageMedia } from "./file-view.ts";
+import { setFilePoolOptions } from "./file-pool.ts";
+import { runFileTask } from "./file-tasks.ts";
 import { clearFileCache, filesNamed } from "./files.ts";
+
+// pageFileHooks reach the thread they are set on alone: the tasks here run on it, not on file threads
+beforeAll(() => setFilePoolOptions({ inline: runFileTask }));
+afterAll(() => setFilePoolOptions());
 
 /** Every descriptor a page's file was read through: open now, and any closed twice. */
 const live = new Set<number>();
@@ -75,18 +81,34 @@ describe("file view", () => {
   it("serves HTML as sandboxed plain text, and a download as an attachment", async () => {
     const root = temp();
     writeFileSync(join(root, "page.html"), "<script>alert(1)</script>");
-    const response = fileResponse(fileInfo(join(root, "page.html"))!, true);
+    const response = await fileResponse(fileInfo(join(root, "page.html"))!, true);
     expect(response.headers.get("content-type")).toStartWith("text/plain");
     expect(response.headers.get("content-security-policy")).toStartWith("sandbox");
     expect(response.headers.get("content-disposition")).toBe("attachment; filename*=UTF-8''page.html");
     expect(await response.text()).toBe("<script>alert(1)</script>");
   });
 
+  it("streams a large file from a slow disk from its descriptor, and closes it once sent", async () => {
+    const root = temp();
+    const bytes = Buffer.from(Array.from({ length: 600 * 1024 }, (_, index) => index % 253));
+    writeFileSync(join(root, "clip.bin"), bytes);
+    // every disk counts as slow: the body is streamed, not sent as a file Bun reads on this thread
+    pageFileHooks.fastDiskMs = -1;
+    const whole = await fileResponse(fileInfo(join(root, "clip.bin"))!, false);
+    expect(whole.status).toBe(200);
+    expect(Buffer.from(await whole.arrayBuffer()).equals(bytes)).toBe(true);
+    const part = await fileResponse(fileInfo(join(root, "clip.bin"))!, false, false, null, new Request("http://x/", { headers: { range: "bytes=1000-400000" } }));
+    expect(part.status).toBe(206);
+    expect(part.headers.get("content-range")).toBe(`bytes 1000-400000/${bytes.length}`);
+    expect(Buffer.from(await part.arrayBuffer()).equals(bytes.subarray(1000, 400001))).toBe(true);
+    await closing([...live][0] ?? -1);
+  });
+
   it("draws an HTML page only when asked to render it, with no origin and no network", async () => {
     const root = temp();
     writeFileSync(join(root, "report.html"), "<p>chart</p>");
     writeFileSync(join(root, "notes.txt"), "<p>not a page</p>");
-    const page = fileResponse(fileInfo(join(root, "report.html"))!, false, true);
+    const page = await fileResponse(fileInfo(join(root, "report.html"))!, false, true);
     expect(page.headers.get("content-type")).toStartWith("text/html");
     const policy = page.headers.get("content-security-policy")!;
     // its script runs, but never with this app's origin, cookie or storage
@@ -101,9 +123,15 @@ describe("file view", () => {
     expect(policy).toContain("frame-ancestors 'self'");
     expect(await page.text()).toBe("<p>chart</p>");
     // asked without render, or as a download, it stays the source; another text file never renders
-    expect(fileResponse(fileInfo(join(root, "report.html"))!, false).headers.get("content-type")).toStartWith("text/plain");
-    expect(fileResponse(fileInfo(join(root, "report.html"))!, true, true).headers.get("content-type")).toStartWith("text/plain");
-    const text = fileResponse(fileInfo(join(root, "notes.txt"))!, false, true);
+    // (each body left unread is cancelled, which closes the descriptor it streams from)
+    const source = await fileResponse(fileInfo(join(root, "report.html"))!, false);
+    await source.body?.cancel();
+    expect(source.headers.get("content-type")).toStartWith("text/plain");
+    const download = await fileResponse(fileInfo(join(root, "report.html"))!, true, true);
+    await download.body?.cancel();
+    expect(download.headers.get("content-type")).toStartWith("text/plain");
+    const text = await fileResponse(fileInfo(join(root, "notes.txt"))!, false, true);
+    await text.body?.cancel();
     expect(text.headers.get("content-type")).toStartWith("text/plain");
     expect(text.headers.get("content-security-policy")).toStartWith("sandbox;");
   });
@@ -133,7 +161,7 @@ describe("file view", () => {
       `<img id="cdn" src="https://example.com/a.png"><img id="rooted" src="/etc/hosts">`,
       `<img id="unc" src="%5C%5Chost%5Cshare%5Ca.png"><img id="drive" src="C%3A%5Ca.png"><img id="slash" src="%2Fetc%2Fhosts">`,
     ].join(""));
-    const html = await fileResponse(fileInfo(join(site, "report.html"))!, false, true).text();
+    const html = await (await fileResponse(fileInfo(join(site, "report.html"))!, false, true)).text();
     // its own files, in its folder or below, as the kind of file each element takes, with the element's attributes kept
     const data = (mime: string, text: string) => `data:${mime};base64,${Buffer.from(text).toString("base64")}`;
     expect(html).toContain(`<link rel="stylesheet" href="${data("text/css", "h1 { color: teal }")}">`);
@@ -183,7 +211,7 @@ describe("file view", () => {
     ].join(""));
     const source = "http://127.0.0.1:7317/api/fs/page-media/";
     const media = { source, client: "10.0.0.2", device: "phone" };
-    const page = fileResponse(fileInfo(join(site, "report.html"))!, false, true, media);
+    const page = await fileResponse(fileInfo(join(site, "report.html"))!, false, true, media);
     const policy = page.headers.get("content-security-policy")!;
     // media from that one path, and still nothing else from this server or the web
     expect(policy).toContain(`media-src data: blob: ${source}`);
@@ -214,7 +242,7 @@ describe("file view", () => {
     expect(served.headers.get("access-control-allow-origin")).toBeNull();
     expect((await served.arrayBuffer()).byteLength).toBe(big);
     // a new address on the next render (the first one stays its own), none for a guess
-    const again = await fileResponse(fileInfo(join(site, "report.html"))!, false, true, media).text();
+    const again = await (await fileResponse(fileInfo(join(site, "report.html"))!, false, true, media)).text();
     expect(again).toMatch(new RegExp(`<video id="big" src="${source}[A-Za-z0-9_-]{32}"`));
     expect(again).not.toContain(played);
     expect(pageMediaResponse("A".repeat(32), "10.0.0.2")).toBeNull();
@@ -230,7 +258,7 @@ describe("file view", () => {
     const before = process.env["OVIS_MEDIA_ROOTS"];
     process.env["OVIS_MEDIA_ROOTS"] = ["/nonexistent-share", join(root, "share")].join(delimiter);
     try {
-      const shared = await fileResponse(fileInfo(join(site, "report.html"))!, false, true, media).text();
+      const shared = await (await fileResponse(fileInfo(join(site, "report.html"))!, false, true, media)).text();
       expect(shared).toMatch(new RegExp(`<audio id="linked" src="${source}[A-Za-z0-9_-]{32}">`));
       // there it decides where the file lies, however the page reaches it, never under a hidden name or elsewhere above
       expect(shared).toMatch(new RegExp(`<audio id="above" src="${source}[A-Za-z0-9_-]{32}">`));
@@ -243,14 +271,14 @@ describe("file view", () => {
       else process.env["OVIS_MEDIA_ROOTS"] = before;
     }
     // without a media source (a PC's bridge, a Host that is not plain) the page is drawn as before
-    expect(await fileResponse(fileInfo(join(site, "report.html"))!, false, true).text()).toContain(`<video id="big" src="big.mp4"`);
+    expect(await (await fileResponse(fileInfo(join(site, "report.html"))!, false, true)).text()).toContain(`<video id="big" src="big.mp4"`);
   });
 
   it("seeks a page's video by Range", async () => {
     const root = temp();
     writeFileSync(join(root, "clip.mp4"), Buffer.alloc(9 * 1024 * 1024, 7));
     writeFileSync(join(root, "page.html"), `<video src="clip.mp4"></video>`);
-    const html = await fileResponse(fileInfo(join(root, "page.html"))!, false, true, { source: "http://127.0.0.1:1/api/fs/page-media/", client: null, device: null }).text();
+    const html = await (await fileResponse(fileInfo(join(root, "page.html"))!, false, true, { source: "http://127.0.0.1:1/api/fs/page-media/", client: null, device: null })).text();
     const token = /page-media\/([A-Za-z0-9_-]{32})/.exec(html)![1]!;
     const server = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch: (request) => pageMediaResponse(token, null, request) ?? new Response(null, { status: 404 }) });
     try {
@@ -277,7 +305,7 @@ describe("file view", () => {
   it("ends a page's media address a fixed time after its render, however often it plays", async () => {
     const root = temp();
     const rendered = Date.now();
-    const [token] = tokensOf(await fileResponse(fileInfo(streamedPage(root))!, false, true, owner("10.0.0.2")).text());
+    const [token] = tokensOf(await (await fileResponse(fileInfo(streamedPage(root))!, false, true, owner("10.0.0.2"))).text());
     // playing it does not stretch its life: each play near the end still ends at the same moment
     for (const at of [1, PAGE_MEDIA_LIFETIME_MS / 2, PAGE_MEDIA_LIFETIME_MS - 60_000]) expect(await plays(token!, "10.0.0.2", rendered + at)).toBe(true);
     expect(pageMediaResponse(token!, "10.0.0.2", null, rendered + PAGE_MEDIA_LIFETIME_MS + 60_000)).toBeNull();
@@ -287,7 +315,7 @@ describe("file view", () => {
 
   it("plays a page's media only to the client that rendered it", async () => {
     const root = temp();
-    const [token] = tokensOf(await fileResponse(fileInfo(streamedPage(root))!, false, true, owner("10.0.0.2")).text());
+    const [token] = tokensOf(await (await fileResponse(fileInfo(streamedPage(root))!, false, true, owner("10.0.0.2"))).text());
     // an address the page's script passed on, asked for from elsewhere
     expect(pageMediaResponse(token!, "203.0.113.9")).toBeNull();
     expect(pageMediaResponse(token!, "203.0.113.9 via 127.0.0.1")).toBeNull();
@@ -298,9 +326,9 @@ describe("file view", () => {
   it("drops a device's page media when it is revoked, and a client's when it signs out", async () => {
     const root = temp();
     const page = fileInfo(streamedPage(root))!;
-    const [phone] = tokensOf(await fileResponse(page, false, true, owner("10.0.0.2", "phone")).text());
-    const [laptop] = tokensOf(await fileResponse(page, false, true, owner("10.0.0.3", "laptop")).text());
-    const [shared] = tokensOf(await fileResponse(page, false, true, owner("10.0.0.4")).text());
+    const [phone] = tokensOf(await (await fileResponse(page, false, true, owner("10.0.0.2", "phone"))).text());
+    const [laptop] = tokensOf(await (await fileResponse(page, false, true, owner("10.0.0.3", "laptop"))).text());
+    const [shared] = tokensOf(await (await fileResponse(page, false, true, owner("10.0.0.4"))).text());
     forgetPageMedia({ device: "phone" });
     expect(pageMediaResponse(phone!, "10.0.0.2")).toBeNull();
     expect(await plays(laptop!, "10.0.0.3")).toBe(true);
@@ -309,14 +337,46 @@ describe("file view", () => {
     expect(await plays(laptop!, "10.0.0.3")).toBe(true);
   });
 
+  it("keeps no page media for a device or client forgotten while its page was being drawn", async () => {
+    const root = temp();
+    const page = fileInfo(streamedPage(root))!;
+    // the render runs as a file task, after this turn: the device is revoked and the client signs out meanwhile
+    const revoked = fileResponse(page, false, true, owner("10.0.0.2", "phone"));
+    const signedOut = fileResponse(page, false, true, owner("10.0.0.4"));
+    const kept = fileResponse(page, false, true, owner("10.0.0.3", "laptop"));
+    forgetPageMedia({ device: "phone" });
+    forgetPageMedia({ client: "10.0.0.4" });
+    const [phone] = tokensOf(await (await revoked).text());
+    const [shared] = tokensOf(await (await signedOut).text());
+    const [laptop] = tokensOf(await (await kept).text());
+    expect(pageMediaResponse(phone!, "10.0.0.2")).toBeNull();
+    expect(pageMediaResponse(shared!, "10.0.0.4")).toBeNull();
+    expect(await plays(laptop!, "10.0.0.3")).toBe(true);
+  });
+
+  it("keeps no page media for a device revoked while its request was still finding the page", async () => {
+    const root = temp();
+    const page = fileInfo(streamedPage(root))!;
+    // the request notes the forgetting before it looks for the file; the revocation lands during that look
+    const watch = watchPageMedia();
+    forgetPageMedia({ device: "phone" });
+    try {
+      const [phone] = tokensOf(await (await fileResponse(page, false, true, owner("10.0.0.2", "phone"), null, watch)).text());
+      expect(pageMediaResponse(phone!, "10.0.0.2")).toBeNull();
+    } finally { watch.done(); }
+    // a request begun after it is not held to it
+    const [later] = tokensOf(await (await fileResponse(page, false, true, owner("10.0.0.2", "phone"))).text());
+    expect(await plays(later!, "10.0.0.2")).toBe(true);
+  });
+
   it("refuses a page's media once the file is written over in place", async () => {
     const root = temp();
     const page = fileInfo(streamedPage(root))!;
     const clip = join(root, "clip-0.mp4");
     const second = Math.floor(Date.now() / 1000) - 60;
     utimesSync(clip, second, second);
-    const [touched] = tokensOf(await fileResponse(page, false, true, owner("10.0.0.2")).text());
-    const [grown] = tokensOf(await fileResponse(page, false, true, owner("10.0.0.2")).text());
+    const [touched] = tokensOf(await (await fileResponse(page, false, true, owner("10.0.0.2"))).text());
+    const [grown] = tokensOf(await (await fileResponse(page, false, true, owner("10.0.0.2"))).text());
     const { ino } = statSync(clip);
     // grown in place (same inode), its modification time put back: only its size tells
     appendFileSync(clip, "more");
@@ -324,7 +384,7 @@ describe("file view", () => {
     expect(statSync(clip).ino).toBe(ino);
     expect(pageMediaResponse(grown!, "10.0.0.2")).toBeNull();
     // rewritten at the same size: only its modification time tells
-    const [rewritten] = tokensOf(await fileResponse(page, false, true, owner("10.0.0.2")).text());
+    const [rewritten] = tokensOf(await (await fileResponse(page, false, true, owner("10.0.0.2"))).text());
     expect(await plays(rewritten!, "10.0.0.2")).toBe(true);
     utimesSync(clip, second + 5, second + 5);
     expect(pageMediaResponse(rewritten!, "10.0.0.2")).toBeNull();
@@ -333,7 +393,7 @@ describe("file view", () => {
 
   it("streams at most so many files from one render", async () => {
     const root = temp();
-    const html = await fileResponse(fileInfo(streamedPage(root, "page.html", PAGE_MEDIA_PER_RENDER + 1))!, false, true, owner("10.0.0.2")).text();
+    const html = await (await fileResponse(fileInfo(streamedPage(root, "page.html", PAGE_MEDIA_PER_RENDER + 1))!, false, true, owner("10.0.0.2"))).text();
     expect(tokensOf(html)).toHaveLength(PAGE_MEDIA_PER_RENDER);
     // the one past the cap is left as the page wrote it
     expect(html).toContain(`<video id="v${PAGE_MEDIA_PER_RENDER}" src="clip-${PAGE_MEDIA_PER_RENDER}.mp4">`);
@@ -359,10 +419,10 @@ describe("file view", () => {
     writeFileSync(join(root, "same.html"), `${"<img src=\"missing.png\">".repeat(5_000)}<img id="last" src="a.png">`);
     writeFileSync(join(root, "many.html"), `${many}<img id="last" src="a.png">`);
     const started = performance.now();
-    expect(await fileResponse(fileInfo(join(root, "same.html"))!, false, true).text()).toContain(`<img id="last" src="data:image/png;base64,`);
+    expect(await (await fileResponse(fileInfo(join(root, "same.html"))!, false, true)).text()).toContain(`<img id="last" src="data:image/png;base64,`);
     expect(performance.now() - started).toBeLessThan(2_000);
     // the thousand-and-first URL is left as it is
-    expect(await fileResponse(fileInfo(join(root, "many.html"))!, false, true).text()).toContain(`<img id="last" src="a.png">`);
+    expect(await (await fileResponse(fileInfo(join(root, "many.html"))!, false, true)).text()).toContain(`<img id="last" src="a.png">`);
   });
 
   it("refuses another site's page loading a file, but not a navigation or this app", () => {
@@ -392,7 +452,7 @@ describe("page files read through the descriptor that was validated", () => {
   const source = "http://127.0.0.1:1/api/fs/page-media/";
   const owner = (device: string | null = null) => ({ source, client: null, device });
   const tokensOf = (html: string): string[] => [...html.matchAll(/page-media\/([A-Za-z0-9_-]{32})/g)].map((match) => match[1]!);
-  const render = async (page: string, media: ReturnType<typeof owner> | null = owner()) => (await fileResponse(fileInfo(page)!, false, true, media).text());
+  const render = async (page: string, media: ReturnType<typeof owner> | null = owner()) => (await (await fileResponse(fileInfo(page)!, false, true, media)).text());
   const png = (text: string) => Buffer.concat([Buffer.from("89504e470d0a1a0a", "hex"), Buffer.from(text)]);
   /** a file of `bytes` whose first bytes say which it is */
   const marked = (path: string, mark: string, bytes = BIG) => { writeFileSync(path, mark); truncateSync(path, bytes); };
@@ -616,7 +676,7 @@ describe("page files read through the descriptor that was validated", () => {
     const { page } = layout();
     const found = fileInfo(page)!;
     rmSync(page);
-    const gone = fileResponse(found, false, true);
+    const gone = await fileResponse(found, false, true);
     expect(gone.status).toBe(404);
     expect(await gone.json()).toEqual({ error: { code: "not_found", message: "no readable file at that path" } });
   });
@@ -731,7 +791,7 @@ describe("page files read through the descriptor that was validated", () => {
         renameSync(site, join(root, "parked"));
         symlinkSync(outside, site);
       };
-      const response = fileResponse(found, false, true, owner());
+      const response = await fileResponse(found, false, true, owner());
       expect(response.status).toBe(404);
       expect(await response.text()).not.toContain("OUTSIDE-PAGE-SECRET");
       delete pageFileHooks.platform;
@@ -746,7 +806,7 @@ describe("page files read through the descriptor that was validated", () => {
     writeFileSync(join(root, "pages", "sub", "f.png"), png("BESIDE-THE-TARGET"));
     const linked = join(site, "linked.html");
     symlinkSync(join(root, "pages", "real.html"), linked);
-    const response = fileResponse(fileInfo(linked)!, false, true, null);
+    const response = await fileResponse(fileInfo(linked)!, false, true, null);
     expect(response.status).toBe(200);
     expect(await response.text()).toContain(`src="data:image/png;base64,${png("BESIDE-THE-TARGET").toString("base64")}"`);
   });
@@ -768,7 +828,7 @@ describe("page files read through the descriptor that was validated", () => {
         unlinkSync(site);
         renameSync(parked, site);
       };
-      const response = fileResponse(found, false, true, owner());
+      const response = await fileResponse(found, false, true, owner());
       expect(response.status).toBe(404);
       expect(await response.text()).not.toContain("OUTSIDE-PAGE-SECRET");
       delete pageFileHooks.platform;
@@ -796,7 +856,7 @@ describe("page files read through the descriptor that was validated", () => {
       unlinkSync(site);
       renameSync(parked, site);
     };
-    const response = fileResponse(found, false, true, owner());
+    const response = await fileResponse(found, false, true, owner());
     expect(resolvedTo).toBe(hidden);
     // neither that folder's page nor its files, nor the asked page drawn with them
     expect(response.status).toBe(404);
