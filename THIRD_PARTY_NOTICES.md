@@ -1772,7 +1772,7 @@ that share it.
 | d3-path, for d3-sankey | https://github.com/d3/d3-path | 1.0.9 | BSD 3-Clause |
 | marked | https://github.com/markedjs/marked | 16.4.2 | MIT, with the BSD-style license of John Gruber's Markdown |
 | chevrotain, @chevrotain/gast, @chevrotain/regexp-to-ast, @chevrotain/utils | https://github.com/Chevrotain/chevrotain | 13.2.0 | Apache 2.0 |
-| DOMPurify | https://github.com/cure53/DOMPurify | 3.4.16 | Apache 2.0 or MPL 2.0 |
+| DOMPurify | https://github.com/cure53/DOMPurify | 3.4.17 | Apache 2.0 or MPL 2.0 |
 | `web-worker`, inside elkjs | - | - | Apache 2.0 |
 | singular value decomposition from JamaJS, inside layout-base 2.0.1 | https://github.com/dragonfly-ai/JamaJS | - | Apache 2.0 |
 
