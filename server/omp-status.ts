@@ -1,4 +1,4 @@
-import { paneRead } from "./herdr/client.ts";
+import { paneRead, paneScrollInfo } from "./herdr/client.ts";
 
 /**
  * omp draws its own context in its status bar — `⠋ 46s · ◒ deepseek-flash · 📁 ~/coding_agent ·
@@ -25,18 +25,22 @@ export function ompStatusContext(screen: string): { used: number; window: number
 
 /** long enough that one chat push does not cost a screen read each, short enough to follow a turn */
 const TTL_MS = 5_000;
-const cache = new Map<string, { at: number; context: { used: number; window: number } | null }>();
+const cache = new Map<string, { at: number; history: number; context: { used: number; window: number } | null }>();
 
 /**
  * The pane's context, from its screen; null when the pane is not omp's or its bar is not drawn
  * (a dialog over it, the moment before the first status line).
  */
 export async function ompScreenContext(paneId: string, now: number = Date.now()): Promise<{ used: number; window: number } | null> {
+  const before = await paneScrollInfo(paneId).catch(() => null);
+  if (before?.offset_from_bottom !== 0) return null;
   const hit = cache.get(paneId);
-  if (hit !== undefined && now - hit.at < TTL_MS) return hit.context;
+  if (hit !== undefined && now - hit.at < TTL_MS && hit.history === before.max_offset_from_bottom) return hit.context;
   const screen = await paneRead({ paneId, source: "visible", format: "text", timeoutMs: 2_000 }).then((read) => read.text, () => "");
-  const context = screen === "" ? null : ompStatusContext(screen);
-  cache.set(paneId, { at: now, context });
+  const after = screen === "" ? null : await paneScrollInfo(paneId).catch(() => null);
+  if (after?.offset_from_bottom !== 0 || after.max_offset_from_bottom !== before.max_offset_from_bottom) return null;
+  const context = ompStatusContext(screen);
+  cache.set(paneId, { at: now, history: before.max_offset_from_bottom, context });
   return context;
 }
 
