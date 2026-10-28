@@ -307,6 +307,9 @@ export function customCommands(root: string, source: SlashCommand["source"], bud
 export function* customCommandSteps(root: string, source: SlashCommand["source"], budget = createWalkBudget(), include?: (fields: Readonly<Record<string, unknown>>) => boolean, sortByName = false): Generator<SlashCommand | null> {
   if (budget.folders <= 0 || budget.entries <= 0 || budget.reads <= 0) return;
   // Guard only the current ancestry: sibling links can expose different command namespaces.
+  // A linked folder is followed wherever it points, outside `root` too, on purpose: Command Code's own
+  // loader does the same (1.84.0 loadCommandsFromDirectory stats each entry and has no root check), so
+  // it runs those commands, and its menu lists what it runs.
   const ancestors = new Set<string>();
   function* visit(directory: string): Generator<SlashCommand | null> {
     // every visit counts, a link back to an ancestor too: each one is a lookup on the server's thread
