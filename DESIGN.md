@@ -2125,7 +2125,9 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   the summary is words, so it is the interface face too. Pending and failed counts are their own
   items after it (`.work-row-state` outlined in `--border`, `.work-row-failed` on its tint), never
   cut and never colour alone. Opened, it shows the list the row stands for with a caption saying
-  what it is, then every update in order as ordinary rows, each with its state in words.
+  what it is, then every update in order as ordinary rows, each with its state in words. An
+  update opened there shows what it sent and got back, not the list again: its input as the agent
+  sent it (JSON indented) under "Input", then its whole output.
 - The list it stands for is the latest update that completed, judged only by what the transcript
   records (`call_id` / `state` on the tool part, `shared/protocol.ts`): Claude Code's tool_result
   says ok or error (an empty result is ok); Codex records no outcome, so an answered Codex update,
@@ -2137,8 +2139,11 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   with no completed update it shows none.
 - The run is named by its first call's own id in its turn's row (by the row and that call's index
   when the agent records no id), so appended updates and the next poll keep it open, focused and
-  where the reader left it. This follows the app's own Codex-style work block (Codex app, Claude
-  app: one row per action, folded under the turn); Agent of Empires' todo cards gave only the
+  where the reader left it. When the second update turns a single row into the run, the run opens
+  if that row was open, and the keyboard's focus stays on that update inside it (on the run's head
+  when it is folded), never dropped to the page, also while the reader is in another app. This
+  follows the app's own Codex-style work block (Codex app, Claude app: one row per action, folded
+  under the turn); Agent of Empires' todo cards gave only the
   evidence that contiguous plan updates read better as one item, and none of its code is used.
 
 ### Plan (`.bg-tasks-plan`, `.bg-step`, `.plan-count`)

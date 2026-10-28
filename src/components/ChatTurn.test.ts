@@ -58,6 +58,39 @@ describe("an agent turn's work blocks", () => {
   });
 });
 
+describe("a run of todo updates, opened", () => {
+  // omp's todo: operations in, the whole list as it now stands out
+  const LIST = ["Read the fixture", "Patch the parser"];
+  const todo = (id: string, ops: unknown[], done: number): ConversationPart => ({
+    kind: "tool", name: "todo", summary: "todo", input: JSON.stringify({ ops }), call_id: id,
+    output: `Overall: ${done}/${LIST.length} done.\n  Fix:\n${LIST.map((item, index) => `    - [${index < done ? "X" : " "}] ${item}`).join("\n")}`,
+  });
+
+  it("shows each update's own input and output, not only the list it left (#1601)", () => {
+    const parts = [todo("t1", [{ op: "init", list: [{ phase: "Fix", items: LIST }] }], 0), todo("t2", [{ op: "done", task: LIST[0] }], 1)];
+    // the reader opened both updates: the run opens with them
+    const memory: ChatRowMemory = { toggles: new Map([["tool:0", true], ["tool:1", true]]), outputs: new Map(), runs: new Map() };
+    const languages = Object.getOwnPropertyDescriptor(navigator, "languages");
+    Object.defineProperty(navigator, "languages", { configurable: true, value: ["en"] });
+    let html: string;
+    try {
+      html = renderToStaticMarkup(createElement(ChatRowMemoryContext.Provider, { value: memory, children: createElement(SettingsProvider, { children: createElement(Turn, {
+        paneId: "w1:p1", turn: { role: "assistant", ts: "2026-01-01T12:00:00Z", parts }, rowKey: "turn:1", live: true, waiting: false, showThinking: false,
+      }) }) }));
+    } finally {
+      if (languages) Object.defineProperty(navigator, "languages", languages);
+      else Reflect.deleteProperty(navigator, "languages");
+    }
+    const attempts = html.slice(html.indexOf("work-todo-attempts"));
+    expect(html).toContain("work-todo-attempts");
+    expect(attempts.match(/aria-expanded="true"/g)?.length).toBe(2);
+    for (const [op, done] of [["init", 0], ["done", 1]] as const) {
+      expect(attempts).toContain(`&quot;op&quot;: &quot;${op}&quot;`);
+      expect(attempts).toContain(`Overall: ${done}/2 done.`);
+    }
+  });
+});
+
 describe("an agent turn's folded work, drawn again", () => {
   const commentary = (value: string): ConversationPart => ({ kind: "text", text: value, phase: "commentary" });
   const answer = (value: string): ConversationPart => ({ kind: "text", text: value, phase: "final_answer" });

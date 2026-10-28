@@ -21,7 +21,7 @@ import { ChatMinimap } from "./ChatMinimap.tsx";
 import { minimapTurns } from "../lib/chatMinimap.ts";
 import type { LegendListRef } from "@legendapp/list/react";
 import { appendChatRowSlots, continuesHistory, createChatRowSlots, prependChatRowSlots } from "../lib/chatRows.ts";
-import { ChatDetails, ChatRowMemoryContext, useChatRowToggle, type ChatRowMemory } from "../lib/chatRowState.tsx";
+import { ChatDetails, ChatRowMemoryContext, useChatRowToggle, useRowFocus, type ChatRowMemory } from "../lib/chatRowState.tsx";
 import { turnRevision } from "../lib/turnRevision.ts";
 import { conversationFinishEvidence, conversationFinishPresented } from "../lib/panePresentation.ts";
 import { seenKey } from "../lib/seenFinishes.ts";
@@ -416,6 +416,18 @@ function ToolInputView({ part }: { part: ToolPartType }) {
   return <pre className="chat-tool-io">{part.input}</pre>;
 }
 
+/** A call's input as the agent sent it, indented when it is JSON. */
+function RawToolInput({ part }: { part: ToolPartType }) {
+  const t = useT();
+  return <section className="chat-tool-output"><h4>{t("Input")}</h4>
+    <pre className="chat-tool-io">{part.arguments_omitted ? t("Arguments omitted (too large)") : indentedJson(part.input)}</pre>
+  </section>;
+}
+
+function indentedJson(text: string): string {
+  try { return JSON.stringify(JSON.parse(text), null, 2); } catch { return text; }
+}
+
 /** A cut output's rest, fetched when asked for: the page carries the first few thousand characters. */
 function useWholeOutput(ref: string | undefined): { text: string | null; state: "idle" | "loading" | "failed"; load: () => void } {
   const paneId = useContext(ChatPaneContext);
@@ -568,19 +580,22 @@ function WorkRow({ paneId, part, stateKey, state }: { paneId: string; part: Tool
   const openFile = useContext(OpenFileContext);
   const [chosen, setOpen] = useChatRowToggle(stateKey, false);
   const open = chosen === true;
+  const focus = useRowFocus<HTMLButtonElement>(stateKey);
+  // an update inside a todo run: the run already shows the list it left, so the update shows what it sent and got back
+  const attempt = state !== undefined;
   const whole = useWholeOutput(part.output_ref);
   const summary = part.arguments_omitted ? t("Arguments omitted (too large)") : todoCallSummary(part) ?? part.summary;
   // reads the call's input: once per call, not on every poll of the transcript
   const { verb, narration } = useMemo(() => workRowLabel({ name: part.name, input: part.input }, summary), [part.name, part.input, summary]);
   // the list is the answer of a todo call: its raw text would say it twice
-  const output = isTodoTool(part.name) && parseTodoAnswer(part.output) !== null ? "" : whole.text ?? part.output;
+  const output = !attempt && isTodoTool(part.name) && parseTodoAnswer(part.output) !== null ? "" : whole.text ?? part.output;
   // an attempt inside a todo run says how it went, in the transcript's words; a failure already says "failed"
   const stateWord = state === undefined || part.error ? null
     : state === "ok" ? t("succeeded") : state === "pending" ? t("pending") : state === "error" ? t("failed") : t("outcome not recorded");
   const images = useMemo(() => linePictures([part]), [part]);
   return <div className={`work-row${part.error ? " is-error" : ""}`}>
     <div className="work-row-line">
-      <button type="button" className="work-row-head" aria-expanded={open} title={narration || verb !== null ? `${part.name} · ${summary}` : undefined} onClick={() => setOpen(!open)}>
+      <button type="button" className="work-row-head" aria-expanded={open} title={narration || verb !== null ? `${part.name} · ${summary}` : undefined} onClick={() => setOpen(!open)} {...focus}>
         <span className="work-row-caret" aria-hidden="true">{open ? <ChevronDown /> : <ChevronRight />}</span>
         {!narration && (verb !== null ? <span className="work-row-name is-verb">{t(verb)}</span> : <span className="work-row-name">{part.name}</span>)}
         {/* the spaces are for a screen reader: the row is read as words, not "Ranbun test" */}
@@ -593,7 +608,7 @@ function WorkRow({ paneId, part, stateKey, state }: { paneId: string; part: Tool
       {/* opened, the row shows its pictures larger in its detail */}
       {!open && <LineImages paneId={paneId} images={images} />}
     </div>
-    {open && <div className="work-row-detail">{verb !== null && <p className="work-row-tool">{part.name}</p>}<ToolInputView part={part} /><ToolImages paneId={paneId} part={part} />{output.length > 0 && <section className="chat-tool-output"><h4>{t(part.error ? "Error" : "Output")}</h4><pre className={`chat-tool-io${whole.text !== null ? " is-whole" : ""}`}>{linkFilePaths(output, openFile)}</pre>
+    {open && <div className="work-row-detail">{verb !== null && <p className="work-row-tool">{part.name}</p>}{attempt ? <RawToolInput part={part} /> : <ToolInputView part={part} />}<ToolImages paneId={paneId} part={part} />{output.length > 0 && <section className="chat-tool-output"><h4>{t(part.error ? "Error" : "Output")}</h4><pre className={`chat-tool-io${whole.text !== null ? " is-whole" : ""}`}>{linkFilePaths(output, openFile)}</pre>
       {part.output_ref !== undefined && whole.text === null && <button type="button" className="btn btn-ghost chat-tool-more" disabled={whole.state === "loading"} onClick={whole.load}>
         {t(whole.state === "loading" ? "Loading the whole output…" : whole.state === "failed" ? "Couldn't load the whole output — retry" : "Show the whole output ({size} characters)", { size: formatTokens(part.output_size ?? 0) })}
       </button>}</section>}</div>}
@@ -613,6 +628,8 @@ function TodoGroupRow({ paneId, group, stateKeyOf }: { paneId: string; group: To
   // state, so closing the update inside later does not fold the group when the list remounts it.
   const groupKey = `todo-group:${group.id}`;
   const [chosen, setOpen] = useChatRowToggle(groupKey, group.attempts.some((attempt) => memory?.toggles.get(stateKeyOf(attempt.part)) === true));
+  // the update the reader was on takes the focus back inside the run when it is open (WorkRow); folded, the run's head takes it
+  const focus = useRowFocus<HTMLButtonElement>(groupKey, group.attempts.map((attempt) => stateKeyOf(attempt.part)));
   useLayoutEffect(() => { if (chosen === true && memory !== null && !memory.toggles.has(groupKey)) memory.toggles.set(groupKey, true); }, [chosen, memory, groupKey]);
   const open = chosen === true;
   const { current } = group;
@@ -627,7 +644,7 @@ function TodoGroupRow({ paneId, group, stateKeyOf }: { paneId: string; group: To
       : current.state === "ok" ? t("Current list") : t("Latest list. The transcript does not record whether this update succeeded.");
   // its failures are counted in words on its head; each failed attempt marks itself inside
   return <div className="work-row work-todo-group" data-todo-group={group.id}>
-    <button type="button" className="work-row-head" aria-expanded={open} onClick={() => setOpen(!open)}>
+    <button type="button" className="work-row-head" aria-expanded={open} onClick={() => setOpen(!open)} {...focus}>
       <span className="work-row-caret" aria-hidden="true">{open ? <ChevronDown /> : <ChevronRight />}</span>
       <span className="work-row-name is-verb">{t("Plan")}</span>
       {" "}<span className="work-row-summary">{t("{n} updates", { n: group.attempts.length })} · {status}</span>
