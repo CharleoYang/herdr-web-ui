@@ -17,7 +17,7 @@
  * pane after, so another session or process of the same kind gets none.
  * First messages live in memory: a restart of the bridge loses those not sent yet.
  */
-import { closeMention, type createSubmitText, freeClaudeBox, freeHermesInput, InputDraftError, modelSwitchText, pendingFault, pendingIdentity, pendingText, submitFraming } from "./composer.ts";
+import { closeBackslash, closeMention, type createSubmitText, freeClaudeBox, freeHermesInput, InputDraftError, modelSwitchText, pendingFault, pendingIdentity, pendingText, submitFraming } from "./composer.ts";
 import { type Client, connectionOf, send } from "./connections.ts";
 import { ATTACH_HELD_MESSAGE } from "./terminal-process.ts";
 import type { AttachmentView, TerminalSighting } from "./terminals.ts";
@@ -479,7 +479,7 @@ export function createPendingDelivery({ options, clients, attachments, sight, se
       if (typed < TYPED_SETTLE_MS) await Bun.sleep(TYPED_SETTLE_MS - typed);
       mark = pending.mark(paneId);
       const context = await pendingContext(owner, paneId, lease, identity);
-      const sent = modelSwitchText(context.identity.agent, text);
+      const sent = closeBackslash(context.identity.agent, modelSwitchText(context.identity.agent, text));
       piReservation = reservePiReceipt(owner, context.identity);
       const receiptText = piReceiptText(context.identity, text);
       if (automatic && (context.working || queueHeld(paneId))) {

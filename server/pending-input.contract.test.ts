@@ -459,6 +459,9 @@ describe("connection-owned pending input", () => {
     { agent: "omp", text: "/model", expected: "/switch" },
     { agent: "codex", text: "/model", expected: "/model" },
     { agent: "omp", text: "/model x", expected: "/model x" },
+    // Claude Code reads `\` + Enter as a new line: a space lets its Enter send (#2277)
+    { agent: "claude", text: "see C:\\temp\\", expected: "see C:\\temp\\ " },
+    { agent: "codex", text: "see C:\\temp\\", expected: "see C:\\temp\\" },
   ])("delivers queued $text as $expected to $agent", async ({ agent, text, expected }) => {
     // Given a command queued while the agent is working.
     const f = await setup("queued-model", agent, "");
