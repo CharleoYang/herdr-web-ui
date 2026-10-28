@@ -14,6 +14,8 @@ const labels = (prompt: InteractivePrompt | null) => prompt?.options.map((option
 // Real omo-ai 5.1.30 pane.read captures at 120 and 45 columns, with the recorded open calls.
 const omoPendingFixture = (name: string) => readFileSync(new URL(`./fixtures/omo-pending-5.1.30-${name}`, import.meta.url), "utf8");
 const omoExtensionTail = omoPendingFixture("extension-tail.txt");
+// Real omo-ai 5.1.48 captures of a two-question widget at 120 and 45 columns, with the recorded call.
+const omo48PendingFixture = (name: string) => readFileSync(new URL(`./fixtures/omo-pending-5.1.48-${name}`, import.meta.url), "utf8");
 const withOmoExtensionTail = (screen: string) => screen.replace(/(❯\n─+\n)/, `$1${omoExtensionTail}`);
 // OmO's omo-task widget rows under the input box, as a live pane shows them: a live row wrapped onto a
 // second line, a live row, a finished row and the `+N more` line
@@ -2060,6 +2062,62 @@ ${rule60}
       });
     });
   }
+
+  // omo 5.1.48 joins the header and the question with " - " where 5.1.30 drew " — "
+  for (const width of ["wide", "narrow"]) {
+    test(`reads the real 5.1.48 two-question ${width} widget with its pending call`, () => {
+      const open = openOmoAsks(omo48PendingFixture("two.jsonl"));
+      const question = open[0]!.questions[0]!;
+      const screen = omo48PendingFixture(`two-${width}.txt`);
+      expect(screen).toContain(`${question.header} - `);
+      expect(parseInteractivePrompt("pi", screen, null, false, open)).toMatchObject({
+        agent: "omo", kind: "question", title: "Question 1 of 2", question: question.question, options: question.options,
+        multi_select: false, custom_option_index: question.options.length,
+      });
+    });
+  }
+
+  test("reads a 5.1.48 widget whose header holds the separator, and only for a call it shows", () => {
+    const jsonl = omo48PendingFixture("two.jsonl");
+    const screen = omo48PendingFixture("two-wide.txt");
+    const { header, question } = openOmoAsks(jsonl)[0]!.questions[0]!;
+    const read = (calls: string, shown: string) => parseInteractivePrompt("pi", shown, null, false, openOmoAsks(calls));
+    // a header holding " - " splits there first; the split after it is the one the call asked
+    const dashed = `${header} - x`;
+    const dashedCalls = jsonl.replaceAll(`"header":"${header}"`, `"header":"${dashed}"`);
+    expect(read(dashedCalls, screen.replaceAll(`${header} - `, `${dashed} - `))).toMatchObject({ agent: "omo", title: "Question 1 of 2" });
+    // a header or question the call does not hold, or nothing after the separator: no card
+    expect(read(dashedCalls, screen)).toBeNull();
+    expect(read(jsonl, screen.replaceAll(`${header} - `, `${header} - another `))).toBeNull();
+    expect(read(jsonl, screen.replaceAll(question, "..."))).toBeNull();
+  });
+
+  test("tries separators that share a space, and gives no card when two calls fit the line", () => {
+    const screen = omo48PendingFixture("two-wide.txt");
+    const call = (id: string, header: string, question: string, options: string[]) => [
+      JSON.stringify({ type: "message", message: { role: "assistant", content: [{ type: "toolCall", id, name: "ask_user_question", arguments: { questions: [{ header, question, multiSelect: false, options: options.map((label) => ({ label })) }], waitForAnswer: false } }] } }),
+      JSON.stringify({ type: "message", message: { role: "toolResult", toolCallId: id, toolName: "ask_user_question", content: [{ type: "text", text: "Question accepted; the answer will arrive as a user message." }], details: { accepted: true, requestId: id, status: "pending" }, isError: false } }),
+    ].join("\n");
+    const actual = call("actual", "Plan -", "Choose deployment target?", ["Staging", "Production"]);
+    const decoy = call("decoy", "Plan", "- Choose deployment target?", ["Continue", "Cancel"]);
+    const widget = (separator: string) => screen.replace(/\? Question pending[^\n]*\n[^\n]*\n[^\n]*\n/,
+      `? 2 questions pending · 30m\n  Plan -${separator}Choose deployment target?\n[ Staging ]  [ Production ]  [ own answer\u2026 ]\n`);
+    const read = (calls: string, separator: string) => parseInteractivePrompt("pi", widget(separator), null, false, openOmoAsks(calls));
+    for (const separator of [" - ", " \u2014 "]) {
+      expect(read(actual, separator), separator).toMatchObject({ agent: "omo", title: "Plan -", options: [{ label: "Staging" }, { label: "Production" }] });
+      // both calls fit the line, split at either separator: no card rather than the wrong one
+      expect(read(`${actual}\n${decoy}`, separator), separator).toBeNull();
+    }
+    // a cut that leaves only one call's header still counts against the other call
+    const cut = (separator: string) => screen.replace(/\? Question pending[^\n]*\n[^\n]*\n[^\n]*\n/,
+      `? 2 questions pending · 30m\n  P - Deploy${separator}...\n[ Continue ]  [ Cancel ]  [ own answer\u2026 ]\n`);
+    const cutActual = call("cut-actual", "P - Deploy", "Choose deployment target?", ["Continue", "Cancel"]);
+    const cutDecoy = call("cut-decoy", "P", "Deploy - Choose another target?", ["Continue", "Cancel"]);
+    // one column narrower, the cut also takes the separator's space
+    for (const separator of [" - ", " \u2014 ", " -", " \u2014"]) {
+      expect(parseInteractivePrompt("pi", cut(separator), null, false, openOmoAsks(`${cutActual}\n${cutDecoy}`)), separator).toBeNull();
+    }
+  });
 
   for (const count of ["one", "two"]) for (const width of ["wide", "narrow"]) {
     test(`reads the real 5.1.30 ${count}-question ${width} widget with extension status below the box`, () => {
