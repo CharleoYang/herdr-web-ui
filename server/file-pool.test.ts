@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "bun:test";
-import { closeSync, fstatSync, mkdtempSync, openSync, rmSync, writeFileSync } from "node:fs";
+import { closeSync, constants as fsConstants, fstatSync, mkdtempSync, openSync, rmSync, writeFileSync, writeSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -150,6 +150,25 @@ describe("file threads", () => {
     // the thread is ended mid-task, as one that fails would be: what it opened is never handed over
     setFilePoolOptions();
     await expect(opening).rejects.toThrow("replaced");
+    await fileThreadsClosed();
+    expect(() => fstatSync(fd)).toThrow();
+  });
+
+  it("closes a descriptor a scratch file's description opened, when its thread is ended mid-check", async () => {
+    setUp({ workers: 1, waiting: 0, deadlineMs: 30_000 });
+    const fifo = join(root, "stall");
+    expect(Bun.spawnSync(["mkfifo", fifo]).exitCode).toBe(0);
+    const hold = gate();
+    const describing = fileTask({ op: "describe", path: file, folder: root, authorizeGate: { cells: hold.buffer, fifo } } as FileTask);
+    // the thread holds the file open inside its check, blocked in a system call ending it cannot cut short
+    const fd = await hold.ran();
+    expect(fstatSync(fd).size).toBe(5);
+    setFilePoolOptions();
+    await expect(describing).rejects.toThrow("replaced");
+    // the call returns (a write that never waits: the thread opened the FIFO before it said it ran), the thread is gone, and what it opened is closed
+    const writer = openSync(fifo, fsConstants.O_WRONLY | fsConstants.O_NONBLOCK);
+    writeSync(writer, "x");
+    closeSync(writer);
     await fileThreadsClosed();
     expect(() => fstatSync(fd)).toThrow();
   });

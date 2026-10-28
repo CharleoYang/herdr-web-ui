@@ -2,7 +2,7 @@ import { constants, fstatSync, openSync, readSync, realpathSync } from "node:fs"
 import { sep } from "node:path";
 
 import type { FileInfo } from "../shared/protocol.ts";
-import { byteRange, fileInfo, pageFileHooks, pageWithLocalFiles, pathsByName, release, STREAM_CHUNK_BYTES, type PageMedia, type PageMediaGrant } from "./file-view.ts";
+import { byteRange, describeWithin, fileInfo, openAuthorized, pageFileHooks, pageWithLocalFiles, pathsByName, release, STREAM_CHUNK_BYTES, type PageMedia, type PageMediaGrant } from "./file-view.ts";
 import { walkFiles } from "./files.ts";
 
 /**
@@ -13,14 +13,19 @@ export type FileTask =
   | { op: "info"; path: string }
   | { op: "named"; path: string }
   | { op: "within"; paths: string[]; folder: string }
+  /** a file the scratch fallback found, described from what was opened in `folder` (`describeWithin`); `opened` as for `open` */
+  | { op: "describe"; path: string; folder: string; opened?: Int32Array<SharedArrayBuffer> }
   | { op: "walk"; cwd: string }
-  | { op: "render"; path: string; media: PageMedia | null }
+  /** `within`: the folder a page found in it must have been opened in (`pageWithLocalFiles`) */
+  | { op: "render"; path: string; media: PageMedia | null; within?: string | null }
   /**
    * `get`: a GET's Range and whether it came with If-Range (null for a HEAD, which reads nothing);
    * `opened`: where the thread names the descriptor as soon as it has it (`file-pool.ts`);
-   * `fastDiskMs`: how quickly the disk must answer for a large body to be sent whole (tests)
+   * `fastDiskMs`: how quickly the disk must answer for a large body to be sent whole (tests);
+   * `within`: the folder the file must be opened in (`openAuthorized`), for a file the scratch
+   * fallback found
    */
-  | { op: "open"; path: string; get: { range: string | null; ifRange: boolean } | null; opened?: Int32Array<SharedArrayBuffer>; fastDiskMs?: number };
+  | { op: "open"; path: string; get: { range: string | null; ifRange: boolean } | null; opened?: Int32Array<SharedArrayBuffer>; fastDiskMs?: number; within?: string | null };
 
 /** A page drawn with its own files put into it (null when it cannot be), and the media addresses that render gave out. */
 export interface RenderedPage { html: Uint8Array<ArrayBuffer> | null; grants: PageMediaGrant[] }
@@ -40,16 +45,17 @@ export interface OpenedFile { size: number; range: [number, number] | "unsatisfi
 export const FAST_DISK_MS = 50;
 const PROBE_BYTES = 64 * 1024;
 
-export type FileTaskResult = FileInfo | FileInfo[] | string[] | boolean | RenderedPage | OpenedFile | null;
+export type FileTaskResult = FileInfo | FileInfo[] | string[] | boolean | RenderedPage | OpenedFile | { info: FileInfo; within: string } | null;
 
 export function runFileTask(task: FileTask): FileTaskResult {
   switch (task.op) {
     case "info": return fileInfo(task.path);
     case "named": return pathsByName(task.path).map(fileInfo).filter((info) => info !== null);
     case "within": return within(task.paths, task.folder);
+    case "describe": return describeWithin(task.path, task.folder, task.opened);
     case "walk": return walkFiles(task.cwd);
-    case "render": return render(task.path, task.media);
-    case "open": return open(task.path, task.get, task.opened, task.fastDiskMs ?? FAST_DISK_MS);
+    case "render": return render(task.path, task.media, task.within ?? null);
+    case "open": return open(task.path, task.get, task.opened, task.fastDiskMs ?? FAST_DISK_MS, task.within ?? null);
   }
 }
 
@@ -68,9 +74,9 @@ function within(paths: string[], folder: string): boolean {
   } catch { return false; }
 }
 
-function render(path: string, media: PageMedia | null): RenderedPage {
+function render(path: string, media: PageMedia | null, within: string | null): RenderedPage {
   const grants: PageMediaGrant[] = [];
-  const html = pageWithLocalFiles(path, media, (grant) => grants.push(grant));
+  const html = pageWithLocalFiles(path, media, (grant) => grants.push(grant), within);
   return { html: html === null ? null : new TextEncoder().encode(html), grants };
 }
 
@@ -81,14 +87,22 @@ function render(path: string, media: PageMedia | null): RenderedPage {
  * disk answered at once (Bun sizes only a file body, which it reads on the server's thread, as it
  * always did); from a slow disk it is streamed from the descriptor handed over, without a length
  * (Bun sends any stream body chunked), so that disk never holds the server's thread. O_NONBLOCK,
- * so a FIFO put where the file was is not waited on.
+ * so a FIFO put where the file was is not waited on. With `within`, the file is opened only as one
+ * shown to lie in that folder (`openAuthorized`), and every byte comes from that descriptor: a body
+ * is never sent from the path, which a link put there since could lead out of the folder.
  */
-function open(path: string, get: { range: string | null; ifRange: boolean } | null, opened: Int32Array<SharedArrayBuffer> | undefined, fastDiskMs: number): OpenedFile | null {
+function open(path: string, get: { range: string | null; ifRange: boolean } | null, opened: Int32Array<SharedArrayBuffer> | undefined, fastDiskMs: number, within: string | null): OpenedFile | null {
   const began = performance.now();
   let fd: number;
-  try { fd = openSync(path, constants.O_RDONLY | (constants.O_NONBLOCK ?? 0)); } catch { return null; }
-  if (opened !== undefined) Atomics.store(opened, 0, fd);
-  pageFileHooks.opened?.(fd);
+  if (within !== null) {
+    const authorized = openAuthorized(path, [within], true, opened);
+    if (authorized === null) return null;
+    fd = authorized.fd;
+  } else {
+    try { fd = openSync(path, constants.O_RDONLY | (constants.O_NONBLOCK ?? 0)); } catch { return null; }
+    if (opened !== undefined) Atomics.store(opened, 0, fd);
+    pageFileHooks.opened?.(fd);
+  }
   // not handed over: closed by whoever takes it from the cell first, here or `abandon` (file-pool.ts)
   const close = () => { if (opened === undefined || Atomics.compareExchange(opened, 0, fd, -1) === fd) release(fd); };
   let size: number;
@@ -104,6 +118,9 @@ function open(path: string, get: { range: string | null; ifRange: boolean } | nu
   if (length > STREAM_CHUNK_BYTES) {
     try { (pageFileHooks.readSync ?? readSync)(fd, new Uint8Array(PROBE_BYTES), 0, PROBE_BYTES, start); } catch { close(); return null; }
     if (performance.now() - began >= fastDiskMs) return { size, range, bytes: null, fd, fast: false };
+    // a file the scratch fallback found is never sent from its path: on Linux, from its descriptor's
+    // own (`/proc/self/fd`, the file it holds, sized as a file body); elsewhere streamed from it
+    if (within !== null) return { size, range, bytes: null, fd, fast: process.platform === "linux" };
     close();
     return { size, range, bytes: null, fd: null, fast: true };
   }

@@ -1185,6 +1185,14 @@ export async function claudeTranscriptFile(
   return path;
 }
 
+/** Where `claudeSessionTempDir` looks for this user's `claude-<uid>` folder. */
+const claudeTempRoots = (): string[] => [...new Set([tmpdir(), "/tmp"])];
+
+/** The `claude-<uid>` folders every session's temp folder (`claudeSessionTempDir`) lies in; none on Windows, which has no uid. */
+export function claudeTempBases(uid: number | undefined = process.getuid?.()): string[] {
+  return uid === undefined ? [] : claudeTempRoots().map((root) => join(root, `claude-${uid}`));
+}
+
 /**
  * The folder Claude Code keeps for a session's own files outside the project, such as the
  * `scratchpad/` it names in prose by a relative path: `<tmp>/claude-<uid>/<project>/<session>/`,
@@ -1194,7 +1202,7 @@ export async function claudeTranscriptFile(
  */
 export async function claudeSessionTempDir(
   transcript: string,
-  roots: readonly string[] = [...new Set([tmpdir(), "/tmp"])],
+  roots: readonly string[] = claudeTempRoots(),
   uid: number | undefined = process.getuid?.(),
 ): Promise<string | null> {
   if (uid === undefined || !transcript.endsWith(".jsonl")) return null;

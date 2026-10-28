@@ -138,7 +138,7 @@ export function fileTask<T extends FileTaskResult>(task: FileTask, signal?: Abor
   if (signal?.aborted) return Promise.reject(new FileBusyError("the request was cancelled"));
   // the thread names the descriptor it opens here at once, so one never answered (a thread that
   // failed or was ended mid-task) can still be closed (`abandon`)
-  if (task.op === "open") task = { ...task, opened: openedCell() };
+  if (task.op === "open" || task.op === "describe") task = { ...task, opened: openedCell() };
   return new Promise<T>((done, fail) => {
     const deadline = task.op === "render" || task.op === "walk" ? options.longDeadlineMs : options.deadlineMs;
     const pending: Pending = { task, done: done as (result: FileTaskResult) => void, fail, settled: false, timer: setTimeout(() => expire(pending, "the file system did not answer in time"), deadline) };
@@ -241,7 +241,7 @@ function openedCell(): Int32Array<SharedArrayBuffer> {
 
 /** The descriptor a task's thread opened and will never hand over (it failed or was ended, and is gone), closed. */
 function abandon(task: FileTask): void {
-  if (task.op !== "open" || task.opened === undefined) return;
+  if ((task.op !== "open" && task.op !== "describe") || task.opened === undefined) return;
   const fd = Atomics.exchange(task.opened, 0, -1);
   if (fd < 0) return;
   try { closeSync(fd); } catch { /* already closed */ }
