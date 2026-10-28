@@ -140,6 +140,30 @@ namespace Ovis
             return token;
         }
 
+        /// <summary>
+        /// The token names the environment sets, as one settings layer under the plugin's files. A name it does not set
+        /// stays out: written empty, it would hide the old name, which `plugin.ts` reads then.
+        /// </summary>
+        public static string EnvironmentLayer(Func<string, string> variable)
+        {
+            return string.Join("\n", new[] { "OVIS_TOKEN", "HERDR_WEB_TOKEN" }.Select(name => new { name, value = variable(name) }).Where(set => set.value != null).Select(set => set.name + "=" + set.value));
+        }
+
+        /// <summary>`managed: false` of GET /api/updates: no update supervisor runs the server, or none has reported yet.</summary>
+        public static bool UpdatesUnmanaged(string json)
+        {
+            try
+            {
+                var root = new JavaScriptSerializer().Deserialize<Dictionary<string, object>>(json);
+                object value;
+                return root != null && root.TryGetValue("managed", out value) && value is bool && !(bool)value;
+            }
+            catch (Exception exception) when (exception is ArgumentException || exception is InvalidOperationException)
+            {
+                return false;
+            }
+        }
+
         /// <summary>`current_version` of GET /api/updates: the package.json of the build the answering server runs.</summary>
         public static string UpdatesVersion(string json)
         {
@@ -168,19 +192,61 @@ namespace Ovis
         }
 
         /// <summary>
+        /// The `(pid N)` of the status's first line: `plugin.ts status` names the process it recorded only while it lives,
+        /// and says so whether herdr answers or not (its "running" needs herdr, every release since 0.3).
+        /// </summary>
+        public static int? StatusPid(string output)
+        {
+            var first = (output ?? "").Split('\n').FirstOrDefault() ?? "";
+            var at = first.LastIndexOf("(pid ", StringComparison.Ordinal);
+            if (at < 0) return null;
+            var end = first.IndexOf(')', at);
+            int pid;
+            return end > at && int.TryParse(first.Substring(at + 5, end - at - 5), out pid) && pid > 0 ? pid : (int?)null;
+        }
+
+        /// <summary>
+        /// `plugin.ts stop` ended a server: "stopped Ovis (pid N)", or "stopped herdr web ui (pid N)" before the rename. It
+        /// prints that only after it verified the process as the plugin's own and saw it exit; "… is not running" otherwise.
+        /// </summary>
+        public static bool StoppedServer(string output)
+        {
+            return (output ?? "").Split('\n').Select(line => line.Trim()).Any(line => line.StartsWith("stopped ", StringComparison.Ordinal) && line.Contains("(pid "));
+        }
+
+        /// <summary>The bridge health's answer is the app's own: `ok: true` with an integer `bridge_protocol` (server/index.ts).</summary>
+        public static bool BridgeHealth(string json)
+        {
+            try
+            {
+                var root = new JavaScriptSerializer().Deserialize<Dictionary<string, object>>(json);
+                object ok, protocol;
+                return root != null && root.TryGetValue("ok", out ok) && ok is bool && (bool)ok && root.TryGetValue("bridge_protocol", out protocol) && protocol is int;
+            }
+            catch (Exception exception) when (exception is ArgumentException || exception is InvalidOperationException)
+            {
+                return false;
+            }
+        }
+
+        /// <summary>
         /// Why the server needs an update. herdr's list is never taken for the version that runs: a stopped server known
         /// only by it is started first, as it may have updated itself, and a running one that does not say its version
         /// (a token holds /api/updates) is one whose version cannot be read. The update then installs the newest
         /// release, which no release that runs is newer than. An app without a version (a local build) asks only the
         /// old id to move; a linked checkout or a fork is never touched.
         /// </summary>
-        public static UpdateReason Reason(Plugin plugin, string runningVersion, string statusVersion, bool running, Version app)
+        public static UpdateReason Reason(Plugin plugin, string runningVersion, string statusVersion, bool running, Version app, bool unmanaged = false)
         {
             if (plugin == null || plugin.NotOurs) return UpdateReason.None;
             if (plugin.Id == Links.LegacyPluginId) return UpdateReason.LegacyId;
             if (app == null) return UpdateReason.None;
             bool exact;
             var server = ServerVersion(plugin, running, runningVersion, statusVersion, out exact);
+            // a server that runs without the update supervisor reports no version, and none is guessed for it: one the
+            // plugin's start just started answers so until its supervisor's first word, and a hand-run one is not the
+            // plugin's to reinstall
+            if (running && !exact && unmanaged) return UpdateReason.None;
             // a running server that does not say is unknown whatever herdr lists: its checkout may be newer than it
             if (running && !exact) return UpdateReason.VersionUnknown;
             if (server == null) return UpdateReason.VersionUnknown;

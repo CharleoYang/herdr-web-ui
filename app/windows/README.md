@@ -26,8 +26,13 @@ Update for the old one. A running server's version is only what it reports itsel
 line of `plugin.ts status` (the release its next start runs). herdr's list stays at the version first installed while
 Settings → Updates runs newer releases, so it is never taken for the version that runs: a stopped server known only by
 it is offered Start, and a running one that does not say is offered Update with "cannot read its version". The update
-installs the newest release, so it never goes back. A linked checkout or a fork is never moved or reinstalled, and a
-build without a version (0.0.0, a local build) compares none.
+installs the newest release, so it never goes back. A running server that reports no version and runs without the
+update supervisor (`managed: false`, which is also how one the plugin just started answers until its supervisor
+reports) is not offered Update: the plugin's reinstall would not replace it. One that reports its version is compared
+by it as any other. The old id's move pins install.ps1 to that newest release through `OVIS_REF`, so a ref the PC
+inherited cannot take it back. When the installer or herdr's reinstall fails, the server that ran before starts again
+the way herdr starts it (its start-windows action, or herdr's server), so it keeps its active release. A linked
+checkout or a fork is never moved or reinstalled, and a build without a version (0.0.0, a local build) compares none.
 
 Every program it runs has a time limit (two minutes; the installer 45, winget 30, the phone step 5). Past it,
 the program and what it started are ended, except herdr and anything under it. The QR encoder's MIT notice
