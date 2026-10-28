@@ -6,7 +6,8 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { createServer } from "./index.ts";
-import { type EventFrame, herdrRpc, type HerdrSubscription, sessionSnapshot, subscribeEvents, workspaceClose, workspaceCreate } from "./herdr/client.ts";
+import { type EventFrame, herdrRpc, type HerdrSubscription, paneProcessInfo, sessionSnapshot, subscribeEvents, workspaceClose, workspaceCreate } from "./herdr/client.ts";
+import { agentProcesses } from "./conversation.ts";
 import type { ConversationResponse, InteractivePrompt } from "../shared/protocol.ts";
 
 // omp names its session file when it starts and writes it with the first message (seen on a
@@ -252,6 +253,60 @@ it("shows an omp Ask card in the open call's Markdown, answered by the keys of t
   expect(answered.status, await answered.text()).toBe(200);
   expect(readFileSync(askMarker, "latin1")).toMatch(/^\x1b(?:\[|O)B\r$/);
 });
+
+// herdr 0.9.5 keeps naming a pane omp while its omp is stopped behind the shell (job control), and the screen still
+// shows omp's last dialog, the same card to the parser: the shell holds the input then, and gets no card and no key
+it("offers no card and sends no key while omp is stopped behind its shell, over 18.13's panel and 18.10's", async () => {
+  const standIn = join(root, "handoff-bin", "omp");
+  for (const [fixture, tail, drawn] of [
+    ["omp-approval-18.13.2-unicode-narrow", "\u276f\n FOREIGN-2245\n", "FOREIGN-2245"],
+    ["omp-approval-18.10.4-unicode-narrow", null, "approve \u00b7"],
+  ] as const) {
+    const shown = readFileSync(new URL(`./fixtures/${fixture}.txt`, import.meta.url), "utf8");
+    const screen = join(root, `${fixture}.txt`);
+    writeFileSync(screen, shown);
+    // what a shell may leave there: the panel without omp's composer, a bare prompt and its own output under it
+    const stale = join(root, `${fixture}-stale.txt`);
+    writeFileSync(stale, tail === null ? shown : `${shown.trimEnd().split("\n").slice(0, -2).join("\n")}\n${tail}`);
+    const ompKeys = join(root, `${fixture}-omp-keys`);
+    const shellKeys = join(root, `${fixture}-shell-keys`);
+    const created = await workspaceCreate({ cwd: root, label: `ovis-test-omp-stopped-${fixture}` });
+    let pid: number | undefined;
+    try {
+      const pane = created.root_pane.pane_id;
+      // not exec'd: the shell stays behind the stand-in, as it does behind omp
+      await herdrAfter([drawnOn(pane, "Allow tool: bash"), { type: "pane.agent_status_changed", pane_id: pane }],
+        () => herdrRpc("pane.send_text", { pane_id: pane, text: `HOME='${root}' '${standIn}' '${join(root, "ask.js")}' '${screen}' '${screen}' '${ompKeys}'\n` }),
+        "drew the stand-in's approval panel and saw its omp",
+        (events) => events.some((event) => event.event === "pane.output_matched")
+          && events.some((event) => event.event === "pane.agent_status_changed" && event.data?.["agent"] === "omp"));
+      const live = await promptOf(pane);
+      expect(live, fixture).toMatchObject({ kind: "approval", title: "Allow tool: bash" });
+      pid = agentProcesses((await paneProcessInfo(pane))?.foreground_processes ?? [], "omp")[0]?.pid;
+      expect(pid, fixture).toBeNumber();
+      await herdrAfter([drawnOn(pane, "Stopped")], () => process.kill(pid!, "SIGSTOP"), "saw the shell stop the stand-in");
+      await herdrAfter([drawnOn(pane, "CLEARED-2245")], () => herdrRpc("pane.send_text", { pane_id: pane, text: "clear; printf 'CLEARED-%s\\n' 2245\n" }), "cleared the screen");
+      // the shell draws the dialog omp left, then takes one key raw: the first byte anything sends it
+      await herdrAfter([drawnOn(pane, drawn)], () => herdrRpc("pane.send_text", {
+        pane_id: pane, text: `clear; cat '${stale}'; stty raw -echo; dd bs=1 count=1 of='${shellKeys}' 2>/dev/null; stty sane; printf 'DD-%s\\n' DONE\n`,
+      }), "drew the stale dialog from the shell");
+      // herdr 0.9.5 keeps naming the pane omp here (the case this guards), 0.9.3 drops the name: the outcome is the same
+      expect(["omp", null], fixture).toContain((await sessionSnapshot()).panes.find((candidate) => candidate.pane_id === pane)?.agent ?? null);
+      expect(await promptOf(pane), fixture).toBeNull();
+      const answered = await fetch(`http://127.0.0.1:${server.port}/api/pane/prompt/answer`, {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ pane_id: pane, prompt_id: live!.id, option_index: 0 }),
+      });
+      expect(answered.status, fixture).toBe(409);
+      await herdrAfter([drawnOn(pane, "DD-DONE")], () => herdrRpc("pane.send_text", { pane_id: pane, text: "Z" }), "saw the shell take its key");
+      expect(readFileSync(shellKeys, "latin1"), fixture).toBe("Z");
+      expect(existsSync(ompKeys), fixture).toBe(false);
+    } finally {
+      if (pid !== undefined) process.kill(pid, "SIGKILL");
+      await workspaceClose(created.workspace.workspace_id);
+    }
+  }
+}, 60_000);
 
 // omp 18.8.7's pictures as recorded (server/fixtures/omp-pictures-18.8.7-*): the bytes sit in the blob
 // store beside the session store, the transcript holds `blob:sha256:<digest>`
