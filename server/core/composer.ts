@@ -4,8 +4,6 @@
  * itself (createSubmitText), handed the state it reads. Pending delivery and the immediate send
  * share them.
  */
-import { existsSync } from "node:fs";
-import { join } from "node:path";
 import type { HerdrPane } from "../../shared/protocol.ts";
 import { secretPrompt } from "../../shared/secret-prompt.ts";
 import { agentPrompt, HerdrError, paneGet, paneProcessInfo, paneRead, paneScrollInfo, paneSendKeys, paneSendText, type ProcessInfo } from "../herdr/client.ts";
@@ -14,7 +12,7 @@ import { paneAgentOf, resolveAgent, typingRoots } from "../pane-context.ts";
 import { paneProcessRoots } from "../conversation.ts";
 import type { CommandSend } from "../outcome.ts";
 import { processStartedAt } from "../process-start.ts";
-import { isOmpProcess, ompConfigDir } from "../omp.ts";
+import { isOmpProcess, ompLoadsIntegration } from "../omp.ts";
 import { processEnviron } from "../omo.ts";
 import { bindCommandProcess, CLAUDE_CLEAR_INPUT_KEYS, claudeClearableDraft, claudeInputBoxContent, claudeInputDraft, claudeInputEmpty, claudeRestoredDraft, claudeRewindOpen, codexQuestionsCollapsed, heldCandidate, lastChatSubmitted, hermesInputDraft, noteSubmitted, parseInteractivePrompt, prepareCommandSend, viewportShowsLive } from "../prompt.ts";
 import { registry } from "../dialogs/registry.ts";
@@ -98,25 +96,24 @@ async function untilOmpReported(paneId: string, pane: HerdrPane, inTime: () => v
   const pid = omp?.pid ?? null;
   const started = omp?.integrated ? processStartedAt(omp.pid) : null;
   if (started === null || Date.now() >= started + startupMs) return pane;
+  let reported = false;
   while (Date.now() < started + startupMs) {
     await Bun.sleep(pollMs);
     inTime();
     pane = await paneGet(paneId);
     // an omp that quit while it started leaves its shell: the message was for omp, so it is not typed there
     if (resolveAgent(pane).agent !== "omp") throw new HerdrError("pending_target_changed", "The omp this message waited for stopped while it started; nothing was sent");
-    if (pane.agent_session?.source === "herdr:omp") break;
+    if (pane.agent_session?.source === "herdr:omp") { reported = true; break; }
   }
   // reported or out of time, a pane restarted into another omp meanwhile is not the one the message waited for
   // (a lookup that finds no omp proves nothing: the look above already found the pane's agent still omp)
   const now = (await ompProcess(paneId))?.pid ?? null;
   if (now !== null && now !== pid) throw new HerdrError("pending_target_changed", "The omp this message waited for was replaced while it started; nothing was sent");
+  if (!reported) console.warn(`[omp] ${paneId}: herdr's omp integration reported no session within ${startupMs / 1000} s of omp starting; sending anyway`);
   return pane;
 }
 
-/** herdr's omp integration (`herdr integration install omp`), in the extensions of the agent directory an omp loads. */
-const OMP_INTEGRATION = join("extensions", "herdr-omp-agent-state.ts");
-
-/** The pane's omp process, and whether herdr's omp integration is installed where it loads extensions; null with none. */
+/** The pane's omp process, and whether it loads herdr's omp integration (ompLoadsIntegration); null with none. */
 async function ompProcess(paneId: string): Promise<{ pid: number; integrated: boolean } | null> {
   const info = await paneProcessInfo(paneId).catch(() => undefined);
   for (const candidate of info?.foreground_processes ?? []) {
@@ -124,8 +121,7 @@ async function ompProcess(paneId: string): Promise<{ pid: number; integrated: bo
     if (typeof candidate.pid !== "number" || !isOmpProcess(argv)) continue;
     const environ = processEnviron(candidate.pid);
     const home = environ?.find((word) => word.startsWith("HOME="))?.slice(5) || process.env["HOME"] || "";
-    const agentDir = ompConfigDir(argv, environ, home);
-    return { pid: candidate.pid, integrated: agentDir !== null && existsSync(join(agentDir, OMP_INTEGRATION)) };
+    return { pid: candidate.pid, integrated: ompLoadsIntegration(argv, environ, home, candidate.cwd ?? null) };
   }
   return null;
 }
