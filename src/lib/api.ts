@@ -892,13 +892,20 @@ export async function fetchPanePrompt(paneId: string, machineId = "local"): Prom
 }
 
 /** The waiting prompt, and with none, the next prompt the agent suggests; restored is a send the agent put back in its input box when it was cancelled; outcomes are the pane's tracked command sends (older servers send none of the three). */
-export async function fetchPanePromptState(paneId: string, machineId = "local"): Promise<{ prompt: InteractivePrompt | null; suggestion: string | null; restored: string | null; outcomes: CommandOutcome[] }> {
-  const body = await getJson<PanePromptResponse>(machinePath(machineId, `pane/prompt?pane_id=${encodeURIComponent(paneId)}`));
+/**
+ * `draft`: ask a Claude pane what its input box holds now (a send whose receipt never came uses it:
+ * a box that no longer holds the message means it left). Absent from an older server, null when the
+ * box could not be read whole.
+ */
+export async function fetchPanePromptState(paneId: string, machineId = "local", options: { draft?: boolean } = {}): Promise<{ prompt: InteractivePrompt | null; suggestion: string | null; restored: string | null; outcomes: CommandOutcome[]; draft: string | null }> {
+  const query = `pane/prompt?pane_id=${encodeURIComponent(paneId)}${options.draft ? "&draft=1" : ""}`;
+  const body = await getJson<PanePromptResponse>(machinePath(machineId, query));
   return {
     prompt: body.prompt,
     suggestion: typeof body.suggestion === "string" && body.suggestion !== "" ? body.suggestion : null,
     restored: typeof body.restored === "string" && body.restored !== "" ? body.restored : null,
     outcomes: Array.isArray(body.outcomes) ? body.outcomes : [],
+    draft: typeof body.draft === "string" ? body.draft : null,
   };
 }
 

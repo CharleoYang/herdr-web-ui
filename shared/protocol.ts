@@ -658,6 +658,12 @@ export interface PanePromptResponse {
   suggestion?: string | null;
   /** the chat's last message, when the agent put it back as typed text in its input box */
   restored?: string | null;
+  /**
+   * The text a Claude pane's input box holds now, asked for with `?draft=1` (absent otherwise, and
+   * from an older server): "" for an empty box, null when the box could not be read whole. A send
+   * whose receipt never came asks for it: a box that no longer holds the message means it left.
+   */
+  draft?: string | null;
   /** the pane's tracked command outcomes */
   outcomes?: CommandOutcome[];
 }

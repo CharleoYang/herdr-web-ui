@@ -219,7 +219,12 @@ export function PaneTerminal({
   const follow = useContext(PaneFollowContext);
   const followRef = useRef(follow); followRef.current = follow;
   const sizesPty = (): boolean => presentedRef.current && shownRef.current && !followRef.current;
-  const { answerPanePrompt, uploadPaneImage } = useMachineApi();
+  const { answerPanePrompt, uploadPaneImage, fetchPanePromptState } = useMachineApi();
+  /** A send whose receipt never came asks the pane's own box (lib/sendUncertain.ts). */
+  const readDraft = useCallback(async (pane: string): Promise<string | null> => {
+    const state = await fetchPanePromptState(pane, { draft: true });
+    return state.draft;
+  }, [fetchPanePromptState]);
   const uploadFileRef = useRef(uploadPaneImage);
   uploadFileRef.current = uploadPaneImage;
   // the peek is this pane's only (App passes it to the selected pane alone; this guards a pane switch's render)
@@ -859,7 +864,7 @@ export function PaneTerminal({
     }} />
     : null;
 
-  const { composerSend, actOnPending, waitingAnswer } = useComposerSends({ agent, agentStatus, answerPanePrompt, answering, draftHeldForRef, ended, heldByOpenQueue, heldRef, inputRowNow, knownOutcomes, observeRef, paneId, paneRef, pendingAnswer, pendingScopeRef, queueOwner, queueStore, machineId, secretRef, setPendingAnswer, setPromptRefresh, settings, showSentCommand, socketRef, stillOpenNote, stillOpenNotedRef, stillOpenRef, submitComposerMessage, submitRetention, t, chatNavigation, setChatLocalSend, sessionRef });
+  const { composerSend, actOnPending, waitingAnswer } = useComposerSends({ agent, agentStatus, answerPanePrompt, answering, draftHeldForRef, ended, heldByOpenQueue, heldRef, inputRowNow, readDraft, knownOutcomes, observeRef, paneId, paneRef, pendingAnswer, pendingScopeRef, queueOwner, queueStore, machineId, secretRef, setPendingAnswer, setPromptRefresh, settings, showSentCommand, socketRef, stillOpenNote, stillOpenNotedRef, stillOpenRef, submitComposerMessage, submitRetention, t, chatNavigation, setChatLocalSend, sessionRef });
 
 
   // Capture the owner's pane for the entire upload batch, even across a pane switch.

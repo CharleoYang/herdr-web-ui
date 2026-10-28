@@ -29,7 +29,7 @@ import { isPiQuestionnaireScreen, parsePiQuestionnaire, piQuestionnaireInputMatc
 import { parsePiAsk } from "./dialogs/pi-ask.ts";
 import { navigatePiAsk } from "./dialogs/pi-ask-navigate.ts";
 import { gjcCustomEditorMatches, parseFallbackPrompt } from "./dialogs/fallback.ts";
-import { SUGGESTION_READ_MS, claudeHeldIsGrey, claudeInputDraft, claudeRestoredDraft, parseClaudeSuggestion, viewportShowsLive } from "./claude-input.ts";
+import { SUGGESTION_READ_MS, claudeHeldIsGrey, claudeInputBoxText, claudeInputDraft, claudeRestoredDraft, parseClaudeSuggestion, viewportShowsLive } from "./claude-input.ts";
 import { OMO_FORM_RE, omoAskOf, omoAsksFor } from "./omo-questions.ts";
 import { codexQueuedPrompt, queuedQuestionCount, type QueueFront } from "./codex-queue.ts";
 import { OpenCodePromptState } from "./opencode-prompt.ts";
@@ -1096,6 +1096,12 @@ export async function handlePromptRequest(request: Request, url: URL, options: P
       // only while Claude waits for the next prompt (a working agent shows none), and a failed or
       // slow read of it (a herdr without ansi reads, a busy one) leaves the prompt answer as it is,
       // on time.
+      // a send whose receipt never came asks for the box itself (`draft=1`): a box that no longer
+      // holds the message means it left, whatever the status says
+      const wantsDraft = url.searchParams.get("draft") === "1";
+      const draftScreen = wantsDraft && agent === "claude"
+        ? await paneRead({ paneId, source: "visible", format: "ansi", timeoutMs: SUGGESTION_READ_MS }).then((read) => read.text, () => null)
+        : null;
       const box = prompt === null && agent === "claude" && (status === "idle" || status === "done")
         ? await paneRead({ paneId, source: "visible", format: "ansi", timeoutMs: SUGGESTION_READ_MS })
           .then((read) => read.text, () => null)
@@ -1103,6 +1109,7 @@ export async function handlePromptRequest(request: Request, url: URL, options: P
       const outcomes = await commandOutcomes(paneId, read.pane, read.prompt, read.screen, readSendId, options.codexHome, read.snapshot);
       return jsonResponse({
         prompt,
+        ...(wantsDraft ? { draft: draftScreen === null ? null : claudeInputBoxText(draftScreen) } : {}),
         suggestion: box === null ? null : parseClaudeSuggestion(box),
         restored: box === null ? null : await restoredOnLiveScreen(paneId, box).catch(() => null),
         ...(outcomes.length ? { outcomes: watching ? outcomes.map(({ preview: _preview, result_text: _resultText, ...outcome }) => outcome) : outcomes } : {}),
