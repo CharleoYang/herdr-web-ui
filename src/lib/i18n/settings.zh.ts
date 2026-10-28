@@ -77,6 +77,8 @@ export const SETTINGS_ZH: Record<string, string> = {
   "Wide": "宽",
   "Full": "全宽",
   "Chat font size": "聊天字号",
+  "History page size": "历史每页条数",
+  "Prompts per page; older turns load a page at a time as you scroll up": "每页显示的用户提问数；向上滚动时更早的对话按页加载",
   "Messages, code, prompt cards and the message box in the chat view": "聊天视图中的消息、代码、提问卡片和输入框",
   "Decrease chat font size": "减小聊天字号",
   "Increase chat font size": "增大聊天字号",

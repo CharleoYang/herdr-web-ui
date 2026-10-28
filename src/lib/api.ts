@@ -289,7 +289,15 @@ export async function fetchPaneTranscript(paneId: string, lines: number, machine
 }
 
 /** Which turns (ConversationResponse.cursor): the page `before` a cursor, not past `since`; the newest ones `from` a held start. */
-export type ConversationPageQuery = { before?: string; since?: string; from?: string; /** History currently displayed, even if its cached response was evicted. */ history_id?: string; /** Revalidate a new finish without borrowing another key's 304. */ fresh?: boolean };
+export type ConversationPageQuery = {
+  before?: string; since?: string; from?: string;
+  /** History currently displayed, even if its cached response was evicted. */
+  history_id?: string;
+  /** Prompts per page: the chat's history-page setting, kept in the URL so its cache key matches. */
+  prompts?: number;
+  /** Revalidate a new finish without borrowing another key's 304. */
+  fresh?: boolean;
+};
 
 /**
  * The last answer per newest-page conversation URL and its ETag. The chat reads it again on
@@ -311,9 +319,13 @@ interface ConversationAnswer {
   bytes: number;
 }
 const conversationAnswers = new Map<string, ConversationAnswer>();
-const CONVERSATION_ANSWERS_KEPT = 16;
-/** …and this much of them, about four ordinary conversation pages each. */
-const CONVERSATION_ANSWERS_BYTES = 8 * 1024 * 1024;
+export const CONVERSATION_ANSWERS_KEPT = 24;
+/** …and this much of them: enough for the panes of ten open tabs at the default page size. */
+export const CONVERSATION_ANSWERS_BYTES = 64 * 1024 * 1024;
+/** One pane's page is a page, not a session: past this a page is fetched again rather than kept. */
+export const CONVERSATION_ANSWER_MAX_BYTES = 8 * 1024 * 1024;
+/** The panes of the tabs the chat has open: their answers go last when the cache must make room. */
+const pinnedConversations = new Set<string>();
 
 /**
  * The body a cache entry carries: the server's own count when it sends one for the body as it is,
@@ -326,16 +338,34 @@ export function conversationAnswerBytes(body: ConversationResponse, contentLengt
   return JSON.stringify(body)?.length ?? 0;
 }
 
-/** Drops the least recently used answers until the cache is back inside both caps. */
+/**
+ * Drops the least recently used answers until the cache is back inside both caps. An answer the
+ * chat still has a pane open for is dropped only once no unpinned one is left.
+ */
 function trimConversationAnswers(keep: string): void {
   let total = 0;
   for (const answer of conversationAnswers.values()) total += answer.bytes;
-  while (conversationAnswers.size > CONVERSATION_ANSWERS_KEPT || total > CONVERSATION_ANSWERS_BYTES) {
-    const oldest = conversationAnswers.keys().next().value;
-    if (oldest === undefined || oldest === keep) break;
-    total -= conversationAnswers.get(oldest)!.bytes;
-    conversationAnswers.delete(oldest);
+  const over = (): boolean => conversationAnswers.size > CONVERSATION_ANSWERS_KEPT || total > CONVERSATION_ANSWERS_BYTES;
+  while (over()) {
+    let victim: string | undefined;
+    for (const url of conversationAnswers.keys()) {
+      if (url === keep) continue;
+      if (!pinnedConversations.has(url)) { victim = url; break; }
+      victim ??= url;
+    }
+    if (victim === undefined) break;
+    total -= conversationAnswers.get(victim)!.bytes;
+    conversationAnswers.delete(victim);
   }
+}
+
+/** The chat's open pane keeps its page: `pin`ed answers are evicted last. */
+export function pinPaneConversation(paneId: string, machineId = "local"): void {
+  pinnedConversations.add(conversationUrl(paneId, machineId, {}));
+}
+
+export function unpinPaneConversation(paneId: string, machineId = "local"): void {
+  pinnedConversations.delete(conversationUrl(paneId, machineId, {}));
 }
 
 function conversationUrl(paneId: string, machineId: string, page: ConversationPageQuery): string {
@@ -343,6 +373,7 @@ function conversationUrl(paneId: string, machineId: string, page: ConversationPa
   if (page.before !== undefined) query.set("before", page.before);
   if (page.since !== undefined) query.set("since", page.since);
   if (page.from !== undefined) query.set("from", page.from);
+  if (page.prompts !== undefined) query.set("prompts", String(page.prompts));
   return machinePath(machineId, `pane/conversation?${query.toString()}`);
 }
 
@@ -350,8 +381,8 @@ function conversationUrl(paneId: string, machineId: string, page: ConversationPa
  * The newest page last answered for this pane (no page query), without asking the server: a chat
  * that mounts draws it at once while its read revalidates it. It leaves the cache order alone.
  */
-export function peekPaneConversation(paneId: string, machineId = "local"): ConversationResponse | undefined {
-  return conversationAnswers.get(conversationUrl(paneId, machineId, {}))?.body;
+export function peekPaneConversation(paneId: string, machineId = "local", prompts?: number): ConversationResponse | undefined {
+  return conversationAnswers.get(conversationUrl(paneId, machineId, prompts === undefined ? {} : { prompts }))?.body;
 }
 
 /** GET /api/pane/conversation: structured turns, or scrollback fallback; `page` as ConversationResponse.cursor describes. */
@@ -382,8 +413,11 @@ export async function fetchPaneConversation(paneId: string, machineId = "local",
   if (!polled) return body;
   conversationAnswers.delete(url);
   if (etag !== null) {
-    conversationAnswers.set(url, { etag, body, bytes: conversationAnswerBytes(body, response.headers.get("content-length"), response.headers.get("content-encoding")) });
-    trimConversationAnswers(url);
+    const bytes = conversationAnswerBytes(body, response.headers.get("content-length"), response.headers.get("content-encoding"));
+    if (bytes <= CONVERSATION_ANSWER_MAX_BYTES) {
+      conversationAnswers.set(url, { etag, body, bytes });
+      trimConversationAnswers(url);
+    }
   }
   return body;
 }

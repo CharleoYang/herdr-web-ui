@@ -77,6 +77,8 @@ export const SETTINGS_JA: Record<string, string> = {
   "Wide": "広い",
   "Full": "全幅",
   "Chat font size": "チャットのフォントサイズ",
+  "History page size": "履歴の 1 ページ件数",
+  "Prompts per page; older turns load a page at a time as you scroll up": "1 ページあたりのプロンプト数。上へスクロールすると古いターンを 1 ページずつ読み込みます",
   "Messages, code, prompt cards and the message box in the chat view": "チャット画面のメッセージ、コード、質問カード、入力欄",
   "Decrease chat font size": "チャットの文字を小さく",
   "Increase chat font size": "チャットの文字を大きく",
