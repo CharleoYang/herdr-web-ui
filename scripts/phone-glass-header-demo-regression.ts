@@ -7,9 +7,9 @@ import panes from "../site/demo/fixtures/panes.json";
 import { buildDemoApp } from "./demo-build.ts";
 import { chromePath } from "./chrome-path.ts";
 
-// #1457: with the keyboard up a phone is short enough to drop a lone tab's row, and the chat then
-// puts the glass header over the pane. The pane's own menu button must start below that header,
-// never under its More button (six dots, not three), and a banner (View only) must not cover it.
+// #1457: with the keyboard up, chat puts the phone's glass header over the pane. The pane's own
+// menu button must start below that header, never under its More button (six dots, not three),
+// and a banner (View only) must not cover it. Tab navigation lives in the sidebar.
 type SocketsWindow = Window & { glassSockets: WebSocket[] };
 
 /** Keeps the demo's sockets, so the check can turn this connection into a view-only one. */
@@ -70,7 +70,7 @@ try {
         page.on("pageerror", (error) => errors.push(error.message));
         await page.goto(`http://127.0.0.1:${server.port}/herdr-web-ui/demo/app/?pane=${encodeURIComponent(panes.api)}`);
         await page.locator(".conn-live").waitFor();
-        // A short phone draws no tab row for a workspace's only tab: close the pane's sibling tabs.
+        // Keep the workspace to one tab for the lone-pane header and banner checks.
         const closed = await page.evaluate(async (id) => {
           const { snapshot } = await (await fetch("/api/session")).json() as { snapshot: { panes: { pane_id: string; tab_id: string; workspace_id: string }[]; tabs: { tab_id: string; workspace_id: string }[] } };
           const own = snapshot.panes.find((pane) => pane.pane_id === id)!;
@@ -82,29 +82,27 @@ try {
           return others.length;
         }, panes.api);
         assert.ok(closed > 0, "the demo pane's workspace had another tab to close");
-        await page.waitForFunction(() => document.querySelectorAll(".tab-strip-item").length === 1);
+        await page.waitForFunction((id) => document.querySelector(`.agent-item[data-pane="${id}"]`)?.closest(".agent-workspace")?.querySelectorAll(".agent-item").length === 1, panes.api);
 
         await page.getByTitle("Chat transcript (⌘⇧J)", { exact: true }).click();
         const message = page.getByRole("textbox", { name: "Message", exact: true });
         await message.waitFor();
-        assert.equal(await page.locator(".pane-frame.is-single .pane-frame-menu").isVisible(), false,
-          "upright, the lone tab keeps its row, whose menu carries the pane's actions");
+        assert.equal(await page.locator(".pane-frame.is-single .pane-frame-menu").isVisible(), true,
+          "upright, the lone pane keeps its own actions menu while tab controls live in the sidebar");
 
-        // the report's own moment: the message box focused and the keyboard up. Android shrinks the
-        // layout viewport with it, under the 600px that drops a lone tab's row (TabStrip's cramped).
+        // The report's own moment: the message box focused and the keyboard up. Android shrinks
+        // the layout viewport with it, leaving the glass header over the pane.
         await message.click();
         await page.setViewportSize({ width: 390, height: 470 });
         await page.evaluate(() => (window as Window & { glassViewport?: (value: number) => void }).glassViewport?.(470));
         await page.waitForFunction(() => document.documentElement.hasAttribute("data-keyboard"));
-        await page.locator(".tab-strip").waitFor({ state: "detached" });
         assert.notEqual(await page.locator(".app-header").evaluate((node) => getComputedStyle(node).backdropFilter), "none",
-          "the chat of a lone tab with no row puts the glass header over the pane");
+          "the chat puts the glass header over the pane");
         await checkMenus(page, "chat-keyboard");
 
         // a view-only connection draws its "View only" banner at the pane's top right too
         await page.evaluate(() => (window as SocketsWindow).glassSockets.at(-1)!.send(JSON.stringify({ type: "role", mode: "observe" })));
         await page.locator(".terminal-banner-observe").waitFor();
-        await page.locator(".tab-strip").waitFor({ state: "detached" });
         await checkMenus(page, "chat-keyboard-view-only");
         const banners = await page.locator(".terminal-banners > :not(.visually-hidden)").evaluateAll((nodes) => nodes.map((node) => {
           const box = node.getBoundingClientRect();

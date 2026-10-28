@@ -185,8 +185,8 @@ try {
   assert.equal(await workspaceGroup(workspaces[0]!).locator(".pane-select").count(), 1, "a workspace has one representative selector");
   assert.equal(await page.locator(".workspace-contents, .sidebar-tab-heading, .sidebar-pane-item").count(), 0,
     "Spaces has no tab or pane tree");
-  assert.equal(await agentRow(paneA).count(), 0, "a plain shell is absent from Agents");
-  assert.equal(await agentRow(paneB).count(), 0, "another plain shell is absent from Agents");
+  assert.equal(await agentRow(paneA).count(), 1, "a plain shell is listed in Agents");
+  assert.equal(await agentRow(paneB).count(), 1, "another plain shell is listed in Agents");
 
   // The search owns arrow/Enter navigation. Tab still reaches real buttons: Enter on Close
   // must close without selecting the highlighted result, and Enter on a row runs that row.
@@ -460,10 +460,9 @@ try {
     if (offlineEvidence) await offlineEvidence.finish();
     await offlineContext.close();
   }
-  console.log("PASS Agents excludes shells, survives PC folds, selects its machine target and disables offline rows");
+  console.log("PASS Agents includes shells, survives PC folds, selects its machine target and disables offline rows");
 
   // a turn that ended on work still running in the background reads BG, not DONE: drawn in the sidebar, and read in the composer
-  let backgroundPeer: "working" | "done" | "blocked" | "idle" | null = null;
   const unrouteBackground = await routeDrained(page, "**/api/machines", async (route) => {
     const response = await route.fetch();
     const body = await response.json() as { machines: { snapshot?: SessionSnapshot }[] };
@@ -471,12 +470,6 @@ try {
       const pane = machine.snapshot?.panes.find((pane) => pane.pane_id === paneA);
       if (!pane || !machine.snapshot) continue;
       Object.assign(pane, { agent_status: "done", background_tasks: 1, background_wait: true });
-      if (backgroundPeer) {
-        const peer = { ...pane, pane_id: `${paneA}-background-peer`, agent_status: backgroundPeer, background_wait: undefined };
-        machine.snapshot.panes.push(peer);
-        const tab = machine.snapshot.tabs.find((tab) => tab.tab_id === pane.tab_id);
-        if (tab) tab.agent_status = backgroundPeer === "blocked" ? "blocked" : "done";
-      }
     }
     await route.fulfill({ response, json: body });
   });
@@ -491,13 +484,6 @@ try {
   assert.equal(await ring.count(), 1, "BG draws a ring");
   assert.deepEqual(await ring.evaluate((dot) => { const style = getComputedStyle(dot); return { hollow: style.backgroundColor === "rgba(0, 0, 0, 0)", bordered: parseFloat(style.borderTopWidth) > 0, animation: style.animationName }; }), { hollow: true, bordered: true, animation: "none" }, "the ring is hollow, bordered and still");
   await page.locator('.composer-status[data-status="waiting"] strong.visually-hidden', { hasText: "BG" }).waitFor();
-  for (const peer of ["working", "done", "blocked", "idle"] as const) {
-    backgroundPeer = peer;
-    await page.evaluate(() => document.dispatchEvent(new Event("visibilitychange")));
-    const expected = peer === "idle" ? "waiting" : peer;
-    await page.locator(`.tab-strip-tab[aria-selected="true"] .tab-strip-dot[data-status="${expected}"]`).waitFor();
-  }
-  backgroundPeer = null;
   await page.evaluate(() => document.dispatchEvent(new Event("visibilitychange")));
   if (process.env.UI_EVIDENCE_DIR) {
     const viewport = page.viewportSize()!;
@@ -1735,16 +1721,16 @@ try {
   worktreeWorkspaces.splice(worktreeWorkspaces.indexOf(worktree.workspace_id), 1);
   console.log("PASS a worktree row sits under its repository's row, and its menu deletes the checkout, asking twice for a dirty one");
 
-  // A second tab from the tab's menu, New tab with agent…: the dialog is New tab, with the workspace's folder shown
-  // and not asked for; the new pane opens, the workspace stays one row, and a strip over the pane
-  // lists both tabs from then on.
+  // A second tab from the palette: the dialog shows the workspace's folder without asking for it.
+  // Both panes remain available in Agents; Spaces keeps one representative workspace row.
   // The new pane's terminal takes the focus once it paints, which would close a menu opened before.
   await until(() => painted.has(created.pane_id), "created pane paint");
   await page.locator(`.pane-select[title^="${created.pane_id} —"]`).click();
   await until(async () => (await page.locator(`.pane-select[title^="${created.pane_id} —"]`).getAttribute("aria-current")) === "true", "the created workspace is selected again");
   const openAgentTab = async () => {
-    await page.locator(".tab-strip").getByRole("tab", { selected: true }).click({ button: "right" });
-    await page.getByRole("menuitem", { name: "New tab with agent…", exact: true }).click();
+    await openPalette();
+    await paletteSearch.fill("New tab");
+    await palette.getByRole("option", { name: /^New tab/ }).click();
   };
   await openAgentTab();
   const tabDialog = page.getByRole("dialog", { name: /^New tab · ovis-test-browser-created/ });
@@ -1768,42 +1754,19 @@ try {
   assert.equal(createdTab.workspace_id, created.workspace_id, "the tab joins the workspace");
   await tabDialog.waitFor({ state: "hidden" });
   await until(async () => (await page.locator(`.pane-select[title^="${createdTab.pane_id} —"]`).getAttribute("aria-current")) === "true", "the new tab's pane is selected, and the row shows it");
-  assert.equal(await page.locator(`.pane-select[title^="${created.pane_id} —"]`).count(), 0, "the workspace stays one row");
+  assert.equal(await agentRow(created.pane_id).count(), 1, "the first tab's pane keeps its own sidebar row");
   assert.equal(await workspaceGroup(created.workspace_id).locator(".workspace-name").textContent(), "ovis-test-browser-created",
     "opening another tab preserves the workspace name in Spaces");
   assert.equal(await workspaceGroup(created.workspace_id).locator(".workspace-select").count(), 1,
     "all tabs share the workspace's representative row");
-  assert.equal(await workspaceGroup(created.workspace_id).locator(".sidebar-tab-heading").count(), 0,
-    "tab labels stay in the terminal tab strip");
-  const strip = page.locator(".tab-strip");
-  await strip.waitFor();
-  assert.deepEqual(await strip.getByRole("tab").allTextContents(), ["Tab 1", "second"]);
-  assert.equal(await strip.getByRole("tab", { selected: true }).textContent(), "second");
-  assert.equal(await strip.locator(".tab-strip-close, .tab-strip-panes").count(), 0, "tab close buttons and chevrons are removed");
-  assert.equal(await strip.locator(".tab-strip-menu:visible").count(), 0, "desktop tabs show no menu button at rest");
-  // the selected tab's actions button waits hidden in its place: the pointer over the strip or the
-  // tab's keyboard focus brings it into view, and no other tab draws one
-  const stripMenu = strip.locator(".tab-strip-item.is-active .tab-strip-menu");
-  const stripMenuOpacity = () => stripMenu.evaluate((node) => getComputedStyle(node).opacity);
-  await strip.hover();
-  await stripMenu.waitFor({ state: "visible" });
-  await until(async () => await stripMenuOpacity() === "1", "the pointer over the strip reveals the selected tab's actions button");
-  assert.equal(await strip.locator(".tab-strip-menu:visible").count(), 1, "only the selected tab shows an actions button");
-  assert.equal(await stripMenu.getAttribute("aria-label"), "Actions for second");
-  await page.mouse.move(640, 600);
-  await stripMenu.waitFor({ state: "hidden" });
-  await page.locator(".tab-strip-add").focus();
-  await page.keyboard.press("Shift+Tab");
-  assert.equal(await strip.getByRole("tab", { selected: true }).evaluate((node) => node === document.activeElement), true, "Shift+Tab from the + lands on the selected tab");
-  await stripMenu.waitFor({ state: "visible" });
-  await until(async () => await stripMenuOpacity() === "1", "keyboard focus on the selected tab reveals its actions button");
-  assert.equal(await strip.locator(".tab-strip-menu:visible").count(), 1, "keyboard focus reveals the selected tab's button alone");
-  await strip.getByRole("tab", { name: "Tab 1", exact: true }).click();
-  await until(async () => (await page.locator(`.pane-select[title^="${created.pane_id} —"]`).getAttribute("aria-current")) === "true", "the first tab opens its pane again");
-  assert.equal(await strip.getByRole("tab", { selected: true }).textContent(), "Tab 1");
+  assert.equal(await page.locator(".tab-strip").count(), 0, "no tab strip is rendered");
+  assert.equal(await page.locator('.pane-column [role="tablist"]').count(), 0, "the pane column has no tablist");
+  await agentRow(createdTab.pane_id).locator('.agent-select[aria-current="true"]').waitFor();
+  await agentRow(created.pane_id).locator(".agent-select").click();
+  await agentRow(created.pane_id).locator('.agent-select[aria-current="true"]').waitFor();
   // reopened right after a creation: its fields are live and Escape puts it away at once
-  // The menu restores this terminal on unmount. Record focus at the dialog's DOM commit,
-  // before any animation frame can rescue it: Escape may arrive before that first paint.
+  // Record focus at the dialog's DOM commit, before any animation frame can rescue it:
+  // Escape may arrive before that first paint.
   await page.locator(".pane-frame.is-current .xterm-helper-textarea").focus();
   await page.evaluate(() => {
     const observer = new MutationObserver(() => {
@@ -1860,146 +1823,111 @@ try {
   await page.getByRole("dialog", { name: /^New workspace/ }).waitFor();
   await page.keyboard.press("Escape");
   await page.getByRole("dialog", { name: /^New workspace/ }).waitFor({ state: "hidden" });
-  console.log("PASS a second tab is made from the tab strip, listed over the pane, and opened from it");
+  console.log("PASS a second tab is made from the palette and both panes are listed in the sidebar, with no tab strip");
 
-  // The strip's + is herdr's own new tab: a shell tab in the workspace's folder at once, no dialog,
-  // and its pane opens. It is closed again, so the tabs below stay the two named ones.
-  const terminalResponse = page.waitForResponse((response) => response.url().endsWith("/api/tab/create"));
-  await page.locator(".tab-strip-add").click();
+  // The workspace head's + creates a shell tab immediately and selects its own sidebar row.
+  const terminalResponse = page.waitForResponse((response) => response.url().endsWith("/api/tab/create") && response.request().method() === "POST");
+  await page.locator(`.agent-workspace[data-machine="local"][data-workspace="${created.workspace_id}"] > .agent-workspace-line .agent-head-add`).click();
   const terminalAnswer = await terminalResponse;
-  assert.deepEqual(terminalAnswer.request().postDataJSON(), { workspace_id: created.workspace_id, cwd: join(root, "a", "made-here"), label: null, agent: null }, "the + asks for a shell tab in the workspace's folder");
+  assert.deepEqual(terminalAnswer.request().postDataJSON(), { workspace_id: created.workspace_id }, "the workspace head's + asks for a tab in that workspace");
+  assert.equal(terminalAnswer.ok(), true, "the new tab request succeeds");
   const terminalTab = await terminalAnswer.json() as WorkspaceCreated;
   assert.equal(terminalTab.workspace_id, created.workspace_id, "the shell tab joins the workspace");
   assert.equal(terminalTab.agent_started, false, "no agent is started");
-  await until(async () => (await page.locator(`.pane-select[title^="${terminalTab.pane_id} —"]`).getAttribute("aria-current")) === "true", "the shell tab's pane is selected");
+  await agentRow(terminalTab.pane_id).locator('.agent-select[aria-current="true"]').waitFor();
   assert.equal(await page.getByRole("dialog", { name: /^New tab/ }).count(), 0, "the + opens no dialog");
-  assert.equal(await strip.getByRole("tab").count(), 3, "the strip lists the shell tab");
+  assert.equal(await agentRow(created.pane_id).count(), 1, "the first pane keeps its row");
+  assert.equal(await agentRow(createdTab.pane_id).count(), 1, "the second pane keeps its row");
+  console.log("PASS the workspace head's + POSTs a new shell tab and selects its sidebar row without a dialog");
+
+  const tabMenu = page.getByRole("menu");
+  const openTabMenu = async (paneId: string) => {
+    await agentRow(paneId).locator(".agent-select").click({ button: "right" });
+    await tabMenu.waitFor();
+  };
+  // With a neighbour on either side, the row offers both native adjacent moves and named destinations.
+  await openTabMenu(createdTab.pane_id);
+  const tabActions = await tabMenu.locator(".menu-item").allTextContents();
+  for (const action of ["Rename tab", "Move tab left", "Move tab right", "Close tab"]) {
+    assert.ok(tabActions.includes(action), `the row's menu offers ${action}`);
+  }
+  const destinations = (await sessionSnapshot()).workspaces.filter((workspace) => workspace.workspace_id !== created.workspace_id);
+  assert.ok(destinations.length > 0, "the tab has another workspace as a destination");
+  for (const destination of destinations) {
+    assert.ok(tabActions.includes(`Move to workspace: ${destination.label}`), "the menu names each destination workspace");
+  }
+  assert.equal(await agentRow(terminalTab.pane_id).locator(".agent-select").getAttribute("aria-current"), "true", "opening another row's menu does not select it");
+  await page.keyboard.press("Escape");
+  await tabMenu.waitFor({ state: "detached" });
+  console.log("PASS a sidebar row's menu offers Rename tab, both adjacent moves, named workspace destinations and Close tab");
+
+  // Close the extra shell through its row menu: both the native tab and every row of it leave.
   const terminalTabId = (await sessionSnapshot()).panes.find((pane) => pane.pane_id === terminalTab.pane_id)?.tab_id;
   assert.ok(terminalTabId, "herdr has the shell tab's pane");
-  await strip.getByRole("tab", { name: "Tab 1", exact: true }).click();
-  await until(async () => (await page.locator(`.pane-select[title^="${created.pane_id} —"]`).getAttribute("aria-current")) === "true", "the first tab opens its pane again");
-  await herdrRpc("tab.close", { tab_id: terminalTabId });
-  await until(async () => (await strip.getByRole("tab").count()) === 2, "the shell tab is gone from the strip");
-  console.log("PASS the strip's + opens a shell tab at once, with no dialog");
+  const terminalPaneIds = (await sessionSnapshot()).panes.filter((pane) => pane.tab_id === terminalTabId).map((pane) => pane.pane_id);
+  await openTabMenu(terminalTab.pane_id);
+  await tabMenu.getByRole("menuitem", { name: "Close tab", exact: true }).click();
+  await until(async () => !(await sessionSnapshot()).tabs.some((tab) => tab.tab_id === terminalTabId), "the row's Close tab closes the native tab");
+  for (const paneId of terminalPaneIds) await agentRow(paneId).waitFor({ state: "detached" });
+  console.log("PASS Close tab from a sidebar row closes the native tab and removes its pane rows");
 
-  // A tab is renamed and closed from the strip, as herdr's prefix+shift+t and prefix+shift+x.
   const tabsInHerdr = async () => (await sessionSnapshot()).tabs.filter((tab) => tab.workspace_id === created.workspace_id).map((tab) => tab.label);
-  await strip.getByRole("tab", { name: "Tab 1", exact: true }).dblclick();
-  const tabName = strip.getByLabel("Tab name", { exact: true });
-  await tabName.waitFor();
+  const tabName = page.locator("input.agent-tab-rename");
+  const renameFromRow = async (paneId: string) => {
+    await openTabMenu(paneId);
+    await tabMenu.getByRole("menuitem", { name: "Rename tab", exact: true }).click();
+    await agentRow(paneId).locator("input.agent-tab-rename").waitFor();
+  };
+  await agentRow(created.pane_id).locator(".agent-select").click();
+  await renameFromRow(created.pane_id);
   await tabName.fill("  first  ");
   await page.keyboard.press("Enter");
+  await tabName.waitFor({ state: "detached" });
   await until(async () => (await tabsInHerdr()).join() === "first,second", "herdr has the tab's new name, trimmed");
-  assert.deepEqual(await strip.getByRole("tab").allTextContents(), ["first", "second"]);
+  await until(async () => (await agentRow(created.pane_id).locator(".agent-context").textContent())?.includes("first") === true, "the sidebar row shows the saved tab name");
   assert.equal(await workspaceGroup(created.workspace_id).locator(".workspace-name").textContent(), "ovis-test-browser-created",
     "renaming a tab leaves the workspace name unchanged");
-  await until(async () => await strip.getByRole("tab", { name: "first", exact: true }).evaluate((tab) => tab === document.activeElement), "the renamed tab has the focus back");
-  // F2 opens the field on the focused tab; Escape leaves the name alone, and so does an empty one
-  await page.keyboard.press("F2");
+  await renameFromRow(created.pane_id);
   await tabName.fill("discarded");
-  // an IME's committing Enter is the composition's: the field stays, and nothing is sent
+  // An IME's committing Enter is the composition's: the field stays, and nothing is sent.
   await tabName.dispatchEvent("keydown", { key: "Enter", isComposing: true, bubbles: true });
   assert.equal(await tabName.count(), 1, "an IME's Enter does not save the name");
   await page.keyboard.press("Escape");
   await tabName.waitFor({ state: "detached" });
-  await page.keyboard.press("F2");
+  assert.equal((await tabsInHerdr()).join(), "first,second", "Escape leaves the tab's name unchanged");
+  await renameFromRow(created.pane_id);
   await tabName.fill("   ");
   await page.keyboard.press("Enter");
-  // a blank name is refused and said so: the field stays for another try, and Escape keeps the old name
-  await page.locator(".tab-strip-error").getByText("A tab needs a name.", { exact: true }).waitFor();
+  await page.locator(".agents-sidebar").getByText("A tab needs a name.", { exact: true }).waitFor();
   assert.equal(await tabName.count(), 1, "a blank name keeps the field open");
   await page.keyboard.press("Escape");
   await tabName.waitFor({ state: "detached" });
-  assert.deepEqual(await strip.getByRole("tab").allTextContents(), ["first", "second"]);
-  assert.equal((await tabsInHerdr()).join(), "first,second");
-  // a right-click opens the tab's menu
-  await strip.getByRole("tab", { name: "second", exact: true }).click({ button: "right" });
-  const tabMenu = page.getByRole("menu", { name: "second", exact: true });
-  await tabMenu.waitFor();
-  assert.equal(await strip.getByRole("tab", { selected: true }).textContent(), "first", "opening another tab's context menu does not select it");
-  // The tab menu keeps native tab scope; pane operations belong to the pane or header.
-  assert.deepEqual(await tabMenu.getByRole("menuitem").allTextContents(), ["Move tab left", "Move to workspace…", "New tab with agent…", "Rename tab", "Close tab"], "the last tab offers only a move to the left, and a one-pane tab a move to another workspace");
-  await tabMenu.getByRole("menuitem", { name: "Rename tab", exact: true }).click();
+  assert.equal((await tabsInHerdr()).join(), "first,second", "a refused blank name leaves the saved name unchanged");
+  await renameFromRow(createdTab.pane_id);
   await tabName.fill("build");
   await page.keyboard.press("Enter");
   await until(async () => (await tabsInHerdr()).join() === "first,build", "the menu's rename reaches herdr");
-  // a click elsewhere ends the name field as Enter does: the name typed so far reaches herdr
-  await strip.getByRole("tab", { name: "build", exact: true }).dblclick();
-  await tabName.waitFor();
+  console.log("PASS Rename tab edits the sidebar row, trims and saves on Enter, rejects a blank name and cancels with Escape");
+
+  // A click elsewhere ends the row's name field as Enter does: the typed name reaches herdr.
+  await renameFromRow(createdTab.pane_id);
   await tabName.fill("clicked-away");
   await page.locator(".app-header .context-title-text").click();
   await tabName.waitFor({ state: "detached" });
   await until(async () => (await tabsInHerdr()).join() === "first,clicked-away", "a name field left by a click elsewhere saves what was typed");
-  assert.deepEqual(await strip.getByRole("tab").allTextContents(), ["first", "clicked-away"], "the strip says the name herdr took");
-  // and back, so the row this case was built on keeps its names
-  await strip.getByRole("tab", { name: "clicked-away", exact: true }).dblclick();
+  await until(async () => (await agentRow(createdTab.pane_id).locator(".agent-context").textContent())?.includes("clicked-away") === true, "the sidebar row says the name herdr took");
+  await renameFromRow(createdTab.pane_id);
   await tabName.fill("build");
   await page.keyboard.press("Enter");
   await until(async () => (await tabsInHerdr()).join() === "first,build", "the name goes back");
-  // One new neighbour puts build between two tabs for both adjacent move actions.
-  await herdrRpc("pane.focus", { pane_id: createdTab.pane_id });
-  const neighbour = await herdrRpc<{ tab: { tab_id: string } }>("tab.create", { workspace_id: created.workspace_id, label: "neighbour", focus: false });
-  await until(async () => (await tabsInHerdr()).length === 3, "build has two neighbours");
-  const tabPhone = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
-  const tabPhonePage = await tabPhone.newPage();
-  const tabPhoneEvidence = evidenceDirectory ? await watchBrowserEvidence(tabPhone, tabPhonePage, "touch-tab-menu") : undefined;
-  csp.push(await watchCsp(tabPhonePage));
-  tabPhonePage.on("pageerror", (error) => errors.push(error.message));
-  await tabPhonePage.goto(`${origin}/?pane=${encodeURIComponent(createdTab.pane_id)}`);
-  const phoneStrip = tabPhonePage.locator(".tab-strip");
-  await phoneStrip.getByRole("tab", { name: "build", exact: true, selected: true }).waitFor();
-  assert.equal(await phoneStrip.locator(".tab-strip-close, .tab-strip-panes").count(), 0, "no close button or chevron is rendered");
-  assert.equal(await phoneStrip.locator(".tab-strip-menu:visible").count(), 1, "only the open tab has the touch menu button");
-  await phoneStrip.getByRole("button", { name: "Actions for build", exact: true }).tap();
-  const tabSheet = tabPhonePage.getByRole("dialog", { name: "build", exact: true });
-  await tabSheet.waitFor();
-  const touchTabItems = await tabSheet.locator(".row-sheet-item").allTextContents();
-  assert.deepEqual(touchTabItems.slice(-6), ["Move tab left", "Move tab right", "Move to workspace…", "New tab with agent…", "Rename tab", "Close tab"], "a tab between siblings offers both adjacent moves on touch");
-  assert.ok(touchTabItems.includes("Rename pane") && touchTabItems.includes("Close pane"), "the touch menu carries the open pane's actions");
-  await tabSheet.getByRole("button", { name: "Cancel", exact: true }).tap();
-  await tabSheet.waitFor({ state: "detached" });
-  if (tabPhoneEvidence) await tabPhoneEvidence.finish();
-  await tabPhone.close();
-  await herdrRpc("tab.close", { tab_id: neighbour.tab.tab_id });
-  await until(async () => (await tabsInHerdr()).join() === "first,build", "the extra neighbour is closed again");
-  // a tab whose agent is at work asks before it closes; a no leaves it
-  await herdrRpc("pane.report_agent", { pane_id: createdTab.pane_id, source: "manual", agent: "codex", state: "working" });
-  await strip.locator('.tab-strip-dot[data-status="working"]').waitFor();
-  await strip.getByRole("tab", { name: "build", exact: true }).click({ button: "right" });
-  await page.getByRole("menu", { name: "build", exact: true }).getByRole("menuitem", { name: "Close tab", exact: true }).click();
-  const closeTabDialog = page.getByRole("alertdialog", { name: "Close tab build?", exact: true });
-  await closeTabDialog.waitFor();
-  await closeTabDialog.getByRole("button", { name: "Cancel", exact: true }).click();
-  await closeTabDialog.waitFor({ state: "detached" });
-  assert.equal((await tabsInHerdr()).join(), "first,build");
-  // A tab whose agent has finished closes at once from its menu, and the tab beside it opens.
-  await herdrRpc("pane.report_agent", { pane_id: createdTab.pane_id, source: "manual", agent: "codex", state: "idle" });
-  await strip.locator('.tab-strip-dot[data-status="working"]').waitFor({ state: "detached" });
-  await herdrRpc("tab.create", { workspace_id: created.workspace_id, label: "third", focus: false });
-  const third = strip.getByRole("tab", { name: "third", exact: true });
-  await third.click();
-  await until(async () => (await third.getAttribute("aria-selected")) === "true", "the third tab is open");
-  // a held Delete is one press: its repeats close nothing
-  await third.dispatchEvent("keydown", { key: "Delete", repeat: true, bubbles: true });
-  await page.waitForTimeout(300); // fixed wait: a repeated Delete may close no tab
-  assert.equal((await tabsInHerdr()).join(), "first,build,third");
-  await third.click({ button: "right" });
-  await page.getByRole("menu", { name: "third", exact: true }).getByRole("menuitem", { name: "Close tab", exact: true }).click();
-  await until(async () => (await tabsInHerdr()).join() === "first,build", "the menu closed the tab");
-  await until(async () => (await page.locator(`.pane-select[title^="${createdTab.pane_id} —"]`).getAttribute("aria-current")) === "true", "the tab beside the closed one is open");
-  // Delete on a focused tab that is not the open one closes it; the last tab remains visible,
-  // the open pane stays, and focus returns to the surviving tab.
-  await strip.getByRole("tab", { name: "first", exact: true }).click();
-  await until(async () => (await page.locator(`.pane-select[title^="${created.pane_id} —"]`).getAttribute("aria-current")) === "true", "the first tab is open");
-  await strip.getByRole("tab", { name: "first", exact: true }).focus();
-  await page.keyboard.press("ArrowRight");
-  await until(async () => await strip.getByRole("tab", { name: "build", exact: true }).evaluate((tab) => tab === document.activeElement), "the arrow moved the focus to the other tab");
-  await page.keyboard.press("Delete");
-  await until(async () => await strip.getByRole("tab").count() === 1, "the native strip keeps its last tab");
-  assert.equal((await tabsInHerdr()).join(), "first", "herdr closed the tab and kept the other");
-  assert.equal(await page.locator(`.pane-select[title^="${created.pane_id} —"]`).getAttribute("aria-current"), "true", "the open pane stays");
-  await until(async () => await strip.getByRole("tab", { name: "first", exact: true }).evaluate((tab) => tab === document.activeElement), "the surviving tab receives focus");
-  console.log("PASS a tab is renamed by a double-click, F2 and its menu, and closed from its menu and Delete, asking first while its agent works");
+  console.log("PASS leaving a sidebar row's Rename tab field by clicking elsewhere saves the typed name");
+
+  await openTabMenu(createdTab.pane_id);
+  await tabMenu.getByRole("menuitem", { name: "Close tab", exact: true }).click();
+  await until(async () => (await tabsInHerdr()).join() === "first", "the row menu closes the renamed tab and keeps the other");
+  await agentRow(createdTab.pane_id).waitFor({ state: "detached" });
+  await agentRow(created.pane_id).locator('.agent-select[aria-current="true"]').waitFor();
+  console.log("PASS closing the renamed tab removes its sidebar row and leaves the surviving pane selected");
 
   // herdr 0.9.0 reports Codex's first directory-trust menu as idle. Exercise a
   // live, owned PTY menu so the chat controls cannot depend on a blocked badge.

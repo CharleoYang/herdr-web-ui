@@ -155,9 +155,9 @@ try {
   assert.equal(await page.locator(paneSelector(split.pane.pane_id)).count(), 0);
   assert.equal(await page.locator(".workspace-toggle").count(), 0, "a legacy workspace fold has nothing to fold");
   assert.equal(await page.locator(".workspace-contents, .sidebar-tab-heading, .sidebar-pane-item").count(), 0,
-    "tabs and panes are navigated above the terminal rather than as workspace children");
-  assert.equal(await page.locator(".tab-strip").count(), 1, "the native tab row remains over a lone pane's workspace");
-  assert.equal(await page.locator('.tab-strip [role="tab"]').count(), 1);
+    "the workspace list keeps one representative row rather than nesting tabs and panes");
+  assert.equal(await page.locator(`.agent-item[data-pane=${JSON.stringify(lone.paneId)}] .agent-select`).count(), 1,
+    "the lone workspace's pane is navigable in the agent list");
   for (const fixture of [alpha, beta]) {
     const workspace = workspaceSelector(fixture.workspaceId);
     assert.equal(await page.locator(`${workspace} > .workspace-header`).count(), 1);
@@ -178,27 +178,24 @@ try {
   await page.evaluate((key) => localStorage.removeItem(key), singleFoldKey);
   // A split tab renders both panes. Selecting the second pane on the canvas changes only the
   // representative pane of the workspace row; the workspace's visible name remains its own.
-  await changeState(page, [{ selector: paneSelector(other.paneId), attribute: ["aria-current", "true"] }, { selector: '.tab-strip [role="tab"]', count: 1 }],
-    () => page.locator(paneSelector(other.paneId)).click(), "selecting the split workspace shows its strip");
-  assert.equal(await page.locator('.tab-strip [role="tab"]').textContent(), "Tab 1", "a tab herdr named by its number reads as Tab 1");
-  // at this width the header over the pane is the pane's surface, and the strip under it is
-  // the same one, not a band of the panel's colour between header and pane
+  await changeState(page, [{ selector: paneSelector(other.paneId), attribute: ["aria-current", "true"] }, { selector: `.agent-item[data-pane=${JSON.stringify(other.paneId)}] .agent-select[aria-current="true"]` }],
+    () => page.locator(paneSelector(other.paneId)).click(), "selecting the split workspace selects its sidebar pane");
+  // The header over the pane keeps the pane's surface under the chat lens.
   const surfaces = await page.evaluate(() => {
     const header = document.querySelector(".app-header")!;
     const column = document.querySelector(".pane-column")!;
     return {
       headerChat: header.classList.contains("is-chat"), columnChat: column.classList.contains("is-chat"),
-      header: getComputedStyle(header).backgroundColor, strip: getComputedStyle(document.querySelector(".tab-strip")!).backgroundColor,
+      header: getComputedStyle(header).backgroundColor,
       chat: document.querySelector(".chat-view") ? getComputedStyle(document.querySelector(".chat-view")!).backgroundColor : null,
     };
   });
   assert.equal(surfaces.columnChat, surfaces.headerChat, "the header and the pane column agree on the lens");
-  assert.equal(surfaces.strip, surfaces.header, "the strip is the header's surface");
   if (surfaces.headerChat) assert.equal(surfaces.chat, surfaces.header, "which under the chat lens is the transcript's");
-  await page.getByRole("tab", { name: "Tab 1", exact: true }).click({ button: "right" });
-  const tabMenu = page.getByRole("menu", { name: "Tab 1", exact: true });
+  await page.locator(`.agent-item[data-pane=${JSON.stringify(other.paneId)}] .agent-select`).click({ button: "right" });
+  const tabMenu = page.getByRole("menu");
   await tabMenu.waitFor();
-  assert.deepEqual(await tabMenu.getByRole("menuitem").allTextContents(), ["New tab with agent…", "Rename tab", "Close tab"]);
+  assert.deepEqual((await tabMenu.getByRole("menuitem").allTextContents()).filter((label) => label === "Rename tab" || label === "Close tab"), ["Rename tab", "Close tab"]);
   await page.keyboard.press("Escape");
   await tabMenu.waitFor({ state: "detached" });
   assert.equal(await page.locator(".pane-frame:visible").count(), 2, "both split panes are visible");

@@ -174,62 +174,6 @@ try {
         } finally { await close(); }
       }
 
-      // the tab strip: a workspace given more tabs than a phone's strip shows. The reader scrolls
-      // to the last one and opens it, all in the first drawing; `scrolled` is what they do next.
-      for (const scrolled of [false, true]) {
-        const { page, errors, release, close } = await open(null);
-        try {
-          const workspace = panes.web.split(":")[0]!;
-          for (const label of ["second", "a long tab name for review", "deploy", "docs"]) {
-            const made = await page.evaluate(async (body) => (await fetch("/api/tab/create", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) })).status, { workspace_id: workspace, label });
-            assert.equal(made, 200, `the demo makes the tab "${label}"`);
-          }
-          const strip = page.locator(".tab-strip");
-          const stripOf = (): Promise<{ left: number; max: number; open: boolean }> => strip.evaluate((node) => {
-            const view = node.getBoundingClientRect();
-            const item = node.querySelector(".tab-strip-item.is-active")!.getBoundingClientRect();
-            const end = node.querySelector(".tab-strip-add")!.getBoundingClientRect().left;
-            return { left: node.scrollLeft, max: node.scrollWidth - node.clientWidth, open: item.left >= view.left - 1 && item.right <= end + 1 };
-          });
-          const tabs = strip.locator('[role="tab"]');
-          await tabs.nth(4).waitFor();
-          // a scroll the strip did not make, as each one below: the app sees only the scroll event
-          await strip.evaluate((node) => { node.scrollLeft = node.scrollWidth; });
-          await frames(page);
-          await tabs.nth(4).tap();
-          await strip.locator('[role="tab"][aria-selected="true"]', { hasText: "docs" }).waitFor();
-          await frames(page);
-          const opened = await stripOf();
-          assert.ok(opened.open && opened.left > 48, `the last tab is open and in view, at the strip's far end (${JSON.stringify(opened)})`);
-          assert.equal(await loadedFaces(page, "Pretendard Variable"), 0, "and is drawn before the face comes");
-
-          if (scrolled) {
-            await strip.evaluate((node) => { node.scrollLeft = 0; });
-            await frames(page);
-            const looking = await stripOf();
-            assert.ok(looking.left === 0 && !looking.open, `the open tab is out of view, where the reader left the strip (${JSON.stringify(looking)})`);
-          }
-          release();
-          await appFaces(page);
-          const after = await stripOf();
-          assert.notEqual(after.max, opened.max, `the faces redrew the tabs' names at another width (${opened.max} -> ${after.max})`);
-          if (scrolled) {
-            assert.equal(after.left, 0, "a strip the reader scrolled is left there when the faces come");
-            assert.equal(after.open, false);
-            await tabs.nth(0).tap();
-            await strip.locator('[role="tab"][aria-selected="true"]').first().waitFor();
-            await page.waitForFunction(() => document.querySelector('.tab-strip [role="tab"]')?.getAttribute("aria-selected") === "true");
-            await frames(page);
-            assert.ok((await stripOf()).open, "and a tab opened after that is in view");
-          } else {
-            assert.ok(after.open, `the open tab is in view again, the reader's scroll before they opened it forgotten (${JSON.stringify(after)})`);
-          }
-          assert.deepEqual(errors, []);
-          console.log(scrolled
-            ? "PASS a tab strip the reader scrolled away from the open tab stays put when the faces swap in"
-            : `PASS a tab strip follows its open tab when the faces swap in, also after a scroll that ended in opening it (scrollLeft ${opened.left} -> ${after.left})`);
-        } finally { await close(); }
-      }
     } finally { await browser.close(); }
   } finally { server.stop(); }
 } finally { rmSync(app, { recursive: true, force: true }); }

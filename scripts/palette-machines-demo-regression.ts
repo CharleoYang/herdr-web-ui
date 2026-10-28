@@ -13,7 +13,7 @@ const app = mkdtempSync(join(tmpdir(), "herdr-palette-machines-"));
 const patch = `(() => {
   const fetchDemo = window.fetch.bind(window), EventSourceDemo = window.EventSource;
   const detachedRemote = new URLSearchParams(location.search).has("detached");
-  const calls = window.paletteMachineCalls = { branches: [], plugins: [], focus: [], runs: [], closes: [] };
+  const calls = window.paletteMachineCalls = { branches: [], plugins: [], focus: [], runs: [] };
   let last = null, offline = false, missing = false;
   const sources = new Set();
   const json = (value) => new Response(JSON.stringify(value), { headers: { "content-type": "application/json" } });
@@ -24,12 +24,6 @@ const patch = `(() => {
     machine.state = id === "offline" || (id === "remote" && offline) ? "disconnected" : "connected";
     if (id === "remote") machine.snapshot.panes.find((pane) => pane.pane_id === ${JSON.stringify(panes.api)}).label = "Remote migration";
     const workspace = machine.snapshot.workspaces[0];
-    // the first workspace keeps one tab here, so closing it is closing the last tab: the demo's release shell tab is left out
-    const shellTab = machine.snapshot.panes.find((pane) => pane.pane_id === ${JSON.stringify(panes.shell)})?.tab_id;
-    machine.snapshot.panes = machine.snapshot.panes.filter((pane) => pane.tab_id !== shellTab);
-    machine.snapshot.tabs = machine.snapshot.tabs.filter((tab) => tab.tab_id !== shellTab);
-    machine.snapshot.layouts = machine.snapshot.layouts.filter((layout) => layout.tab_id !== shellTab);
-    workspace.tab_count = machine.snapshot.tabs.filter((tab) => tab.workspace_id === workspace.workspace_id).length;
     workspace.worktree = { repo_key: "repo", repo_name: "project", repo_root: "/tmp/project", checkout_path: "/tmp/project/linked", is_linked_worktree: true };
     if (id === "remote" && missing) machine.snapshot.panes = machine.snapshot.panes.filter((pane) => pane.pane_id !== ${JSON.stringify(panes.api)});
     return machine;
@@ -63,7 +57,6 @@ const patch = `(() => {
       const detached = machine === "remote" && detachedRemote;
       return json({ source: { repo_key: "repo", source_workspace_id: id }, worktrees: [{ path: "/tmp/project/linked", branch: detached ? undefined : machine === "remote" ? "feature/remote-branch" : "feature/local-branch", is_detached: detached, open_workspace_id: id }] });
     }
-    if (path === "/api/tab/close") { calls.closes.push({ machine, tab: JSON.parse(init.body).tab_id }); return json({ ok: true }); }
     if (path === "/api/plugins/actions") calls.plugins.push(machine);
     if (path === "/api/plugin/action" && init?.method === "POST") calls.runs.push(machine);
     if (path === "/api/pane/focus") { calls.focus.push({ machine, pane: JSON.parse(init.body).pane_id }); return json({ ok: true }); }
@@ -164,25 +157,13 @@ try {
         assert.equal(await palette.getByRole("button", { name: "Try again", exact: true }).count(), 0, "retry fetches the unchanged query and clears its failure");
         console.log("PASS a failed folder listing stays visible and retryable beside cached folder rows");
 
-        // The palette may open over a confirmation. Identical native IDs on the destination
-        // PC must never retarget the first PC's destructive dialog to that new machine.
-        await page.keyboard.press("Escape"); await palette.waitFor({ state: "hidden" });
-        const selectedTab = page.locator('.tab-strip-tab[aria-selected="true"]');
-        assert.equal(await page.locator('.tab-strip-tab').count(), 1, "the selected workspace owns only this tab");
-        const localTabId = await selectedTab.getAttribute("data-tab-id");
-        await selectedTab.focus(); await selectedTab.press("Delete");
-        const closeConfirm = page.getByRole("alertdialog", { name: /^Close tab / });
-        await closeConfirm.waitFor();
-        assert.match(await closeConfirm.textContent() ?? "", /It is the last tab/);
-        await open();
-        assert.equal(await closeConfirm.isVisible(), true, "opening the palette leaves the confirmation beneath it until a target is chosen");
+        // Identical native pane IDs still belong to different PCs.
+        const selectedPane = page.locator('.agents-sidebar .agent-select[aria-current="true"]');
+        const localPaneId = await selectedPane.evaluate((node) => node.closest(".agent-item")?.getAttribute("data-pane"));
         await search.fill("Remote migration"); await rows.first().waitFor();
         await search.press("Enter"); await palette.waitFor({ state: "hidden" });
-        await closeConfirm.waitFor({ state: "detached" });
-        assert.equal(await selectedTab.getAttribute("data-tab-id"), localTabId, "the remote PC deliberately has the same tab ID");
-        assert.deepEqual(await page.evaluate(() => (window as any).paletteMachineCalls.closes), [], "a PC switch neither preserves nor submits the previous PC's close confirmation");
-        console.log("PASS switching PCs through the palette dismisses an old close confirmation even when tab IDs match");
         await page.waitForFunction(() => JSON.parse(sessionStorage.getItem("ovis:selection") ?? "{}").machine_id === "remote");
+        assert.equal(await selectedPane.evaluate((node) => node.closest(".agent-item")?.getAttribute("data-pane")), localPaneId, "the remote PC deliberately has the same pane ID");
         const calls = await page.evaluate(() => (window as any).paletteMachineCalls);
         // a pick is the browser's alone: herdr's focus on either PC stays where it is
         assert.deepEqual(calls.focus.filter((call: { machine: string }) => call.machine === "remote"), [], "selection leaves the remote PC's herdr focus alone");

@@ -59,7 +59,7 @@ export async function checkSplitView(browser: Browser, origin: string): Promise<
   /** the pane dropped on the right half, which is then the active one */
   const splitRight = async (page: Page, pane: string, options: { newTargetAtDrop?: boolean } = {}): Promise<void> => {
     const area = page.locator(".pane-split");
-    const source = page.locator(`.pane-select[title^="${pane} —"]`);
+    const source = page.locator(`.agent-item[data-pane="${pane}"] .agent-select`);
     await source.waitFor({ state: "visible" });
     await source.scrollIntoViewIfNeeded();
     const from = (await source.boundingBox())!;
@@ -328,8 +328,7 @@ export async function checkSplitView(browser: Browser, origin: string): Promise<
       assert.deepEqual(errors, []);
     }
 
-    // 6. A tab dragged down out of its strip opens in a half; the strip keeps its sideways reorder.
-    //    Each half draws its tab at herdr's own layout, and a half may draw the other half's tab too.
+    // 6. Each half draws its tab at herdr's own layout; a sidebar pick can draw that tab in both halves.
     {
       const [first] = await panesFor("tabs") as [string];
       const workspaceId = workspaces[workspaces.length - 1]!;
@@ -337,47 +336,19 @@ export async function checkSplitView(browser: Browser, origin: string): Promise<
       await herdrRpc("pane.report_agent", { pane_id: second, source: "manual", agent: "claude", state: "idle" });
       const beside = (await paneSplit(first, "right", false)).pane_id;
       const { page, errors } = await open([first, second, beside], "terminal");
-      const area = page.locator(".pane-split");
       await page.waitForFunction(() => document.querySelectorAll(".pane-split .pane-terminal").length === 2);
-      const tabs = page.locator(".tab-strip [role=tab]");
-      await tabs.nth(1).waitFor();
-      const box = (await area.boundingBox())!;
-      const tab = (await tabs.nth(1).boundingBox())!;
-      await page.mouse.move(tab.x + tab.width / 2, tab.y + tab.height / 2);
-      await page.mouse.down();
-      await page.mouse.move(tab.x + tab.width / 2 + 8, tab.y + tab.height / 2 + 4, { steps: 2 });
-      // the guide shows as soon as the drag starts, with no half chosen over the strip
-      await page.waitForFunction(() => { const guide = document.querySelector(".split-drop"); return guide?.classList.contains("is-visible") && !guide.hasAttribute("data-side"); });
-      await page.mouse.move(box.x + box.width * 0.8, box.y + box.height / 2, { steps: 8 });
-      await page.waitForFunction(() => document.querySelector(".split-drop")?.getAttribute("data-side") === "right");
-      await page.mouse.up();
-      await page.waitForFunction(() => document.querySelectorAll(".pane-slot").length === 2);
-      await isActive(page, "right");
+      await splitRight(page, second);
       assert.equal(await half(page, "left").locator(".pane-terminal").count(), 2, "the left half draws herdr's split of its tab");
       assert.equal(await half(page, "right").locator(".pane-terminal").count(), 1);
-      // the other half's tab, picked in the active half's strip, opens in the active half as well
-      await half(page, "right").locator(".tab-strip [role=tab]").nth(0).click();
+      // The other half's tab, picked in the sidebar, opens in the active half as well.
+      await page.locator(`.agent-item[data-pane="${first}"] .agent-select`).click();
       // (a canvas keeps tabs it showed mounted, inert: only the frames drawn count)
       await page.waitForFunction((pane) => document.querySelector(`.pane-slot[data-side="right"] [data-layout-pane="${pane}"]:not([inert])`) !== null, first);
       await isActive(page, "right");
       assert.equal(await page.locator(".pane-slot").count(), 2);
       assert.equal(await half(page, "right").locator("[data-layout-pane]:not([inert]) .pane-terminal").count(), 2, "the right half draws the left half's tab too");
       assert.equal(await half(page, "left").locator("[data-layout-pane]:not([inert]) .pane-terminal").count(), 2, "the left half keeps its tab");
-      // Escape drops a tab drag (from the other half's strip) with nothing changed
-      const again = (await half(page, "right").locator(".tab-strip [role=tab]").nth(1).boundingBox())!;
-      await page.mouse.move(again.x + again.width / 2, again.y + again.height / 2);
-      await page.mouse.down();
-      await page.mouse.move(box.x + box.width * 0.2, box.y + box.height / 2, { steps: 8 });
-      await page.waitForFunction(() => document.querySelector(".split-drop")?.getAttribute("data-side") === "left");
-      await page.keyboard.press("Escape");
-      await page.waitForFunction(() => document.querySelector(".split-drop")?.classList.contains("is-visible") === false);
-      await page.mouse.up();
-      await settled(page);
-      // the press made its half active, as any press in the other half does; the drag changed nothing
-      await isActive(page, "right");
-      assert.equal(await page.locator(".pane-slot").count(), 2);
-      assert.equal(await half(page, "left").locator(".pane-terminal").count(), 2, "a cancelled drag leaves the halves alone");
-      console.log("PASS a tab dragged out of its strip opens in a half, at herdr's layout, and in both when picked there");
+      console.log("PASS sidebar navigation draws herdr's tab layout in a half, and in both when picked there");
       // a press on the other half's sibling pane (herdr's split) makes that half active with the sibling
       // selected, in one step: the halves stay two
       const sibling = half(page, "left").locator(".pane-frame:not(.is-current) .pane-terminal");
@@ -460,7 +431,7 @@ export async function checkSplitView(browser: Browser, origin: string): Promise<
         const workspaceId = focused.panes.find((pane) => pane.pane_id === first)!.workspace_id;
         await tabCreate({ workspaceId, label: "swap focus event marker" });
         // This later roster event proves the preceding focus events were handled, without a sleep.
-        await page.locator(".tab-strip").getByRole("tab").filter({ hasText: "swap focus event marker" }).waitFor();
+        await page.locator(".agent-context").filter({ hasText: "swap focus event marker" }).waitFor();
         assert.ok(await head(beside).isVisible(), "following herdr focus leaves this browser on the rearranged tab");
       } finally {
         releaseSwap.resolve();
@@ -504,12 +475,15 @@ export async function checkSplitView(browser: Browser, origin: string): Promise<
       const tabId = snapshot.panes.find((pane) => pane.pane_id === first)!.tab_id;
       const carried = snapshot.layouts.find((layout) => layout.tab_id === tabId)!.focused_pane_id;
       const other = carried === first ? beside : first;
-      const row = page.locator("[draggable='true']", { hasText: "ovis-test-split-title-swap" }).first();
+      const workspaceId = snapshot.panes.find((pane) => pane.pane_id === first)!.workspace_id;
+      const row = page.locator(`.workspace-group[data-workspace="${workspaceId}"] .workspace-select`);
+      await row.scrollIntoViewIfNeeded();
       const rowBox = (await row.boundingBox())!;
       const title = (await head(other).boundingBox())!;
       await page.mouse.move(rowBox.x + 20, rowBox.y + rowBox.height / 2);
       await page.mouse.down();
       await page.mouse.move(rowBox.x + 28, rowBox.y + rowBox.height / 2 + 4, { steps: 2 });
+      await page.waitForFunction(() => document.querySelector(".split-drop")?.classList.contains("is-visible") === true);
       await page.mouse.move(title.x + 60, title.y + title.height / 2, { steps: 8 });
       await page.mouse.move(title.x + 61, title.y + title.height / 2);
       await page.waitForFunction(() => document.querySelector(".split-drop")?.getAttribute("data-side") !== null);
@@ -533,6 +507,7 @@ export async function checkSplitView(browser: Browser, origin: string): Promise<
       await page.setViewportSize({ width: 700, height: 800 });
       await page.waitForFunction(() => document.querySelectorAll(".pane-slot").length === 1);
       await page.locator(`.pane-frame[data-layout-pane="${shown}"]`).getByRole("log").waitFor();
+      assert.equal(await page.locator(".pane-slot-bar").count(), 0, "a narrow window's single shown pane has no half bar");
       // the narrow window keeps the workspace list in a drawer
       await page.getByRole("button", { name: "Open workspace list", exact: true }).click();
       await page.locator(`.pane-select[title^="${hidden} —"]`).click();
@@ -751,7 +726,7 @@ export async function checkSplitView(browser: Browser, origin: string): Promise<
       console.log("PASS a drop on a node that replaced the hovered one still opens the half");
     }
 
-    // 10. The phone's glass header follows the nested pane DOM, but never crosses a notice or tab row.
+    // 10. The phone's glass header follows the nested pane DOM, but never crosses a notice.
     {
       const [pane] = await panesFor("mobile-glass") as [string];
       const { page, errors } = await open([pane], "chat");
@@ -799,18 +774,8 @@ export async function checkSplitView(browser: Browser, origin: string): Promise<
       assert.notEqual(await page.locator("#split-css-fixture .pane-notice").evaluate((notice) => getComputedStyle(notice).display), "none",
         "the notice remains visible");
 
-      await page.locator("#split-css-fixture .pane-notice").evaluate((notice) => notice.remove());
-      await page.locator("#split-css-fixture .pane-slot").evaluate((slot) => {
-        const tabs = document.createElement("div");
-        tabs.className = "tab-strip";
-        slot.insertBefore(tabs, slot.firstElementChild);
-      });
-      const tabState = await glassState();
-      assert.equal(tabState.over, "", "a visible tab strip keeps the header in flow");
-      assert.notEqual(await page.locator("#split-css-fixture .tab-strip").evaluate((tabs) => getComputedStyle(tabs).display), "none",
-        "the tab strip remains visible");
       assert.deepEqual(errors, []);
-      console.log("PASS phone glass-header selectors follow pane-slot nesting without covering notices or tabs");
+      console.log("PASS phone glass-header selectors follow pane-slot nesting without covering notices");
     }
 
     // A tab moved to another workspace goes as its pane, under a new ID: the half that showed it
@@ -822,11 +787,11 @@ export async function checkSplitView(browser: Browser, origin: string): Promise<
       const shows = (side: string, pane: string) => page.waitForFunction(([which, id]) =>
         document.querySelector(`.pane-slot[data-side="${which}"] [data-layout-pane="${id}"]:not([inert])`) !== null, [side, pane] as const);
       const moveOut = async (side: string, to = "ovis-test-split-move-target"): Promise<string> => {
-        // a right press on the half's open tab opens its menu without making the half the active one
-        await half(page, side).locator('.tab-strip [role=tab][aria-selected="true"]').click({ button: "right" });
-        await page.getByRole("menuitem", { name: "Move to workspace…", exact: true }).click();
+        // A sidebar context menu acts on this half's pane without selecting the half.
+        const pane = await half(page, side).locator(".pane-frame.is-current").getAttribute("data-layout-pane");
+        await page.locator(`.agent-item[data-pane="${pane}"] .agent-select`).click({ button: "right" });
         const answered = page.waitForResponse((response) => response.request().method() === "POST" && new URL(response.url()).pathname.endsWith("/tab/move-to-workspace"));
-        await page.getByRole("menuitem", { name: to, exact: true }).click();
+        await page.getByRole("menuitem", { name: `Move to workspace: ${to}`, exact: true }).click();
         const response = await answered;
         assert.equal(response.status(), 200);
         return ((await response.json()) as TabMovedToWorkspace).pane_id;

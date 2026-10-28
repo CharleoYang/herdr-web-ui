@@ -581,18 +581,6 @@ try {
         await waitSelected(page, INFRA);
         await page.goForward();
         await waitSelected(page, DOCS);
-        // an item that opens a dialog on the sheet's address keeps the sheet's entry: the tab menu's
-        // Rename pane dialog stays up once the sheet's closing has settled, and Back closes it alone
-        await page.locator(".tab-strip-menu").tap();
-        await page.getByRole("button", { name: "Rename pane", exact: true }).tap();
-        const creation = page.getByRole("dialog", { name: "Rename pane", exact: true });
-        await creation.waitFor();
-        await page.waitForTimeout(150); // fixed wait: the Rename pane dialog may not close
-        assert.equal(await creation.isVisible(), true, "the Rename pane dialog stays up after the sheet's entry settles");
-        assert.equal(await page.evaluate(() => history.length), length + 1, "the dialog took the sheet's entry");
-        await page.goBack();
-        await creation.waitFor({ state: "detached" });
-        assert.equal(await selected(page), DOCS, "Back closed the dialog and left the pane alone");
         // every other dialog is a sheet on a phone too: the plan and the palette close on Back
         const API = panes.api;
         await page.locator(`.agents-sidebar .agent-item[data-pane="${API}"] .agent-select`).evaluate((node) => (node as HTMLElement).click());
@@ -621,7 +609,7 @@ try {
       } finally {
         await phone.close();
       }
-      console.log("PASS a phone's sheet, plan and palette close on Back without leaving their pane; Cancel and Rename pane leave no Back step behind");
+      console.log("PASS a phone's sheet, plan and palette close on Back without leaving their pane; Cancel leaves no Back step behind");
     } finally {
       await browser.close();
     }

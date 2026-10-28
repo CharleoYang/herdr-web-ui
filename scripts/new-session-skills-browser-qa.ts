@@ -44,14 +44,13 @@ async function openChat(page: Page, url: string): Promise<void> {
   await page.locator(".pane-frame.is-current .terminal-stack.is-chat").waitFor();
 }
 
-/** The New tab dialog on the pane's workspace: the composer's button with a mouse; on a phone, whose card has no row to spare for it, the tab's own menu. */
-async function openDialog(page: Page, via: "composer" | "tab-menu" = "composer") {
+/** The New tab dialog on the pane's workspace: the composer's button with a mouse; the palette on a phone. */
+async function openDialog(page: Page, via: "composer" | "palette" = "composer") {
   if (via === "composer") await page.locator(".pane-frame.is-current .composer-new-session").click();
   else {
     assert.equal(await page.locator(".pane-frame.is-current .composer-new-session").count(), 0, "a phone's card carries no new-tab button, even with the setting on");
-    await page.locator(".tab-strip-menu").tap();
-    // the menu is a sheet on a phone (RowMenu): its items are buttons there
-    await page.getByRole("button", { name: "New tab with agent…", exact: true }).tap();
+    await page.keyboard.press("ControlOrMeta+Shift+KeyK");
+    await page.getByRole("option", { name: /^New tab/ }).tap();
   }
   const dialog = page.getByRole("dialog", { name: /^New tab · checkout-api/ });
   await dialog.waitFor();
@@ -177,7 +176,7 @@ try {
         const errors: string[] = [];
         page.on("pageerror", (error) => { errors.push(error.message); console.error(error.stack); });
         await openChat(page, url);
-        const dialog = await openDialog(page, "tab-menu");
+        const dialog = await openDialog(page, "palette");
         await pickAgent(page, dialog, "Codex");
         const chips = dialog.locator(".new-session-skill-chip");
         await chips.first().waitFor();
@@ -405,7 +404,7 @@ try {
           const page = await context.newPage();
           page.setDefaultTimeout(10_000);
           await openChat(page, url);
-          const dialog = await openDialog(page, make === phone ? "tab-menu" : "composer");
+          const dialog = await openDialog(page, make === phone ? "palette" : "composer");
           await pickAgent(page, dialog, "Codex");
           await dialog.locator(".new-session-skill-chip").first().click();
           await dialog.getByLabel("First message").pressSequentially("the export branch");

@@ -128,23 +128,23 @@ try {
         const recorded = await record(page, "Rename tab", "Meta+Shift+KeyY");
         assert.equal((await stored(page))["rename-tab"], "y", recorded);
         await page.getByRole("button", { name: "Close settings", exact: true }).click();
-        const tabName = page.locator(".tab-strip-item.is-active .tab-strip-rename");
-        const tabLabel = (await page.locator('.tab-strip-item.is-active [role="tab"]').textContent()) ?? "";
+        const tabName = page.locator(".agent-tab-rename");
+        const tabLabel = (await page.locator('.agent-select[aria-current="true"] .agent-context').textContent()) ?? "";
         await page.keyboard.press("Meta+Shift+KeyY");
         await tabName.waitFor();
         assert.equal(await tabName.evaluate((input) => input === document.activeElement), true, "the name field has the focus");
         if (screenshotDir) await page.screenshot({ path: join(screenshotDir, "rename-tab-shortcut.png") });
         await page.keyboard.press("Escape");
         await tabName.waitFor({ state: "detached" });
-        assert.equal(await page.locator('.tab-strip-item.is-active [role="tab"]').textContent(), tabLabel, "Escape keeps the name");
+        assert.equal(await page.locator('.agent-select[aria-current="true"] .agent-context').textContent(), tabLabel, "Escape keeps the name");
         // the request is one-shot: leaving the pane and coming back does not open the field again
-        const openTab = () => document.querySelector<HTMLElement>('.tab-strip-item.is-active [role="tab"]')?.dataset["tabId"] ?? null;
+        const openTab = () => document.querySelector('.agent-select[aria-current="true"]')?.closest<HTMLElement>(".agent-item")?.dataset["pane"] ?? null;
         const firstTab = await page.evaluate(openTab);
         await page.keyboard.press("Meta+Shift+End");
-        await page.waitForFunction((before) => (document.querySelector<HTMLElement>('.tab-strip-item.is-active [role="tab"]')?.dataset["tabId"] ?? null) !== before, firstTab);
+        await page.waitForFunction((before) => (document.querySelector('.agent-select[aria-current="true"]')?.closest<HTMLElement>(".agent-item")?.dataset["pane"] ?? null) !== before, firstTab);
         await page.keyboard.press("Meta+Shift+ArrowUp");
-        await page.waitForFunction((before) => (document.querySelector<HTMLElement>('.tab-strip-item.is-active [role="tab"]')?.dataset["tabId"] ?? null) === before, firstTab);
-        assert.equal(await page.locator(".tab-strip-rename").count(), 0, "coming back to the pane does not reopen the name field");
+        await page.waitForFunction((before) => (document.querySelector('.agent-select[aria-current="true"]')?.closest<HTMLElement>(".agent-item")?.dataset["pane"] ?? null) === before, firstTab);
+        assert.equal(await page.locator(".agent-tab-rename").count(), 0, "coming back to the pane does not reopen the name field");
         await page.keyboard.press("Meta+Shift+KeyY");
         await tabName.waitFor();
         await page.keyboard.type("Renamed by shortcut");
@@ -152,7 +152,7 @@ try {
         await page.keyboard.press("Meta+Shift+KeyY");
         await page.keyboard.press("Enter");
         await tabName.waitFor({ state: "detached" });
-        assert.match((await page.locator('.tab-strip-item.is-active [role="tab"]').textContent()) ?? "", /Renamed by shortcut/, "Enter renames the tab");
+        assert.match((await page.locator('.agent-select[aria-current="true"] .agent-context').textContent()) ?? "", /Renamed by shortcut/, "Enter renames the tab");
         // the demo's authoritative snapshot carries the name, so herdr was sent the rename
         await page.waitForFunction(async () => (await (await fetch("/api/session")).json()).snapshot.tabs.some((tab: { label: string }) => tab.label === "Renamed by shortcut"));
         // the palette offers the same action

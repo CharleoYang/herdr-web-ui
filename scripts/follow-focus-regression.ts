@@ -29,7 +29,7 @@ export async function checkFollowHerdrFocus(page: Page, fixture: FollowFocusFixt
     }
   };
   const selectedPaneId = () => page.evaluate(() => JSON.parse(sessionStorage.getItem("ovis:selection") ?? "null")?.pane_id as string | undefined);
-  const shownTab = () => page.locator(".tab-strip").getByRole("tab", { selected: true }).textContent();
+  const shownTab = () => page.locator('.agents-sidebar .agent-select[aria-current="true"] .agent-context').textContent();
   const follow = async (on: boolean): Promise<void> => {
     // Settings may still be open when a check that stopped partway turns the setting back off
     if (!(await page.locator(".settings-dialog").isVisible())) await page.keyboard.press("ControlOrMeta+Shift+Comma");
@@ -44,7 +44,7 @@ export async function checkFollowHerdrFocus(page: Page, fixture: FollowFocusFixt
     "tab.create", { workspace_id: fixture.workspaceId, label, focus: true });
 
   // the tab herdr opened is listed here: its pane-focused frame, sent before that, has been handled
-  const listed = (label: string) => page.locator(".tab-strip").getByRole("tab").filter({ hasText: label }).first().waitFor();
+  const listed = (label: string) => page.locator(".agents-sidebar .agent-context").filter({ hasText: label }).first().waitFor();
 
   const before = await selectedPaneId();
   assert.ok(before, "a pane is selected before the check");

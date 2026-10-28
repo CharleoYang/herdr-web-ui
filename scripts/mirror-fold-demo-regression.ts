@@ -200,12 +200,11 @@ const rowsWhole = async (page: Page, label: string): Promise<Visible> => {
   assert.deepEqual(seen.cut, [], `${label}: rows cut off on the right ${JSON.stringify(seen)}`);
   return seen;
 };
-/** Picks `label` from the tab's menu: a bottom sheet of buttons on a phone, a popover of menu items on a desktop (RowMenu). */
+/** Picks `label` from the pane's menu: a bottom sheet on a phone, a popover on a desktop. */
 const choose = async (page: Page, label: string): Promise<void> => {
-  // a desktop's tab strip shows the selected tab's actions button under the pointer (ui-regression.ts)
-  await page.locator(".tab-strip").first().hover();
-  const button = page.locator(".tab-strip-item.is-active .tab-strip-menu").first();
-  await button.waitFor({ state: "visible" });
+  const button = page.locator(".pane-frame.is-current .pane-frame-menu");
+  // A desktop reveals the pane's ellipsis for keyboard focus; a phone keeps it visible.
+  await button.focus();
   await button.click();
   const item = page.locator('.row-sheet-item, [role="menuitem"], [role="menuitemcheckbox"]').filter({ hasText: new RegExp(`^\\s*${label}\\s*$`) });
   try { await item.waitFor({ timeout: 5_000 }); }
@@ -277,9 +276,9 @@ const hostScroll = (page: Page): Promise<{ top: number; left: number }> => page.
   const host = document.querySelector<HTMLElement>(".pane-frame.is-current .pane-terminal")!;
   return { top: host.scrollTop, left: host.scrollLeft };
 });
-/** The labels of the tab's ⋯ sheet on a phone, closed again with Escape. */
+/** The labels of the pane's ⋯ sheet on a phone, closed again with Escape. */
 const sheetItems = async (page: Page): Promise<string[]> => {
-  await page.locator(".tab-strip-item.is-active .tab-strip-menu").first().click();
+  await page.locator(".pane-frame.is-current .pane-frame-menu").click();
   await page.locator(".row-sheet").waitFor();
   const items = await page.locator(".row-sheet .row-sheet-item .row-sheet-label").allTextContents();
   await page.keyboard.press("Escape");

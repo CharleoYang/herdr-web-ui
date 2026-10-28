@@ -95,14 +95,14 @@ const chatButton = (page: Page) => page.locator(".view-switch button[title^='Cha
 const box = (page: Page) => page.locator(".composer-text");
 
 async function select(page: Page, pane: string): Promise<void> {
-  await page.locator(`.pane-select[title^="${pane} —"]`).click();
-  await page.locator(`.agent-item[data-pane="${pane}"].is-selected`).waitFor();
+  await page.locator(`.agent-item[data-pane="${pane}"] .agent-select`).click();
+  await page.locator(`.agent-item[data-pane="${pane}"] .agent-select[aria-current="true"]`).waitFor();
 }
 
-/** The selected pane's actions: a lone pane keeps them in its tab's ⋯, shown once the pointer is over the strip. */
+/** A lone pane's actions are available through its canvas context menu. */
 async function openPaneMenu(page: Page): Promise<void> {
-  await page.locator(".tab-strip").hover();
-  await page.locator(".tab-strip-item.is-active .tab-strip-menu").click();
+  await page.locator(".pane-frame.is-current").click({ button: "right", position: { x: 8, y: 8 } });
+  await page.getByRole("menu", { name: /^Pane actions for / }).waitFor();
 }
 
 async function openRecovery(page: Page) {

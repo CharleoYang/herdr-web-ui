@@ -54,10 +54,10 @@ async function pinchAcross(context: BrowserContext, page: Page, pane: string, du
   await cdp.detach();
 }
 
-/** Opens the tab's other pane from its menu, by script: the fingers of a pinch may still be down. */
+/** Opens the tab's other pane from the sidebar, by script: pinch fingers may still be down. */
 async function showOther(page: Page, pane: string): Promise<void> {
-  await page.locator(".tab-strip-menu").evaluate((node) => (node as HTMLElement).click());
-  await page.locator('.row-sheet-item:not([aria-current="true"])').first().evaluate((node) => (node as HTMLElement).click());
+  await page.locator('.drawer-toggle[aria-expanded="false"]').evaluate((node) => (node as HTMLElement).click());
+  await page.locator(`.agent-item[data-pane="${pane}"] .agent-select`).evaluate((node) => (node as HTMLElement).click());
   await page.locator(`.pane-frame:not(.is-hidden)[data-layout-pane="${pane}"]`).waitFor();
 }
 
@@ -118,7 +118,7 @@ try {
       await page.waitForTimeout(1_000); // fixed wait: no resize frame may be sent for the hidden pane
       assert.deepEqual(await frames(page, shell), [], "the hidden pane sends no resize");
 
-      // turned back (a short screen draws no strip for a lone tab), the tab's menu leads to the shell
+      // Turned back upright, the sidebar still leads to the hidden shell.
       await page.setViewportSize({ width: 390, height: 844 });
       await page.waitForFunction((id) => (window as unknown as Recorded).sent.filter((frame) => frame.pane_id === id && frame.type === "resize").at(-1)?.cols! < 60, sibling, { timeout: 10_000 });
       await page.waitForTimeout(1_000); // fixed wait: no resize frame may be sent for the still hidden pane
@@ -134,10 +134,9 @@ try {
 
       // shown again, the shell fits the phone and takes the pty, at the shown pane's grid
       await sent(page);
-      await page.locator(".tab-strip-menu:visible").tap();
-      const sheet = page.getByRole("dialog");
-      await sheet.waitFor();
-      await sheet.locator('.row-sheet-item:not([aria-current="true"])').first().tap();
+      await page.locator('.drawer-toggle[aria-expanded="false"]').tap();
+      await page.locator('.agent-section-toggle[aria-expanded="false"]').tap();
+      await page.locator(`.agent-item[data-pane="${shell}"] .agent-select`).tap();
       await page.locator(`.pane-frame:not(.is-hidden)[data-layout-pane="${shell}"]`).waitFor();
       await page.waitForFunction((id) => (window as unknown as Recorded).sent.some((frame) => frame.pane_id === id && frame.type === "resize"), shell, { timeout: 10_000 });
       const taken = (await lastOf(page, shell, "resize"))!;
