@@ -317,6 +317,13 @@ interface ConversationAnswer {
   body: ConversationResponse;
   /** the body's rough size: what the count cap alone cannot bound */
   bytes: number;
+  /** the pane the answer belongs to: a pane the chat has open keeps every page size it read */
+  pane: string;
+}
+
+/** The pane alone, without the page query: one pane can hold several sizes and cursors at once. */
+function paneKey(paneId: string, machineId: string): string {
+  return `${machineId}\u0000${paneId}`;
 }
 const conversationAnswers = new Map<string, ConversationAnswer>();
 export const CONVERSATION_ANSWERS_KEPT = 24;
@@ -328,6 +335,25 @@ export const CONVERSATION_ANSWER_MAX_BYTES = 8 * 1024 * 1024;
 const pinnedConversations = new Set<string>();
 
 /**
+ * The UTF-8 length of a body's JSON, counted without encoding a copy of it. `String.length` counts
+ * UTF-16 code units, which under-reports CJK and emoji by up to three times; a page's cap is bytes.
+ */
+function utf8Length(text: string): number {
+  let bytes = 0;
+  for (let index = 0; index < text.length; index++) {
+    const code = text.charCodeAt(index);
+    if (code < 0x80) bytes += 1;
+    else if (code < 0x800) bytes += 2;
+    // a well-formed pair is four bytes as one character; a lone surrogate is escaped by JSON.stringify
+    else if (code >= 0xd800 && code <= 0xdbff) {
+      bytes += 4;
+      index += 1;
+    } else bytes += 3;
+  }
+  return bytes;
+}
+
+/**
  * The body a cache entry carries: the server's own count when it sends one for the body as it is,
  * else the JSON we parsed. A compressed answer's length counts the bytes on the wire, not these.
  */
@@ -335,12 +361,14 @@ export function conversationAnswerBytes(body: ConversationResponse, contentLengt
   const declared = Number(contentLength);
   const identity = contentEncoding === null || contentEncoding.trim().toLowerCase() === "identity";
   if (identity && Number.isFinite(declared) && declared > 0) return declared;
-  return JSON.stringify(body)?.length ?? 0;
+  return utf8Length(JSON.stringify(body) ?? "");
 }
 
 /**
  * Drops the least recently used answers until the cache is back inside both caps. An answer the
- * chat still has a pane open for is dropped only once no unpinned one is left.
+ * chat still has a pane open for is dropped only once no unpinned one is left. The pane, not its
+ * URL, is what is pinned: the chat reads its newest page at the page size the setting names, so a
+ * pin taken on the URL alone would never match the entry the open pane actually holds.
  */
 function trimConversationAnswers(keep: string): void {
   let total = 0;
@@ -348,9 +376,9 @@ function trimConversationAnswers(keep: string): void {
   const over = (): boolean => conversationAnswers.size > CONVERSATION_ANSWERS_KEPT || total > CONVERSATION_ANSWERS_BYTES;
   while (over()) {
     let victim: string | undefined;
-    for (const url of conversationAnswers.keys()) {
+    for (const [url, answer] of conversationAnswers) {
       if (url === keep) continue;
-      if (!pinnedConversations.has(url)) { victim = url; break; }
+      if (!pinnedConversations.has(answer.pane)) { victim = url; break; }
       victim ??= url;
     }
     if (victim === undefined) break;
@@ -359,13 +387,13 @@ function trimConversationAnswers(keep: string): void {
   }
 }
 
-/** The chat's open pane keeps its page: `pin`ed answers are evicted last. */
+/** The chat's open pane keeps its pages: `pin`ed panes are evicted last. */
 export function pinPaneConversation(paneId: string, machineId = "local"): void {
-  pinnedConversations.add(conversationUrl(paneId, machineId, {}));
+  pinnedConversations.add(paneKey(paneId, machineId));
 }
 
 export function unpinPaneConversation(paneId: string, machineId = "local"): void {
-  pinnedConversations.delete(conversationUrl(paneId, machineId, {}));
+  pinnedConversations.delete(paneKey(paneId, machineId));
 }
 
 function conversationUrl(paneId: string, machineId: string, page: ConversationPageQuery): string {
@@ -415,7 +443,7 @@ export async function fetchPaneConversation(paneId: string, machineId = "local",
   if (etag !== null) {
     const bytes = conversationAnswerBytes(body, response.headers.get("content-length"), response.headers.get("content-encoding"));
     if (bytes <= CONVERSATION_ANSWER_MAX_BYTES) {
-      conversationAnswers.set(url, { etag, body, bytes });
+      conversationAnswers.set(url, { etag, body, bytes, pane: paneKey(paneId, machineId) });
       trimConversationAnswers(url);
     }
   }
