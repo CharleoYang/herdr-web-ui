@@ -511,7 +511,7 @@ export function createSubmitText({ options, lastTyped, attachments, terminalAtta
           };
           try {
             const typing = typeWithSkills(text, skills, allowed, writes, revalidate);
-            bindCommandProcess(paneId, command, seen);
+            bindCommandProcess(paneId, command, seen, pane);
             const { attached, missed, prompt } = await typing;
             // fixed wait: a TUI busy with the typing takes an Enter in the same chunk for a newline (SUBMIT_DELAY_MS)
             await Bun.sleep(options.submitDelayMs ?? SUBMIT_DELAY_MS);
@@ -536,7 +536,7 @@ export function createSubmitText({ options, lastTyped, attachments, terminalAtta
           const sentAt = Date.now();
           const delivery = agentPrompt(paneId, closeMention(sent), undefined, mayType);
           // which agent process got it, read alongside the delivery for the outcome's row, never before it
-          bindCommandProcess(paneId, command, seen);
+          bindCommandProcess(paneId, command, seen, pane);
           await delivery;
           noteSubmitted(paneId, sent, recorded(command), sentAt);
           if (command) watch?.commit(command, [{ pasted: closeMention(sent) }], []);

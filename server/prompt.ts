@@ -9,6 +9,7 @@ import { commandInvocations, commandOutcome, CommandReservations, dialogSettling
 import { codexTranscriptPath, paneCodexHome, unansweredCodexQuestions } from "./codex.ts";
 import { HerdrError, paneProcessInfo, paneRead, paneScrollInfo, paneSendKeys, paneSendText, type ProcessInfo } from "./herdr/client.ts";
 import { piTranscriptPath } from "./pi.ts";
+import { heldOmoProcess } from "./omo.ts";
 import { OmoAskReader } from "./omo-ask.ts";
 import { badRequest, errorResponse, jsonResponse, setRequestRoute } from "./http.ts";
 import { claudePlanFile } from "./claude-plan.ts";
@@ -53,7 +54,7 @@ type PaneCommandSend = CommandSend & {
     discovering: boolean;
     identity: string;
     /** The agent process the send went to (bindCommandProcess); null when it could not be told, none when not bound. */
-    process?: { readonly pid: number; readonly started: number | null } | null;
+    process?: { readonly pid: number; readonly started: number | null; readonly held?: true } | null;
     /**
      * No foreground process matched the agent when binding (native Windows lists only the shell; an executable
      * named otherwise than its kind), or the read failed: nothing can show a replacement, so the session the same
@@ -88,14 +89,26 @@ const outcomeIdentity = (pane: HerdrPane): string => JSON.stringify([pane.termin
 
 /**
  * The agent process in front (agentProcessInFront, as a pending send is bound), keyed by its pid and, on Linux, its
- * start time; never the process-group id. With `bound`, that process only, while herdr still lists it as one of the
- * agent's: Windows hands a finished agent's pid to the next process at once, and that one is no agent.
+ * start time; never the process-group id. `held`: the OmO process holding a session (heldOmoProcess), which an
+ * argv-silent custom OmO is known by alone, so a send is not bound to its bundled SDK child; a process bound so is
+ * marked `held` and keyed by its start on macOS too (the kernel's record, no `ps`). With `bound`, that process only,
+ * while herdr still lists it as one of the agent's, or it is the OmO it was bound as: a holder counts only while its
+ * start is readable (never on Windows, which hands a finished agent's pid to the next process at once), and a later
+ * start under that pid is another process (checkBoundProcess).
  */
-function outcomeProcess(info: ProcessInfo | undefined, agent: string, bound?: number): { pid: number; started: number | null } | null {
-  const running = agentProcessInFront(info, agent, bound);
-  return running && (bound === undefined || running.pid === bound && agentProcesses([running], agent).length > 0)
-    ? { pid: running.pid, started: process.platform === "linux" ? processStartedAt(running.pid) : null } : null;
+function outcomeProcess(info: ProcessInfo | undefined, agent: string, bound?: number, held?: number | null):
+  { pid: number; started: number | null; held?: true } | null {
+  const running = agentProcessInFront(info, agent, bound, held);
+  if (!running) return null;
+  const heldStart = running.pid === held ? processStartedAt(running.pid) : null;
+  if (bound !== undefined && (running.pid !== bound || heldStart === null && agentProcesses([running], agent).length === 0)) return null;
+  return heldStart !== null ? { pid: running.pid, started: heldStart, held: true }
+    : { pid: running.pid, started: process.platform === "linux" ? processStartedAt(running.pid) : null };
 }
+
+/** The OmO process holding a session among `info`'s, for an OmO send only; read without holding the event loop. */
+const heldOmoOf = async (pane: HerdrPane | null | undefined, agent: string, info: ProcessInfo | undefined): Promise<number | null> =>
+  pane && agent === "omo" ? await heldOmoProcess(pane, info?.foreground_processes ?? []).catch(() => null) : null;
 
 /** How long a poll waits for a send's process binding before it judges that send without one, this time. */
 const BINDING_WAIT_MS = 250;
@@ -121,9 +134,10 @@ const sameProcess = (a: { pid: number; started: number | null }, b: { pid: numbe
  * `seen`: herdr's foreground answer read before this send, which is the process it went to. Without one, the read
  * starts alongside delivery and can answer after a replacement: a process that started at or after the send never
  * received it, so the send is left unidentified rather than bound to it. Outside Linux and macOS no start time is
- * known and the answer is taken as the send-time one.
+ * known and the answer is taken as the send-time one. `pane`: the pane the send went to, which places an OmO's
+ * session holder (heldOmoProcess).
  */
-export function bindCommandProcess(paneId: string, command: PaneCommandSend | undefined, seen?: ProcessInfo): void {
+export function bindCommandProcess(paneId: string, command: PaneCommandSend | undefined, seen?: ProcessInfo, pane?: HerdrPane | null): void {
   const visibility = command?.visibility;
   if (!command || !visibility || visibility.process !== undefined || visibility.binding) return;
   const sentAt = Date.now();
@@ -131,11 +145,12 @@ export function bindCommandProcess(paneId: string, command: PaneCommandSend | un
     if (seen) {
       // the /proc start-time read waits until delivery has its turn
       await Promise.resolve();
-      visibility.process = outcomeProcess(seen, command.agent);
+      visibility.process = outcomeProcess(seen, command.agent, undefined, await heldOmoOf(pane, command.agent, seen));
       if (!visibility.process) visibility.unmatched = true;
       return;
     }
-    const found = outcomeProcess(await paneProcessInfo(paneId).catch(() => undefined), command.agent);
+    const info = await paneProcessInfo(paneId).catch(() => undefined);
+    const found = outcomeProcess(info, command.agent, undefined, await heldOmoOf(pane, command.agent, info));
     const startedBy = found ? await processStartUpperBoundAsync(found.pid) : null;
     visibility.process = found && (startedBy === null || startedBy < sentAt) ? found : null;
     if (!found) visibility.unmatched = true;
@@ -146,7 +161,8 @@ export function bindCommandProcess(paneId: string, command: PaneCommandSend | un
 function checkBoundProcess(visibility: NonNullable<PaneCommandSend["visibility"]>, agent: string, processes: ProcessInfo):
   { pid: number; started: number | null } | null {
   const original = visibility.process!;
-  const current = outcomeProcess(processes, agent, original.pid);
+  // bound as the OmO holding the session, it is still that one: no holder is read again on a poll
+  const current = outcomeProcess(processes, agent, original.pid, original.held ? original.pid : null);
   if (current) {
     visibility.misses = 0;
     if (original.started !== null && current.started !== null && original.started !== current.started) visibility.replaced = true;

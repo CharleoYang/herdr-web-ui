@@ -485,7 +485,7 @@ export function createPendingDelivery({ options, clients, attachments, sight, se
       const opencode = await openCodeSkillsToType(context.pane, prepareCommandSend(context.pane, text, context.screen), text, context.screen, options.openCodeStateDir);
       let command = opencode.sent;
       // the process this message goes to, from the identity read above: recording reads nothing more before the write
-      bindCommandProcess(paneId, command, context.processes);
+      bindCommandProcess(paneId, command, context.processes, context.pane);
       const skills = opencode.skills;
       let attached: string[] = [];
       let prompt: PromptPiece[] = [{ pasted: closeMention(sent) }];
