@@ -541,8 +541,58 @@ async function backgroundJobTranscript(path: string, configDir: string): Promise
   return await isFile(job) ? job : null;
 }
 
+/** How much of a transcript's start is read for the session it was branched from: a branch's first record carries it after the message. */
+const BRANCH_HEAD_BYTES = 1024 * 1024;
+/** Branches of branches followed back towards the session Herdr reported. */
+const MAX_BRANCH_DEPTH = 8;
+const MAX_BRANCH_PARENTS = 256;
+/** Transcript file → the session its copied records came from; a transcript's start never changes once written. */
+const branchParents = new Map<string, { dev: number; ino: number; parent: string | null }>();
+
+/**
+ * The session `/branch` copied this transcript from: Claude Code (2.1.311) writes the conversation so far into a
+ * new transcript in the same project, each copied record carrying `forkedFrom.sessionId`, and goes on in it. Null
+ * when its first conversation record names no such session, or when that record is not within BRANCH_HEAD_BYTES
+ * (no guess on a cut record). Non-blocking and no symlinks, as readSmallFile.
+ */
+async function branchedFrom(path: string): Promise<string | null> {
+  let file;
+  try { file = await open(path, constants.O_RDONLY | constants.O_NONBLOCK | constants.O_NOFOLLOW); } catch { return null; }
+  try {
+    const info = await file.stat();
+    if (!info.isFile()) return null;
+    const known = branchParents.get(path);
+    if (known && known.dev === info.dev && known.ino === info.ino) return known.parent;
+    const bytes = Buffer.alloc(Math.min(info.size, BRANCH_HEAD_BYTES));
+    let length = 0;
+    while (length < bytes.length) {
+      const { bytesRead } = await file.read(bytes, length, bytes.length - length, length);
+      if (bytesRead === 0) break;
+      length += bytesRead;
+    }
+    const text = bytes.subarray(0, length).toString("utf8");
+    // only whole lines: the last one may still be being written, or cut by the cap
+    for (const line of text.slice(0, text.lastIndexOf("\n") + 1).split("\n")) {
+      if (!line.includes('"type"')) continue;
+      let entry: { type?: unknown; forkedFrom?: { sessionId?: unknown } | null };
+      try { entry = JSON.parse(line); } catch { return null; }
+      const parent = entry.forkedFrom?.sessionId;
+      const answer = typeof parent === "string" && SESSION_ID.test(parent) ? parent
+        : entry.type === "user" || entry.type === "assistant" ? null : undefined;
+      if (answer === undefined) continue;
+      if (branchParents.size >= MAX_BRANCH_PARENTS) branchParents.delete(branchParents.keys().next().value!);
+      branchParents.set(path, { dev: info.dev, ino: info.ino, parent: answer });
+      return answer;
+    }
+    return null;
+  } catch {
+    return null;
+  } finally { await file.close(); }
+}
+
 export function forgetClaudeSessions(): void {
   found.clear();
+  branchParents.clear();
   attachedJobs.clear();
   processDirs.clear();
   launchSources.clear();
@@ -1020,8 +1070,16 @@ export async function claudeForegroundSession(
  * in turn, else in whichever project holds it. Null when no project does (a session that has not
  * written its first message yet). Such a session is scanned again on every poll, so the scan
  * stays off the event loop.
+ *
+ * `live` is the session the pane's Claude process names in its own PID record. `/branch` moves the
+ * process to a copy of the conversation, and Herdr's report can stay on the session it was copied
+ * from (#2020): the live session's transcript is taken when its records say they were branched
+ * from this one (or from a branch of it) in the same project. A live session that is no branch of
+ * it, as after a `/resume` back, changes nothing.
  */
-export async function claudeTranscriptFile(home: string, session: string, cwds: readonly (string | null | undefined)[], configDir = join(home, ".claude")): Promise<string | null> {
+export async function claudeTranscriptFile(
+  home: string, session: string, cwds: readonly (string | null | undefined)[], configDir = join(home, ".claude"), live: string | null = null,
+): Promise<string | null> {
   const projects = join(configDir, "projects");
   const locate = async (id: string): Promise<string | null> => {
     const file = `${id}.jsonl`;
@@ -1049,19 +1107,40 @@ export async function claudeTranscriptFile(home: string, session: string, cwds: 
     return null;
   };
 
-  const seen = new Set<string>([session]);
-  let path = await locate(session);
-  while (path !== null) {
-    const next = await continuedInSession(path);
-    if (next === null || seen.has(next)) return path;
-    seen.add(next);
-    // a continuation whose file is not there keeps the transcript that named it, unless a
-    // /resume of a background session names that job's own transcript
-    const nextPath = await locate(next) ?? await backgroundJobTranscript(path, configDir);
-    if (nextPath === null) return path;
-    path = nextPath;
+  const follow = async (start: string, seen: Set<string>): Promise<string | null> => {
+    seen.add(start);
+    let path = await locate(start);
+    while (path !== null) {
+      const next = await continuedInSession(path);
+      if (next === null || seen.has(next)) return path;
+      seen.add(next);
+      // a continuation whose file is not there keeps the transcript that named it, unless a
+      // /resume of a background session names that job's own transcript
+      const nextPath = await locate(next) ?? await backgroundJobTranscript(path, configDir);
+      if (nextPath === null) return path;
+      path = nextPath;
+    }
+    return null;
+  };
+
+  const seen = new Set<string>();
+  const path = await follow(session, seen);
+  if (path === null || live === null || !SESSION_ID.test(live) || seen.has(live)) return path;
+  // a branch stays in its project: only that folder is looked in, and what cannot be read there is no evidence of one
+  const inProject = async (id: string): Promise<string | null> => {
+    const candidate = join(dirname(path), `${id}.jsonl`);
+    try { return await isFile(candidate) ? candidate : null; } catch { return null; }
+  };
+  let branch = await inProject(live);
+  for (let depth = 0; branch !== null && depth < MAX_BRANCH_DEPTH; depth++) {
+    const parent = await branchedFrom(branch);
+    if (parent === null) return path;
+    if (seen.has(parent)) {
+      try { return await follow(live, seen) ?? path; } catch { return path; }
+    }
+    branch = await inProject(parent);
   }
-  return null;
+  return path;
 }
 
 /**

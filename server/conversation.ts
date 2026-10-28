@@ -992,15 +992,21 @@ async function claudeTranscriptPath(paneId: string, cwds: readonly (string | nul
   const configDir = processDir || defaultClaudeConfigDir(home);
   const attach = only ? await claudeAttachSession(configDir, only.pid, only.argv) : null;
   if (only) onProcess?.(only.pid, attach !== null);
+  // the session the process's own PID record names, also beside the hook's: a /branch can leave the hook's behind (#2020);
+  // beside a reported session, a record that cannot be read only leaves that session as it was
+  const reported = typeof session === "string" && SESSION_ID.test(session);
+  const live = attach === null && only
+    ? await (reported ? claudeProcessSession(home, only.pid, configDir).catch(() => null) : claudeProcessSession(home, only.pid, configDir))
+    : null;
   if (attach !== null) {
     // only the job's state names what the attach shows: a session an earlier Claude in this pane
     // reported through the hook can still be herdr's, and a job with none (a shell command) keeps the terminal
     session = attach.session;
-  } else if ((typeof session !== "string" || !SESSION_ID.test(session)) && only) {
-    session = await claudeProcessSession(home, only.pid, configDir);
+  } else if (!reported) {
+    session = live;
   }
   if (typeof session !== "string" || !SESSION_ID.test(session)) throw new ConversationUnavailable("no_session_id");
-  const path = await claudeTranscriptFile(home, session, cwds, configDir);
+  const path = await claudeTranscriptFile(home, session, cwds, configDir, live);
   // Claude writes the file with its first message: until then the session it reports holds nothing
   if (!path) throw new ConversationNotStarted(session, "claude-transcript");
   return path;

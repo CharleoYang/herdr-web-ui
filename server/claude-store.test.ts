@@ -695,6 +695,83 @@ describe("claudeTranscriptFile", () => {
     });
   });
 
+  describe("a /branch (#2020)", () => {
+    const BRANCH = "09512ed9-5df9-4105-954e-6597a3119b75";
+    const DEEPER = "55555555-5555-4555-8555-555555555555";
+    const OTHER = "66666666-6666-4666-8666-666666666666";
+    /** What Claude Code 2.1.311 writes for /branch: the conversation so far, each record carrying the session it came from, then the new turns. */
+    const branched = (folder: string, id: string, from: string | null, prompt = "Reply with exactly the word ALPHA"): string => {
+      const path = join(folder, `${id}.jsonl`);
+      const forkedFrom = from === null ? {} : { forkedFrom: { sessionId: from, messageUuid: "e92def5e-231f-4b62-9766-8c9c44012d9b" } };
+      writeFileSync(path, [
+        { parentUuid: null, type: "user", message: { role: "user", content: prompt }, uuid: "e92def5e-231f-4b62-9766-8c9c44012d9b", sessionId: id, ...forkedFrom },
+        { type: "assistant", message: { content: [{ type: "text", text: "ALPHA" }] }, sessionId: id, ...forkedFrom },
+        { type: "system", subtype: "local_command", content: "<local-command-stdout>Branched conversation.</local-command-stdout>", sessionId: id },
+        { type: "user", message: { content: "Reply with exactly the word BRAVO" }, sessionId: id },
+      ].map((entry) => JSON.stringify(entry)).join("\n") + "\n");
+      return path;
+    };
+    const setup = () => {
+      const { home: dir, projects } = home();
+      const folder = join(projects, claudeProjectDir("/w/project"));
+      mkdirSync(folder, { recursive: true });
+      const original = branched(folder, SESSION, null);
+      return { dir, projects, folder, original };
+    };
+
+    it("takes the branch the process's PID record names over the session it was copied from (regression: fails on main)", async () => {
+      const { dir, folder } = setup();
+      const branch = branched(folder, BRANCH, SESSION);
+      expect(await claudeTranscriptFile(dir, SESSION, ["/w/project"], join(dir, ".claude"), BRANCH)).toBe(branch);
+      // a branch of that branch, as a second /branch writes it
+      const deeper = branched(folder, DEEPER, BRANCH);
+      expect(await claudeTranscriptFile(dir, SESSION, ["/w/project"], join(dir, ".claude"), DEEPER)).toBe(deeper);
+    });
+
+    it("keeps the reported session when the live one is no branch of it (control)", async () => {
+      const { dir, projects, folder, original } = setup();
+      const store = join(dir, ".claude");
+      // the same session, as after /resume back to it; or none known
+      expect(await claudeTranscriptFile(dir, SESSION, ["/w/project"], store, SESSION)).toBe(original);
+      expect(await claudeTranscriptFile(dir, SESSION, ["/w/project"], store, null)).toBe(original);
+      // a session that was never branched, one branched from another session, and a branch in another project
+      branched(folder, OTHER, null);
+      expect(await claudeTranscriptFile(dir, SESSION, ["/w/project"], store, OTHER)).toBe(original);
+      branched(folder, BRANCH, OTHER);
+      expect(await claudeTranscriptFile(dir, SESSION, ["/w/project"], store, BRANCH)).toBe(original);
+      mkdirSync(join(projects, "-elsewhere"));
+      branched(join(projects, "-elsewhere"), DEEPER, SESSION);
+      expect(await claudeTranscriptFile(dir, SESSION, ["/w/project"], store, DEEPER)).toBe(original);
+      // a live session with no transcript yet
+      expect(await claudeTranscriptFile(dir, SESSION, ["/w/project"], store, "77777777-7777-4777-8777-777777777777")).toBe(original);
+    });
+
+    it.skipIf(process.platform === "win32" || process.getuid?.() === 0)("keeps the reported transcript when an unreadable project sits beside a live session with no file (regression)", async () => {
+      const { dir, projects, original } = setup();
+      const locked = join(projects, "-locked");
+      mkdirSync(locked);
+      chmodSync(locked, 0o000);
+      try {
+        expect(await claudeTranscriptFile(dir, SESSION, ["/w/project"], join(dir, ".claude"), "77777777-7777-4777-8777-777777777777")).toBe(original);
+      } finally { chmodSync(locked, 0o700); }
+    });
+
+    it("follows no branch whose first record is not all written, or not within the bytes it reads (control)", async () => {
+      const { dir, folder, original } = setup();
+      const store = join(dir, ".claude");
+      const branch = join(folder, `${BRANCH}.jsonl`);
+      const record = JSON.stringify({ type: "user", message: { content: "Prompt" }, sessionId: BRANCH, forkedFrom: { sessionId: SESSION } });
+      writeFileSync(branch, record);
+      expect(await claudeTranscriptFile(dir, SESSION, ["/w/project"], store, BRANCH)).toBe(original);
+      // a first prompt larger than the read: its forkedFrom comes after the message
+      branched(folder, BRANCH, SESSION, "x".repeat(1024 * 1024 + 1));
+      expect(await claudeTranscriptFile(dir, SESSION, ["/w/project"], store, BRANCH)).toBe(original);
+      // once the line is whole, it is followed
+      writeFileSync(branch, `${record}\n`);
+      expect(await claudeTranscriptFile(dir, SESSION, ["/w/project"], store, BRANCH)).toBe(branch);
+    });
+  });
+
   it.skipIf(process.platform === "win32" || process.getuid?.() === 0)("returns an unreadable transcript for its reader to report", async () => {
     const { home: dir, projects } = home();
     const folder = join(projects, claudeProjectDir("/w/project"));
