@@ -348,6 +348,30 @@ describe("the machine events", () => {
     }
   });
 
+  test("tell a PC's relayed snapshot without the token values the rows hide, as the roster (#2160)", async () => {
+    const path = configFile(`[ui.sidebar.agents]\nrows = [[{ token = "$quota", rules = [{ starts_with = "off", hide = true }] }, "$eta"]]`);
+    const config = new HerdrSidebarConfig(path, 10);
+    const snapshot = machineWith([{ pane_id: "w1:p1", agent: "claude", tokens: { quota: "off · private", eta: "soon" } }]).snapshot!;
+    const relayed: MachineEvent = { type: "machine-message", machine_id: "pc1", message: { type: "snapshot", snapshot } };
+    const manager = { subscribe: (listener: (event: MachineEvent) => void) => { listener({ type: "machines", machines: [] }); listener(relayed); return () => undefined; } } as unknown as MachineManager;
+    const abort = new AbortController();
+    const response = await handleMachineRequest(new Request("http://127.0.0.1:7317/api/machines/events", { signal: abort.signal }), manager, undefined, undefined, true, config);
+    const reader = response.body!.getReader();
+    let text = "";
+    try {
+      while (!text.includes('"machine-message"')) text += new TextDecoder().decode((await reader.read()).value);
+      const frame = text.split("\n\n").find((part) => part.includes('"machine-message"'))!;
+      const told = JSON.parse(frame.slice("data: ".length)) as MachineEvent;
+      expect(told.type === "machine-message" && told.message.type === "snapshot" ? told.message.snapshot.panes[0]!.tokens : null).toEqual({ eta: "soon" });
+      expect(text).not.toContain("off · private");
+      // the manager's snapshot is left as it was
+      expect(snapshot.panes[0]!.tokens).toEqual({ quota: "off · private", eta: "soon" });
+    } finally {
+      abort.abort();
+      await reader.cancel().catch(() => undefined);
+    }
+  });
+
   test("never let a browser draw a value the rules hide, streamed, polled or after a reconnect, nor tell it their operands", async () => {
     const path = configFile(`[ui.sidebar.agents]\nrows = [[{ token = "$quota", rules = [{ equals = "private-literal", hide = true }, { starts_with = "off", hide = true }] }, { token = "$eta", rules = [{ equals = "soon", hide = true }] }, "$eta"]]`);
     const config = new HerdrSidebarConfig(path, 10);

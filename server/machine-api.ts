@@ -1,13 +1,13 @@
 import type { DevicePairedEvent, Machine, MachineEvent, MachineRoster, SetupAction, SetupRequest } from "../shared/machines.ts";
 import type { AgentRowTokens } from "../shared/pane-tokens.ts";
 import type { SharedPreferences } from "../shared/preferences.ts";
-import type { PanePromptResponse } from "../shared/protocol.ts";
+import type { PanePromptResponse, SessionSnapshot } from "../shared/protocol.ts";
 import type { SeenFinish } from "../shared/seen.ts";
 import { MachineManager } from "./machines.ts";
 import { canSendSecret, sameOrigin } from "./machine-security.ts";
 import { isJsonObject, jsonResponse, setRequestRoute } from "./http.ts";
 import { crossSiteFileRead } from "./file-view.ts";
-import { decidedRowTokens, reportedTokenValues, withoutHiddenTokens } from "./herdr-sidebar.ts";
+import { decidedRowTokens, reportedTokenValues, snapshotWithoutHiddenTokens, withoutHiddenTokens } from "./herdr-sidebar.ts";
 import { parseJson, readCapped, REMOTE_LIMITS, RemoteResponseInvalid, RemoteResponseTooLarge } from "./remote-json.ts";
 
 const fail = (code: string, message: string, status: number) => jsonResponse({ error: { code, message } }, status);
@@ -137,8 +137,12 @@ export async function handleMachineRequest(request: Request, manager: MachineMan
             send(`${frame}data: ${JSON.stringify({ type: "machines", machines: shown } satisfies MachineEvent)}\n\n`);
           };
           stop = manager.subscribe((event) => {
-            if (event.type === "machines") sendRoster(event.machines);
-            else send(`data: ${JSON.stringify(event)}\n\n`);
+            if (event.type === "machines") { sendRoster(event.machines); return; }
+            // a PC's own snapshot, relayed as it came: told as the roster is, without what the rows hide
+            const told = event.type === "machine-message" && event.message.type === "snapshot"
+              ? { ...event, message: { ...event.message, snapshot: snapshotWithoutHiddenTokens(rows, event.message.snapshot) } }
+              : event;
+            send(`data: ${JSON.stringify(told)}\n\n`);
           });
           // the shared preferences ride the same stream, one connection per browser; the document
           // opens it, so a page that reconnects (or whose GET lost a race) holds the latest
@@ -258,6 +262,13 @@ export async function handleMachineRequest(request: Request, manager: MachineMan
           }
           if (answer.outcomes) answer.outcomes = answer.outcomes.map(({ preview: _preview, result_text: _resultText, ...outcome }) => outcome);
           body = new TextEncoder().encode(JSON.stringify(answer));
+        }
+        // a PC's session as the roster tells it, without the token values this server's rows hide (#2160)
+        // any method the PC answers with a body (its route takes them all); a HEAD's is empty
+        if (path === "session" && response.ok && body && body.byteLength > 0) {
+          const answer = parseJson<{ snapshot?: SessionSnapshot }>(body);
+          const shown = answer.snapshot && snapshotWithoutHiddenTokens(herdrSidebar?.get() ?? null, answer.snapshot);
+          if (shown && shown !== answer.snapshot) body = new TextEncoder().encode(JSON.stringify({ ...answer, snapshot: shown }));
         }
         return new Response(body, { status: response.status, headers: {
           "content-type": response.headers.get("content-type") ?? "application/json", "cache-control": "no-store", ...(etag ? { etag } : {}),

@@ -2,6 +2,7 @@ import { closeSync, constants, fstatSync, openSync, readSync, statSync } from "n
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { Machine } from "../shared/machines.ts";
+import type { SessionSnapshot } from "../shared/protocol.ts";
 import { PANE_TOKEN_NAME, paneTokenRuleMatches, paneTokenSpecs, type AgentRowTokens, type PaneTokenRule, type PaneTokenSpec } from "../shared/pane-tokens.ts";
 
 /** how often a watched config.toml is looked at again while a browser listens */
@@ -155,25 +156,37 @@ function hiddenEverywhere(specs: PaneTokenSpec[], name: string, value: unknown):
 export function withoutHiddenTokens(layout: AgentRowTokens | null, machines: Machine[]): Machine[] {
   if (layout === null) return machines;
   return machines.map((machine) => {
-    const snapshot = machine.snapshot;
-    if (!snapshot) return machine;
-    const recordAgent = new Map<string, string | null | undefined>();
-    for (const record of snapshot.agents) if (!recordAgent.has(record.pane_id)) recordAgent.set(record.pane_id, record.agent);
-    const paneAgent = new Map<string, string | null>();
-    for (const pane of snapshot.panes) if (!paneAgent.has(pane.pane_id)) paneAgent.set(pane.pane_id, nonblank(pane.agent) ?? nonblank(recordAgent.get(pane.pane_id)));
-    let changed = false;
-    const shown = <T extends { pane_id: string; tokens?: Record<string, unknown> }>(item: T, agent: string | null): T => {
-      const specs = paneTokenSpecs(layout, agent);
-      if (!item.tokens || specs === null) return item;
-      const kept = Object.entries(item.tokens).filter(([name, value]) => !hiddenEverywhere(specs, name, value));
-      if (kept.length === Object.keys(item.tokens).length) return item;
-      changed = true;
-      return { ...item, tokens: Object.fromEntries(kept) };
-    };
-    const panes = snapshot.panes.map((pane) => shown(pane, paneAgent.get(pane.pane_id) ?? null));
-    const agents = snapshot.agents.map((record) => shown(record, paneAgent.has(record.pane_id) ? paneAgent.get(record.pane_id)! : nonblank(record.agent)));
-    return changed ? { ...machine, snapshot: { ...snapshot, panes, agents } } : machine;
+    if (!machine.snapshot) return machine;
+    const snapshot = snapshotWithoutHiddenTokens(layout, machine.snapshot);
+    return snapshot === machine.snapshot ? machine : { ...machine, snapshot };
   });
+}
+
+/**
+ * One PC's snapshot as a browser is told it, wherever it goes (#2160): the session read, the /ws
+ * snapshot frame and the relayed or proxied ones, without the token values herdr's rows hide, as
+ * withoutHiddenTokens tells the roster. Copied where a value leaves; the same object when none does.
+ * Another Ovis server reading this PC with its bridge token gets the snapshot whole: it applies its
+ * own rows, as herdr's sidebar is the client's config.
+ */
+export function snapshotWithoutHiddenTokens<S extends Pick<SessionSnapshot, "panes" | "agents">>(layout: AgentRowTokens | null, snapshot: S): S {
+  if (layout === null) return snapshot;
+  const recordAgent = new Map<string, string | null | undefined>();
+  for (const record of snapshot.agents) if (!recordAgent.has(record.pane_id)) recordAgent.set(record.pane_id, record.agent);
+  const paneAgent = new Map<string, string | null>();
+  for (const pane of snapshot.panes) if (!paneAgent.has(pane.pane_id)) paneAgent.set(pane.pane_id, nonblank(pane.agent) ?? nonblank(recordAgent.get(pane.pane_id)));
+  let changed = false;
+  const shown = <T extends { pane_id: string; tokens?: Record<string, unknown> }>(item: T, agent: string | null): T => {
+    const specs = paneTokenSpecs(layout, agent);
+    if (!item.tokens || specs === null) return item;
+    const kept = Object.entries(item.tokens).filter(([name, value]) => !hiddenEverywhere(specs, name, value));
+    if (kept.length === Object.keys(item.tokens).length) return item;
+    changed = true;
+    return { ...item, tokens: Object.fromEntries(kept) };
+  };
+  const panes = snapshot.panes.map((pane) => shown(pane, paneAgent.get(pane.pane_id) ?? null));
+  const agents = snapshot.agents.map((record) => shown(record, paneAgent.has(record.pane_id) ? paneAgent.get(record.pane_id)! : nonblank(record.agent)));
+  return changed ? { ...snapshot, panes, agents } : snapshot;
 }
 
 /**
