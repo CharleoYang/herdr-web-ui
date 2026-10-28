@@ -620,7 +620,9 @@ export class MachineManager {
             runtime.machine.error = null;
             if (move.herdr) runtime.machine.herdr = move.herdr;
             if (move.ownOvisAt === null) delete runtime.ownOvisAt; else if (move.ownOvisAt) runtime.ownOvisAt = move.ownOvisAt;
-            if (move.snapshot) this.publish(runtime, move.snapshot);
+            // a roster of the address it left is not this one's: until one read here is taken (one held for this
+            // server's health is published once that proves it), the PC has none, on its card or on disk (#2080)
+            if (move.snapshot) this.publish(runtime, move.snapshot); else runtime.machine.snapshot = null;
           }
           if (runtime.machine.herdr_profile_id) {
             this.profileState.allowConnection(runtime.machine.herdr_profile_id, target);
