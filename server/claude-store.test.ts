@@ -1027,6 +1027,25 @@ describe("a Claude process's store source", () => {
     expect((await claudeStoreOf(null, home, { CLAUDE_CONFIG_DIR: join(home, "server-store") }))?.env).toEqual({ CLAUDE_CONFIG_DIR: join(home, "server-store") });
   });
 
+  it("finds the server's default store under USERPROFILE when HOME is unset, as native Windows starts it", async () => {
+    const profile = tempDir();
+    const before = { home: process.env["HOME"], profile: process.env["USERPROFILE"] };
+    const platform = Object.getOwnPropertyDescriptor(process, "platform")!;
+    delete process.env["HOME"];
+    process.env["USERPROFILE"] = profile;
+    try {
+      // elsewhere USERPROFILE means nothing: the store stays where it was without HOME
+      Object.defineProperty(process, "platform", { value: "linux" });
+      expect((await claudeStoreOf(null, undefined, {}))?.dir).toBe(".claude");
+      Object.defineProperty(process, "platform", { value: "win32" });
+      expect((await claudeStoreOf(null, undefined, {}))?.dir).toBe(join(profile, ".claude"));
+    } finally {
+      Object.defineProperty(process, "platform", platform);
+      if (before.home === undefined) delete process.env["HOME"]; else process.env["HOME"] = before.home;
+      if (before.profile === undefined) delete process.env["USERPROFILE"]; else process.env["USERPROFILE"] = before.profile;
+    }
+  });
+
   it("implicit and explicit default store routes remain distinct", async () => {
     const home = tempDir();
     mkdirSync(join(home, ".claude"));

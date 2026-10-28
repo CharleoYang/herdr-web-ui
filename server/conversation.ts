@@ -76,6 +76,7 @@ import { readsStartScreen, startScreenMetadata } from "./start-screen.ts";
 import { commandTranscriptRecords, PI_EVIDENCE_TYPES, type CommandTranscriptRecord } from "./outcome.ts";
 import { type ClaudeBranch, claudeForks, followClaudeBranch, type PromptChain, turnStarts } from "./transcript-turns.ts";
 import { devinSessionForPane, isDevinProcess } from "./devin-session.ts";
+import { userHome } from "./user-home.ts";
 
 export { isOmoProcess } from "./omo.ts";
 export { devinSessionForPane, isDevinProcess } from "./devin-session.ts";
@@ -831,7 +832,7 @@ export async function paneRunsOmo(paneId: string, known?: KnownProcesses): Promi
     "pane.process_info",
     { pane_id: paneId },
   ).catch(() => null);
-  const home = process.env["HOME"] ?? "";
+  const home = userHome();
   return (info?.process_info?.foreground_processes ?? []).some((process) =>
     // a pid herdr does not report keeps the argv-only proof and fails the custom one closed
     omoProcessIdentity({
@@ -874,7 +875,7 @@ export async function paneProcessRoots(paneId: string, agent: string | null | un
     "pane.process_info", { pane_id: paneId },
   ).catch(() => null);
   const processes = info?.process_info as ProcessInfo | undefined;
-  const home = process.env["HOME"] ?? "";
+  const home = userHome();
   const directory = (path: string | null): string | null => {
     try { return path && statSync(path).isDirectory() ? path : null; } catch { return null; }
   };
@@ -978,7 +979,7 @@ export async function claudePanePid(pane: HerdrPane): Promise<number | null> {
 async function claudeTranscriptPath(paneId: string, cwds: readonly (string | null | undefined)[], onProcess?: (pid: number, attach: boolean) => void, known?: KnownProcesses): Promise<string> {
   const info = await herdrRpc<{ agent: { agent_session?: { value?: unknown } } }>("agent.get", { target: paneId });
   let session = info.agent.agent_session?.value;
-  const home = process.env["HOME"] ?? "";
+  const home = userHome();
   const processes = await claudeProcesses(paneId, known);
   const only = processes.length === 1 ? processes[0] : undefined;
   let processDir: string | null = null;
@@ -1103,8 +1104,7 @@ async function ompTranscriptPath(paneId: string, cwd: string): Promise<{ path: s
   const info = await herdrRpc<{ agent: { agent_session?: { kind?: unknown; value?: unknown } } }>("agent.get", { target: paneId });
   const session = info.agent.agent_session;
   const path = session?.kind === "path" && typeof session.value === "string" ? session.value : null;
-  // a Windows bridge starts with HOME set to the profile directory (remote-entry.ts)
-  const home = process.env["HOME"] ?? "";
+  const home = userHome();
   const route = process.platform === "win32" ? null : await ompPaneRoute(paneId);
   // an omp whose store nothing proves, or two keeping different ones
   if (route === "unproved") throw new ConversationUnavailable("no_session_path");

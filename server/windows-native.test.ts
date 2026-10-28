@@ -8,7 +8,7 @@ import { expect, it, spyOn } from "bun:test";
 import { closeSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, realpathSync, rmSync, watch, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { rm } from "node:fs/promises";
 
 import { claudeProcessSession, forgetClaudeSessions, processClaudeConfigDir } from "./claude-store.ts";
@@ -136,6 +136,8 @@ it.skipIf(!onWindows)("stops skill discovery at the user's home whatever its let
     mkdirSync(cwd, { recursive: true });
     expect(ancestorsToRepoRoot(cwd)).toEqual([cwd]);
     expect(ancestorsToRepoRoot(home.toUpperCase())).toEqual([]);
+    // and a folder above home in another case is not a project of its own either
+    expect(ancestorsToRepoRoot(dirname(home).toUpperCase())).toEqual([]);
   } finally {
     if (before === undefined) delete process.env["HOME"]; else process.env["HOME"] = before;
     rmSync(home, { recursive: true, force: true });

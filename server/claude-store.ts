@@ -23,6 +23,7 @@ import { darwinStartTime, sysctlCall } from "./darwin-process.ts";
 import { recentProcessTable } from "./gjc-runtime.ts";
 import { processAlive, processStartUpperBoundAsync } from "./process-start.ts";
 import type { ProcessRow } from "./windows-processes.ts";
+import { userHome } from "./user-home.ts";
 
 const MAX_PROJECT_NAME = 200;
 const SESSION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -317,7 +318,7 @@ async function processRead(pid: number, argv: readonly string[], home: string, p
 export async function processClaudeSource(
   pid: number,
   argv: readonly string[] = [],
-  home = process.env["HOME"] ?? "",
+  home = userHome(),
   platform: string = process.platform,
   table: () => Promise<ProcessRow[]> = recentProcessTable,
 ): Promise<ClaudeSource> {
@@ -385,7 +386,7 @@ export type PaneProcess = { pid: number; name?: string | null; argv0?: string | 
  */
 export async function paneClaudeSource(
   processes: readonly PaneProcess[],
-  home = process.env["HOME"] ?? "",
+  home = userHome(),
   platform: string = process.platform,
   table: () => Promise<ProcessRow[]> = recentProcessTable,
 ): Promise<ClaudeSource | null> {
@@ -409,7 +410,7 @@ export async function paneClaudeSource(
  */
 export async function claudeStoreOf(
   source: ClaudeSource | null,
-  home = process.env["HOME"] ?? "",
+  home = userHome(),
   env: Record<string, string | undefined> = process.env,
 ): Promise<{ dir: string; env: { CLAUDE_CONFIG_DIR: string } | null; key: string; place: string; chosen: boolean } | null> {
   const chosen = source ?? (env["CLAUDE_CONFIG_DIR"] === undefined ? { state: "absent" as const } : { state: "override" as const, dir: env["CLAUDE_CONFIG_DIR"] });
@@ -438,7 +439,7 @@ export async function claudeStoreOf(
 export async function processClaudeConfigDir(
   pid: number,
   argv: readonly string[] = [],
-  home = process.env["HOME"] ?? "",
+  home = userHome(),
   platform: string = process.platform,
   table: () => Promise<ProcessRow[]> = recentProcessTable,
 ): Promise<string | null> {
@@ -1084,7 +1085,7 @@ export async function claudeAttachSession(
  */
 export async function claudeForegroundSession(
   processes: readonly { pid: number; name?: string | null; argv0?: string | null; argv?: readonly string[] | null }[],
-  home = process.env["HOME"] ?? "",
+  home = userHome(),
 ): Promise<string | null> {
   const claude = processes.filter((entry) => isClaudeProcess({ name: entry.name ?? undefined, argv0: entry.argv0 ?? undefined, argv: entry.argv ?? undefined }));
   if (claude.length !== 1) return null;
