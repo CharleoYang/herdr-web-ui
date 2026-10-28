@@ -9,6 +9,7 @@ const asked: (string | null)[] = [];
 const promptAsked: (string | null)[] = [];
 const PLAN_CARD = { id: "claude-plan:abc", agent: "claude", kind: "plan", title: "Plan", question: "Would you like to proceed?", options: [{ label: "Yes", description: null }], multi_select: false, custom_option_index: null };
 const historyAsked: (string | null)[] = [];
+const commandsAsked: string[] = [];
 const faviconAsked: { search: string; authorization: string | null; cookie: string | null }[] = [];
 const diffAsked: { path: string; search: string; authorization: string | null; cookie: string | null; forwarded: string | null }[] = [];
 const remote = Bun.serve({
@@ -22,6 +23,10 @@ const remote = Bun.serve({
     if (path === "/api/sessions/history") {
       historyAsked.push(request.headers.get("authorization"));
       return Response.json({ workspace_id: "w1", agent: "pi", cwd: "/work", sessions: [{ id: "s1", title: null, firstMessage: "a private prompt", startedAt: null, updatedAt: "2026-10-01T00:00:00.000Z", resume: null }] });
+    }
+    if (path === "/api/pane/commands" || path === "/api/agent/commands") {
+      commandsAsked.push(path);
+      return Response.json({ commands: [{ name: "deploy", description: "SECRET", source: "custom", id: "/work/.commandcode/commands/deploy.md" }] });
     }
     if (path === "/api/fs/favicon") {
       faviconAsked.push({ search: new URL(request.url).search, authorization: request.headers.get("authorization"), cookie: request.headers.get("cookie") });
@@ -86,6 +91,20 @@ it("never forwards a PC's session history to a watching device, nor a route spel
   expect(driven.status).toBe(200);
   expect(JSON.stringify(await driven.json())).toContain("a private prompt");
   expect(historyAsked).toEqual(["Bearer remote-token"]);
+});
+
+it("never asks a PC for a pane's or a folder's command rows for a watching device (#2132)", async () => {
+  const base = "http://127.0.0.1/api/machines/pc1";
+  for (const path of ["pane/commands?pane_id=w1:p1", "agent/commands?agent=claude"]) {
+    const watched = await handleMachineRequest(new Request(`${base}/${path}`), manager, undefined, undefined, true);
+    expect([path, watched.status, ((await watched.json()) as { error: { code: string } }).error.code]).toEqual([path, 403, "read_only"]);
+  }
+  expect(commandsAsked).toEqual([]);
+  // a driving device gets the PC's rows
+  const driven = await handleMachineRequest(new Request(`${base}/pane/commands?pane_id=w1:p1`), manager);
+  expect(driven.status).toBe(200);
+  expect(JSON.stringify(await driven.json())).toContain("SECRET");
+  expect(commandsAsked).toEqual(["/api/pane/commands"]);
 });
 
 it("forwards conversation images and complete output, while rejecting arbitrary nested paths", async () => {

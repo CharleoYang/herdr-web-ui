@@ -200,8 +200,8 @@ export async function handleMachineRequest(request: Request, manager: MachineMan
     if (parts.length === 1 && request.method === "DELETE") { setRequestRoute("/api/machines/:machine_id"); manager.remove(id); return jsonResponse({ ok: true }); }
     const path = parts.slice(1).join("/");
     // earlier sessions carry their first prompts, and a folder's command files name what is in it (the new-tab
-    // dialog's agent commands): never asked for a watching device with the PC's credential
-    if (readOnly && (path === "sessions/history" || path === "agent/commands")) return fail("read_only", "this device can only watch", 403);
+    // dialog's agent commands, a pane's command rows): never asked for a watching device with the PC's credential
+    if (readOnly && (path === "sessions/history" || path === "agent/commands" || path === "pane/commands")) return fail("read_only", "this device can only watch", 403);
     if (MACHINE_PROXY_PATH.test(path)) {
       // `path` is a finite endpoint literal, never the machine id or an arbitrary suffix.
       setRequestRoute(`/api/machines/:machine_id/${path}`);
