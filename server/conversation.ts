@@ -73,7 +73,7 @@ import { CLAUDE_IMAGE_REF, claudeImageType, claudeResultText, createClaudeTransc
 import { forgetSubagents, lineNotifications, subagentDetails, type SubagentDetail } from "./claude-subagents.ts";
 import { launchedAgents } from "./launched-agents.ts";
 import { readsStartScreen, startScreenMetadata } from "./start-screen.ts";
-import { commandTranscriptRecords, type CommandTranscriptRecord } from "./outcome.ts";
+import { commandTranscriptRecords, PI_EVIDENCE_TYPES, type CommandTranscriptRecord } from "./outcome.ts";
 import { type ClaudeBranch, claudeForks, followClaudeBranch, type PromptChain, turnStarts } from "./transcript-turns.ts";
 import { devinSessionForPane, isDevinProcess } from "./devin-session.ts";
 
@@ -1589,7 +1589,11 @@ const commandTranscripts = new Map<string, {
   partialStart: number; records: CommandTranscriptRecord[]; identity: string;
   /** pi: the active branch's name and its last node, which an append that runs on from it keeps */
   branch: string; leaf: string | null; answer: CommandTranscript | null;
+  /** pi: the last node each recent branch was read at (id and byte offset), newest last, so a session that comes back
+   * to one keeps its name */
+  branches: Map<string, { id: string; offset: number }>;
 }>();
+const REMEMBERED_BRANCHES = 8;
 
 /** `look`: the snapshot and herdr's `pane.process_info` the caller's poll already read, so neither is asked again. */
 export async function readCommandTranscript(paneId: string, codexHome?: string, look: { snapshot?: SessionSnapshot; processes?: KnownProcesses } = {}): Promise<CommandTranscript | null> {
@@ -1633,6 +1637,7 @@ export async function readCommandTranscript(paneId: string, codexHome?: string, 
   const identity = append ? cached.identity : `${source}\0${path}\0${file}:${stat.size}:${stat.mtimeMs}`;
   let branch = "";
   let leaf: string | null = null;
+  let branches = new Map<string, { id: string; offset: number }>();
   if (source === "pi-transcript") {
     const nodes = current.filter(record => typeof record.entry.id === "string");
     const byId = new Map(nodes.map((record, index) => [String(record.entry.id), { record, index }]));
@@ -1657,29 +1662,61 @@ export async function readCommandTranscript(paneId: string, codexHome?: string, 
     // An unexplained missing ancestor or ambiguous index cannot prove branch ownership.
     current = rooted ? active.reverse() : [];
     leaf = rooted && current.length > 0 ? String(current.at(-1)!.entry.id) : null;
-    // An append that runs on from the branch read before is that branch: the forks in the window change as it
-    // slides (its first node always looks like one), and the sends bound to the branch must keep seeing it (#1487).
-    // Any other append, a branch switch or a fork made since among them, names its branch afresh.
-    const continued = append && cached.leaf !== null && cached.branch !== "unresolved" && rooted
-      && runsOnFrom(cached.leaf, current, forks, nodes[0]);
-    branch = !rooted ? "unresolved" : continued ? cached.branch
-      : createHash("sha256").update(forks.map(({ entry }) => String(entry.id)).join("\0")).digest("hex");
+    // An append that runs on from the node a branch was last read at is that branch: the forks in the window change
+    // as it slides (its first node always looks like one), and the session can go to another branch and /tree back,
+    // yet the sends bound to the branch must keep seeing it (#1487, #1879). Any other path names its branch afresh.
+    if (append) branches = new Map(cached.branches);
+    const resumed = rooted ? resumedBranch(branches, nodes, current) : null;
+    const continued = resumed === null && append && cached.leaf !== null && cached.branch !== "unresolved" && rooted
+      && runsOnFromCut(cached.leaf, current, forks, nodes[0]);
+    branch = !rooted ? "unresolved" : resumed ?? (continued ? cached.branch
+      : createHash("sha256").update(forks.map(({ entry }) => String(entry.id)).join("\0")).digest("hex"));
+    if (branch !== "unresolved" && leaf !== null) {
+      branches.delete(branch);
+      branches.set(branch, { id: leaf, offset: current.at(-1)!.offset });
+      if (branches.size > REMEMBERED_BRANCHES) branches.delete(branches.keys().next().value!);
+    }
   }
   const cleared = current.reduce((last, { entry }, index) => isContextClear(entry, source) ? index : last, 0);
   const answer = branch === "unresolved" ? null
     : { identity: `${identity}\0${branch}`, records: cleared > 0 ? current.slice(cleared) : current };
-  remember(commandTranscripts, path, { signature, file, start, end: stat.size, digests, partialStart, records, identity, branch, leaf, answer }, 4);
+  remember(commandTranscripts, path, { signature, file, start, end: stat.size, digests, partialStart, records, identity, branch, leaf, answer, branches }, 4);
   return answer;
 }
 
 /**
- * Whether a pi path read after an append runs on from `leaf`, the last node of the path read before, with no fork
- * after it. `leaf` is on the path, or was cut away with the window's start and is the parent of its first node (the
- * first node read after it, as appends follow it), whose own fork mark only says its predecessor was cut away.
+ * The remembered pi branch (`branches`: name to the node it was last read at) that `path` runs on from. Its node is on
+ * the path, the same entry at the same offset (a later entry may reuse its id), and of what was written since (that node was then the file's last), nothing off the path is under it, and
+ * nothing off the path is a record a send's result could be (`PI_EVIDENCE_TYPES`): a result written on the branch the
+ * session went to must not leave a send waiting on its old branch for a later identical send's. `nodes` are the
+ * window's nodes in file order.
  */
-function runsOnFrom(leaf: string, path: readonly CommandTranscriptRecord[], forks: readonly CommandTranscriptRecord[], first: CommandTranscriptRecord | undefined): boolean {
-  const kept = path.find(({ entry }) => entry.id === leaf);
-  if (kept) return forks.every((fork) => fork.offset <= kept.offset);
+function resumedBranch(branches: ReadonlyMap<string, { id: string; offset: number }>, nodes: readonly CommandTranscriptRecord[], path: readonly CommandTranscriptRecord[]): string | null {
+  const onPath = new Map(path.map((record) => [String(record.entry.id), record]));
+  for (const [name, leaf] of branches) {
+    const at = onPath.get(leaf.id);
+    if (!at || at.offset !== leaf.offset) continue;
+    const under = new Set([leaf.id]);
+    const alone = nodes.every(({ entry, offset }) => {
+      if (offset <= at.offset) return true;
+      const id = String(entry.id);
+      if (typeof entry.parentId === "string" && under.has(entry.parentId)) {
+        under.add(id);
+        return onPath.has(id);
+      }
+      return onPath.has(id) || !PI_EVIDENCE_TYPES.has(String(entry.type));
+    });
+    if (alone) return name;
+  }
+  return null;
+}
+
+/**
+ * Whether a pi path read after an append runs on from `leaf`, the last node of the path read before, which was cut
+ * away with the window's start: it is the parent of the path's first node (the first node read after it, as appends
+ * follow it), whose own fork mark only says its predecessor was cut away, and no other fork follows.
+ */
+function runsOnFromCut(leaf: string, path: readonly CommandTranscriptRecord[], forks: readonly CommandTranscriptRecord[], first: CommandTranscriptRecord | undefined): boolean {
   const head = path[0];
   return head !== undefined && head === first && head.entry.parentId === leaf && forks.every((fork) => fork === head);
 }
