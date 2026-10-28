@@ -85,6 +85,25 @@ describe("Hermes commands", () => {
     ]);
   });
 
+  it("reads Windows Hermes skills under LOCALAPPDATA, where 0.21.5 keeps its home and checkout", () => {
+    const f = fixture();
+    const hermes = join(f.root, "local", "hermes");
+    f.skill(join(hermes, "skills"), "stock", { name: "Stock Skill", description: "Installed stock." });
+    f.skill(join(hermes, "skills"), "mine", { description: "Personal." });
+    f.skill(join(hermes, "hermes-agent", "skills"), "other/stock", { name: "Stock Skill" });
+    f.skill(join(f.home, ".hermes", "skills"), "wrong-home");
+    const platform = Object.getOwnPropertyDescriptor(process, "platform")!;
+    Object.defineProperty(process, "platform", { value: "win32" });
+    try {
+      expect(paneCommands("hermes", f.cwd, f.home, { environ: [`LOCALAPPDATA=${join(f.root, "local")}`] }).filter((command) => command.source === "skill")).toMatchObject([
+        { name: "mine", description: "Personal.", origin: "user" },
+        { name: "stock-skill", description: "Installed stock.", origin: "bundled" },
+      ]);
+    } finally {
+      Object.defineProperty(process, "platform", platform);
+    }
+  });
+
   it("never offers untrusted projects, disabled discovery, non-repositories or a home repository", () => {
     const f = fixture();
     f.skill(join(f.repo, ".hermes", "skills"), "private-project");

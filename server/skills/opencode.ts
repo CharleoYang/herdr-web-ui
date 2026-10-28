@@ -147,7 +147,7 @@ export const source: AgentCommandSource = {
     const v2 = isV2(ctx.version);
     const env = environRecord(ctx.env);
     const config = env.OPENCODE_CONFIG_DIR || join(env.XDG_CONFIG_HOME || join(ctx.home, ".config"), "opencode");
-    const projects = ctx.cwd ? ancestorsToRepoRoot(ctx.cwd).reverse() : [];
+    const projects = ctx.cwd ? ancestorsToRepoRoot(ctx.cwd, ctx.home).reverse() : [];
     const commands = new Map<string, SlashCommand>();
     const directories: readonly (readonly [string, "user" | "project"])[] = [
       [config, "user"],

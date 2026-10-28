@@ -266,7 +266,7 @@ export const source: AgentCommandSource = {
   discover({ home, cwd, env, version }) {
     const budget = createWalkBudget();
     const config = environValue(env, "CLAUDE_CONFIG_DIR") || join(home, ".claude");
-    const ancestors = cwd ? ancestorsToRepoRoot(cwd) : [];
+    const ancestors = cwd ? ancestorsToRepoRoot(cwd, home) : [];
     const projectSkills = ancestors.flatMap((directory) => claudeSkills(join(directory, ".claude", "skills"), "project", budget));
     const repo = ancestors.at(-1);
     if (repo && projectSkills.length === 0) {

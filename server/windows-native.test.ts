@@ -127,9 +127,9 @@ writeFileSync(${JSON.stringify(resultPath)}, JSON.stringify({pid:process.pid, se
 
 it.skipIf(!onWindows)("stops skill discovery at the user's home whatever its letter case", () => {
   const home = mkdtempSync(join(tmpdir(), "herdr-home-case-"));
-  const before = process.env["HOME"];
+  const before = process.env["USERPROFILE"];
   try {
-    process.env["HOME"] = home.toLowerCase();
+    process.env["USERPROFILE"] = home.toLowerCase();
     // home is itself a repository: a folder under it with no .git of its own must not reach it
     mkdirSync(join(home, ".git"));
     const cwd = join(home.toUpperCase(), "work", "sub");
@@ -139,7 +139,7 @@ it.skipIf(!onWindows)("stops skill discovery at the user's home whatever its let
     // and a folder above home in another case is not a project of its own either
     expect(ancestorsToRepoRoot(dirname(home).toUpperCase())).toEqual([]);
   } finally {
-    if (before === undefined) delete process.env["HOME"]; else process.env["HOME"] = before;
+    if (before === undefined) delete process.env["USERPROFILE"]; else process.env["USERPROFILE"] = before;
     rmSync(home, { recursive: true, force: true });
   }
 });

@@ -204,7 +204,7 @@ export const source: AgentCommandSource = {
         result.push({ name: namespace ? `${namespace}:${skill.name}` : skill.name, description: skill.description, source: "skill", trigger: "$", origin, id });
       }
     };
-    for (const directory of cwd ? ancestorsToRepoRoot(cwd) : []) {
+    for (const directory of cwd ? ancestorsToRepoRoot(cwd, home) : []) {
       load(join(directory, ".agents", "skills"), "project");
       load(join(directory, ".codex", "skills"), "project");
     }

@@ -60,7 +60,7 @@ export function paneCommands(agent: string | null | undefined, cwd: string | nul
   const source = AGENT_SOURCES[agent];
   if (!source) return [];
   const builtins = new Map(builtinCommands(agent, version).map((command) => [command.name, command]));
-  const ancestors = cwd ? ancestorsToRepoRoot(cwd) : [];
+  const ancestors = cwd ? ancestorsToRepoRoot(cwd, home) : [];
   const discovered = source.discover({ home, cwd, repoRoot: ancestors.at(-1) ?? null, env: process.environ ?? null, roots: process, version });
   const commands: SlashCommand[] = [];
   // one row per file: the same (trigger, name, id) reached twice, e.g. through a link; a row without an id is its own

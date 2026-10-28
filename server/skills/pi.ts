@@ -149,7 +149,7 @@ function discoverSkills({ home, cwd, env }: AgentCommandContext): SlashCommand[]
   const user = [...recursive(join(agentDir, "skills")), ...recursive(join(home, ".agents", "skills")), ...listed.added].filter((skill) => !listed.excluded(skill.path));
   const result = asCommands([...user, ...listed.forced], "user");
   if (cwd && projectTrusted(agentDir, settings, cwd)) {
-    for (const directory of ancestorsToRepoRoot(cwd)) {
+    for (const directory of ancestorsToRepoRoot(cwd, home)) {
       result.push(...asCommands(recursive(join(directory, ".pi", "skills")), "project"), ...asCommands(recursive(join(directory, ".agents", "skills")), "project"));
     }
   }
