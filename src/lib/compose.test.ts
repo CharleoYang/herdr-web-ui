@@ -1,7 +1,7 @@
 import { describe, expect, it } from "bun:test";
 
 import { skillSyntax } from "../../shared/skill-syntax.ts";
-import { agentDisplayLabel, composerDelivery, composerMessage, composerSendShown, composerPayload, composerModelDraw, composerStatusCompact, composerStatusHint, composerStatusWord, COMPOSER_STATUS_COMPACT_BELOW, contextLeftPercent, formatTokens, imageMention, insertLeadingMention, insertNote, MAX_COMPOSER_CHARS, QUEUE_READY_STATUS, rankSlashCommands, submitNote, submitNotTyped, submitRefusal, sameMessage, pendingActionUncertain } from "./compose.ts";
+import { agentDisplayLabel, claudeMainAtRest, composerDelivery, composerMessage, composerSendShown, composerPayload, composerModelDraw, composerStatusCompact, composerStatusHint, composerStatusWord, COMPOSER_STATUS_COMPACT_BELOW, contextLeftPercent, formatTokens, imageMention, insertLeadingMention, insertNote, MAX_COMPOSER_CHARS, QUEUE_READY_STATUS, rankSlashCommands, submitNote, submitNotTyped, submitRefusal, sameMessage, pendingActionUncertain } from "./compose.ts";
 import { briefDescription, COMMAND_GROUPS, commandGroup, commandsForTrigger, slashCommandReplacement, terminalCommand, typedTerminalCommand } from "./compose.ts";
 import type { SlashCommand } from "../../shared/protocol.ts";
 import { activeTrigger, applyCompletion, type ActiveTrigger } from "./mentions.ts";
@@ -603,5 +603,42 @@ describe("the menu over a catalog the server built", () => {
     expect(typedTerminalCommand(rows, "/review the auth change")).toBeNull();
     expect(typedTerminalCommand(rows, "/apps")).toBeNull();
     expect(typedTerminalCommand(rows, "/compact")).toBeNull();
+  });
+});
+
+describe("claudeMainAtRest", () => {
+  // the real shape of a Claude screen whose main turn ended while two subagents ran: herdr's claude
+  // manifest still says working (a braille title spinner, plus background_agents_working)
+  const restingWithSubagents = [
+    "  Waiting for 2 background agents to finish",
+    "  ◯ impl-mismatch2-sonnet      Resume store-mismatch build        24m 28s · ↓ 132.6k tokens",
+    "  ◯ qa-p00win3-sonnet          P00 Windows checks and latency     9m 8s · ↓ 91.2k tokens",
+    "  ────────────────────────────────────────────────────────────────",
+    "  ❯",
+    "  ────────────────────────────────────────────────────────────────",
+    "  ⏵⏵ auto mode on (shift+tab to cycle) · ← 2 agents",
+  ];
+
+  it("accepts a message when the row is at rest, whatever herdr reports", () => {
+    expect(composerDelivery("claude", "working")).toBe("queue");
+    expect(claudeMainAtRest("ready", restingWithSubagents)).toBe(true);
+  });
+
+  it("holds the message while a turn says how to interrupt it", () => {
+    expect(claudeMainAtRest("ready", ["  ✻ Forming… (3m 35s · ↓ 4.8k tokens) · esc to interrupt", ...restingWithSubagents])).toBe(false);
+    expect(claudeMainAtRest("ready", ["  ● Forming… (3m 35s · ↓ 4.8k tokens · thought for 1s)", ...restingWithSubagents])).toBe(false);
+    expect(claudeMainAtRest("ready", ["  enter to confirm · esc to cancel", ...restingWithSubagents])).toBe(false);
+  });
+
+  it("holds the message while the row holds a draft", () => {
+    expect(claudeMainAtRest("draft", restingWithSubagents)).toBe(false);
+    expect(claudeMainAtRest("gone", restingWithSubagents)).toBe(false);
+    expect(claudeMainAtRest("unknown", restingWithSubagents)).toBe(false);
+    expect(claudeMainAtRest(null, restingWithSubagents)).toBe(false);
+  });
+
+  it("does not read a row it cannot see as at rest", () => {
+    expect(claudeMainAtRest("ready", ["  ⏵⏵ auto mode on · ← 2 agents"])).toBe(false);
+    expect(claudeMainAtRest("ready", ["  ────────────────", "  ⏵⏵ auto mode on"])).toBe(false);
   });
 });
