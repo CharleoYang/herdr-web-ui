@@ -3,6 +3,7 @@ import { terminalTheme, type Palette, type ResolvedTheme } from "./settings.ts";
 import { loadFontStack, measurableFontStack, TERMINAL_FONT_STACK, terminalFontStack } from "./fontFamily.ts";
 import { modalOpen } from "./focus.ts";
 import { inUse } from "./paneTerminalShared.ts";
+import { fitLineHeight } from "./terminalLineHeight.ts";
 import type { TerminalPeek } from "./terminalPeek.ts";
 import type { HerdrSocket } from "./ws.ts";
 import type { FitAddon } from "@xterm/addon-fit";
@@ -64,6 +65,7 @@ export function useTerminalRefits(deps: TerminalRefitsDeps): void {
       if (term.options.fontSize === terminalFontSize && term.options.fontFamily === family) return;
       term.options.fontSize = terminalFontSize;
       term.options.fontFamily = family;
+      fitLineHeight(term);
       if (observeRef.current || fixedGridRef.current || chatViewRef.current || keyboardHoldsRef.current(true)) return;
       try {
         fitRef.current?.fit();

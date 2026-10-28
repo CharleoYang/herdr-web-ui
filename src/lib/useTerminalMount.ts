@@ -23,6 +23,7 @@ import { keyboardHoldsGrid, keyboardUp } from "./keyboard.ts";
 import { fileUriPath } from "../../shared/fileUri.ts";
 import { hyperlinkFilter, isWebLink, openWebLink, terminalFileLinkProvider, terminalFileLinks } from "./terminalFileLinks.ts";
 import { adjustTerminalGlyphs } from "./terminalGlyphs.ts";
+import { fitLineHeight } from "./terminalLineHeight.ts";
 import { keepDeleteRepeatText, keyboardNeedsText, restoreDeleteRepeatCaret } from "./deleteRepeat.ts";
 import { pinchFontSize } from "./pinchFontSize.ts";
 import { narrowPaneFontSize } from "./narrowPaneFont.ts";
@@ -219,6 +220,7 @@ export function useTerminalMount(deps: TerminalMountDeps): void {
         // Option+drag selects on macOS, as Shift+drag does elsewhere; a plain drag is forced below
         macOptionClickForcesSelection: true,
       });
+      fitLineHeight(term);
       const fit = new FitAddon();
       // Every fit first settles the font: a split pane under 80 columns draws smaller to reach
       // them (btop refuses a narrower screen), and returns to the user's size once it is wide enough.
@@ -235,6 +237,7 @@ export function useTerminalMount(deps: TerminalMountDeps): void {
         };
         // a grid this client does not drive gains no columns from a smaller font
         term.options.fontSize = narrowFontRef.current && !observeRef.current && !fixedGridRef.current ? narrowPaneFontSize(base, colsAt) : base;
+        fitLineHeight(term);
         fitGrid();
       };
       term.loadAddon(fit);
@@ -1211,7 +1214,10 @@ export function useTerminalMount(deps: TerminalMountDeps): void {
           if (observeRef.current && !nowObserving) commitPendingText();
           observeRef.current = nowObserving;
           // no fit runs while observing: a font shrunk for this client's own grid would stay
-          if (nowObserving) term.options.fontSize = baseFontRef.current;
+          if (nowObserving) {
+            term.options.fontSize = baseFontRef.current;
+            fitLineHeight(term);
+          }
           setObserving(nowObserving);
           syncInputViewport();
           term.options.disableStdin = nowObserving || heldRef.current;
@@ -1238,6 +1244,7 @@ export function useTerminalMount(deps: TerminalMountDeps): void {
             fixedGridRef.current = true;
             // nor while the grid is fixed (a mirrored pane): back to the user's size
             term.options.fontSize = baseFontRef.current;
+            fitLineHeight(term);
             syncInputViewport();
           }
           // kept while the terminal lens ignores it: another device may drive the grid, and the
@@ -1641,6 +1648,7 @@ export function useTerminalMount(deps: TerminalMountDeps): void {
         if (baseFontRef.current === size) return;
         baseFontRef.current = size;
         term.options.fontSize = size;
+        fitLineHeight(term);
         if (adopted() || chatViewRef.current) return;
         // a pinch under the keyboard fits what the finger sees: the keyboard going refits the rows
         try {
