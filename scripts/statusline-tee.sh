@@ -5,6 +5,6 @@
 # Installed by scripts/install-statusline-tee.ts, which also puts the command that was there before
 # in ~/.herdr/statusline-original.json. Read by server/statusline.ts.
 payload=$(cat)
-tmp="$HOME/.herdr/statusline-last.json.$$"
-printf '%s' "$payload" > "$tmp" 2>/dev/null && mv -f "$tmp" "$HOME/.herdr/statusline-last.json" 2>/dev/null || rm -f "$tmp"
+# Keep the restrictive umask scoped to capture; the original command keeps its environment.
+(umask 077; printf '%s' "$payload" | "bun" "$HOME/.herdr/statusline-capture.ts") 2>/dev/null
 printf '%s' "$payload" | "$HOME/.claude/statusline.sh"

@@ -5,7 +5,8 @@
  *
  * Idempotent, and reversible: the command that was there before this script ran is kept in
  * ~/.herdr/statusline-original.json, and `--restore` puts it back. The tee draws the same line the
- * old command drew, so a wrapped status line looks unchanged.
+ * old command drew. Its Bun capture helper snapshots the rendering CLI's account from .claude.json
+ * (or CLAUDE_CONFIG_DIR/.claude.json); an unknown account is not assigned to any sign-in.
  *
  *   bun scripts/install-statusline-tee.ts            # install (or say it is already installed)
  *   bun scripts/install-statusline-tee.ts --restore  # put the previous command back
@@ -44,23 +45,27 @@ function main(argv: readonly string[]): number {
   }
 
   const current = readSettings();
-  const statusLine = current["statusLine"] as { command?: string } | undefined;
+  const statusLine = current["statusLine"] as { command?: string; [key: string]: unknown } | undefined;
   if (statusLine?.command === COMMAND) {
     console.log(`already installed: ${settings} runs ${COMMAND}`);
     return 0;
   }
   // the command this wraps must exist, or the status line would draw nothing at all
   const previous = statusLine?.command ?? "~/.claude/statusline.sh";
-  const script = resolve(home, previous.replace(/^~(?=\/)/u, ""));
+  const script = previous.startsWith("~/") ? resolve(home, previous.slice(2)) : resolve(home, previous);
   if (!existsSync(script)) throw new Error(`the status line command (${previous}) is not a file this can wrap`);
 
-  mkdirSync(herdr, { recursive: true });
+  mkdirSync(herdr, { recursive: true, mode: 0o700 });
+  chmodSync(herdr, 0o700);
+  copyFileSync(new URL("./statusline-capture.ts", import.meta.url), join(herdr, "statusline-capture.ts"));
   copyFileSync(new URL("./statusline-tee.sh", import.meta.url), tee);
   chmodSync(tee, 0o755);
-  const scriptBody = readFileSync(tee, "utf8").replace("$HOME/.claude/statusline.sh", script);
+  const scriptBody = readFileSync(tee, "utf8")
+    .replace('"$HOME/.claude/statusline.sh"', JSON.stringify(script))
+    .replace('"bun"', JSON.stringify(process.execPath));
   writeFileSync(tee, scriptBody);
-  if (!existsSync(keep)) writeFileSync(keep, `${JSON.stringify({ statusLine: statusLine ?? null, settings }, null, 2)}\n`);
-  current["statusLine"] = { type: "command", command: COMMAND };
+  if (!existsSync(keep)) writeFileSync(keep, `${JSON.stringify({ statusLine, settings }, null, 2)}\n`);
+  current["statusLine"] = { ...statusLine, type: "command", command: COMMAND };
   writeSettings(current);
   console.log(`installed: ${settings} runs ${COMMAND}, which keeps the payload in ~/.herdr/statusline-last.json and then runs ${previous}`);
   return 0;
