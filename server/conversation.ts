@@ -1167,7 +1167,7 @@ async function copilotTranscriptPath(pane: HerdrPane, panes: readonly HerdrPane[
       peerInfo?.set(peer.pane_id, info ?? null);
       const processes = agentProcesses(info?.foreground_processes ?? [], "copilot");
       // A cached peer process that has exited may have been replaced by one we never asked about.
-      if (cached && processes.some((entry) => typeof entry.pid === "number" && !processAlive(entry.pid))) throw new ConversationUnavailable("no_session_path");
+      if (cached && processes.some((entry) => typeof entry.pid === "number" && !processAlive(entry.pid))) throw new ConversationUnavailable("no_session_path", undefined, "copilot_peer_process_replaced");
       if (processes.length === 1 && typeof processes[0]?.pid === "number") {
         const live = copilotProcessSession(processEnviron(processes[0].pid), processes[0].argv ?? [], processes[0].pid);
         if (live?.logged) {
@@ -1182,18 +1182,19 @@ async function copilotTranscriptPath(pane: HerdrPane, panes: readonly HerdrPane[
   const claimedByPeer = async (session: string): Promise<boolean> => (await (peerClaims ??= gatherPeerClaims())).has(session);
   if (pane.agent !== "copilot" || (report != null && (report.agent !== "copilot" || report.kind !== "id"
     || report.source !== "herdr:copilot" || typeof report.value !== "string" || !SESSION_ID.test(report.value)))) {
-    throw new ConversationUnavailable("no_session_id");
+    throw new ConversationUnavailable("no_session_id", undefined, "copilot_report_invalid");
   }
   // A failed RPC does not prove an ownership change. Retry that read once; an answered
   // empty/conflicting process set still fails closed, as does a failed retry.
   const info = await paneProcessInfo(pane.pane_id).catch(() => paneProcessInfo(pane.pane_id)).catch(() => null);
+  if (info === null) throw new ConversationUnavailable("no_session_path", undefined, "copilot_process_lookup_failed");
   const processes = agentProcesses(info?.foreground_processes ?? [], "copilot");
   const foreground = processes[0];
   if (process.platform !== "linux" || ![1, 2].includes(processes.length) || typeof foreground?.pid !== "number") {
-    throw new ConversationUnavailable("no_session_path");
+    throw new ConversationUnavailable("no_session_path", undefined, "copilot_process_set_unproved");
   }
   if (processes.length === 2) {
-    if (report == null) throw new ConversationUnavailable("no_session_id");
+    if (report == null) throw new ConversationUnavailable("no_session_id", undefined, "copilot_report_invalid");
     const parent = processes[0]!;
     const child = processes[1]!;
     const evidence = (entry: typeof parent) => ({ pid: entry.pid, argv: entry.argv ?? [] });
@@ -1201,12 +1202,13 @@ async function copilotTranscriptPath(pane: HerdrPane, panes: readonly HerdrPane[
       report.value, info?.foreground_process_group_id, info?.tty, processEnviron)
       ?? copilotHandoffSession(evidence(child), evidence(parent),
         report.value, info?.foreground_process_group_id, info?.tty, processEnviron);
-    if (selected?.logged && !(await claimedByPeer(selected.sessionId))) {
+    if (selected?.logged) {
+      if (await claimedByPeer(selected.sessionId)) throw new ConversationUnavailable("no_session_path", undefined, "copilot_peer_conflict");
       const path = copilotTranscriptFile(report.value, selected);
       if (path !== null && nodePath.basename(nodePath.dirname(path)) === report.value)
         return { path, binding: selected.generation, peerClaims: await peerClaims! };
     }
-    throw new ConversationUnavailable("no_session_path");
+    throw new ConversationUnavailable("no_session_path", undefined, "copilot_handoff_unproved");
   }
   const environment = processEnviron(foreground.pid);
   const argv = foreground.argv ?? [];
@@ -1218,7 +1220,7 @@ async function copilotTranscriptPath(pane: HerdrPane, panes: readonly HerdrPane[
       return { path, binding: `${foreground.pid}:${logged.generation}`, peerClaims: await peerClaims! };
   }
   if (report != null) {
-    if (await claimedByPeer(report.value)) throw new ConversationUnavailable("no_session_id");
+    if (await claimedByPeer(report.value)) throw new ConversationUnavailable("no_session_id", undefined, "copilot_peer_conflict");
     if (logged === null) {
       const path = copilotTranscriptFile(report.value, selected);
       if (path !== null && nodePath.basename(nodePath.dirname(path)) === report.value)
@@ -1230,7 +1232,8 @@ async function copilotTranscriptPath(pane: HerdrPane, panes: readonly HerdrPane[
     && !(await claimedByPeer(pending.sessionId))) {
     throw new ConversationNotStarted(pending.sessionId, "copilot-transcript", pending.path);
   }
-  throw new ConversationUnavailable(copilotExplicitResume(argv) ? "copilot_resume_unknown" : report == null ? "no_session_id" : "no_session_path");
+  throw new ConversationUnavailable(copilotExplicitResume(argv) ? "copilot_resume_unknown" : report == null ? "no_session_id" : "no_session_path",
+    undefined, copilotExplicitResume(argv) ? "copilot_resume_unproved" : "copilot_foreground_unproved");
 }
 
 /** Where a pane's conversation is: a transcript file, or a session in OpenCode's database. */
@@ -1368,7 +1371,8 @@ export async function paneTranscript(paneId: string, codexHome?: string, snapsho
   const panes = (snapshot ?? await sessionSnapshot()).panes;
   const pane = panes.find((candidate) => candidate.pane_id === paneId);
   if (pane === undefined) throw new ConversationUnavailable("pane_not_found");
-  if (typeof pane.cwd !== "string" || pane.cwd.length === 0) throw new ConversationUnavailable("no_recognized_transcript");
+  // an agent pane without a folder is a failure to diagnose, not a shell's expected scrollback
+  if (typeof pane.cwd !== "string" || pane.cwd.length === 0) throw new ConversationUnavailable("no_recognized_transcript", undefined, pane.agent ? "agent_cwd_missing" : undefined);
 
   if (pane.agent === "devin" && !(await paneRunsOmo(paneId, known))) {
     const cwd = pane.foreground_cwd || pane.cwd;

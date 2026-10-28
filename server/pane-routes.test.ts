@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, expect, it } from "bun:test";
+import { afterEach, beforeEach, expect, it, spyOn } from "bun:test";
 import { Database } from "bun:sqlite";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -10,15 +10,17 @@ import { findLastIndex } from "./dialogs/shared.ts";
 import { handlePaneRequest } from "./pane-routes.ts";
 import { paneAgentOf, resolveAgent } from "./pane-context.ts";
 import { openCodeServiceOptions } from "./opencode-service.ts";
+import * as conversation from "./conversation.ts";
+import { requestIdContext } from "./http.ts";
 
 // The real RPC client against a unix socket this test owns; only herdr's answers are synthetic.
 let root: string;
 let listener: ReturnType<typeof Bun.listen>;
 let socketBefore: string | undefined;
-let panes: Record<string, { agent?: string; session?: string; process: { pid: number; argv: string[]; cwd: string }[] }>;
+let panes: Record<string, { agent?: string; session?: string; cwd?: string; process: { pid: number; argv: string[]; cwd: string }[] }>;
 
 const paneInfo = (id: string) => ({
-  pane_id: id, workspace_id: "w", tab_id: "w:t1", terminal_id: id, cwd: root, focused: false, revision: 0,
+  pane_id: id, workspace_id: "w", tab_id: "w:t1", terminal_id: id, cwd: panes[id]?.cwd ?? root, focused: false, revision: 0,
   ...(panes[id]?.agent ? { agent: panes[id]!.agent } : {}),
   ...(panes[id]?.session ? { agent_session: { agent: "opencode", source: "herdr:opencode", kind: "id", value: panes[id]!.session } } : {}),
 });
@@ -57,6 +59,78 @@ afterEach(() => {
 });
 
 const OMO_PROCESS = { pid: 2147483647, argv: ["omo"], cwd: "" };
+
+it("diagnoses fallback and recovery without changing the conversation or 304 response", async () => {
+  const id = crypto.randomUUID();
+  const pane = `private-pane-${crypto.randomUUID()}`;
+  const url = new URL(`http://x/api/pane/conversation?pane_id=${pane}`);
+  const lines: string[] = [];
+  const warn = spyOn(console, "warn").mockImplementation((line: unknown) => { lines.push(String(line)); });
+  const read = spyOn(conversation, "paneConversation").mockRejectedValueOnce(
+    new conversation.ConversationUnavailable("no_session_path", undefined, "copilot_process_lookup_failed"),
+  ).mockResolvedValue({
+    source: "copilot-transcript", turns: [], metadata: { model: null, reasoning_effort: null },
+    cursor: null, history_id: "private-history", version: "fixture",
+  });
+  const ask = (headers?: HeadersInit) => requestIdContext.run({ id, route: "unmatched" }, () =>
+    handlePaneRequest(new Request(url, { headers }), url, "/api/pane/conversation", {}));
+  try {
+    const fallback = (await ask())!;
+    expect(fallback.status).toBe(200);
+    expect(await fallback.json()).toEqual({ source: "scrollback", turns: [] });
+    const recovered = (await ask({ "if-none-match": 'W/"fixture"' }))!;
+    expect(recovered.status).toBe(304);
+    expect(recovered.headers.get("etag")).toBe('W/"fixture"');
+    const records = lines.map((line) => JSON.parse(line));
+    expect(records[0]).toMatchObject({ event: "conversation.failed", operation: "conversation.copilot_process_lookup_failed", request_id: id });
+    expect(records[1]).toMatchObject({ event: "conversation.recovered", episode_id: records[0].episode_id, request_id: id });
+    expect(lines.join("\n")).not.toContain(pane);
+    expect(lines.join("\n")).not.toContain("private-history");
+  } finally { read.mockRestore(); warn.mockRestore(); }
+});
+
+it("diagnoses pending reads while preserving the retry response", async () => {
+  const url = new URL(`http://x/api/pane/conversation?pane_id=${crypto.randomUUID()}`);
+  const lines: string[] = [];
+  const warn = spyOn(console, "warn").mockImplementation((line: unknown) => { lines.push(String(line)); });
+  const read = spyOn(conversation, "paneConversation").mockRejectedValue(new conversation.ConversationReadPending());
+  try {
+    const response = (await handlePaneRequest(new Request(url), url, "/api/pane/conversation", {}))!;
+    expect(response.status).toBe(503);
+    expect(response.headers.get("cache-control")).toBe("no-store");
+    expect(await response.json()).toEqual({ error: {
+      code: "conversation_read_pending", message: new conversation.ConversationReadPending().message,
+    } });
+    expect(JSON.parse(lines[0]!)).toMatchObject({ event: "conversation.failed", operation: "conversation.read_pending" });
+  } finally { read.mockRestore(); warn.mockRestore(); }
+});
+
+it("does not report a plain shell's scrollback view as a conversation failure", async () => {
+  panes["w:shell"] = { process: [{ pid: 2147483645, argv: ["/bin/bash"], cwd: root }] };
+  const url = new URL("http://x/api/pane/conversation?pane_id=w:shell");
+  const lines: string[] = [];
+  const warn = spyOn(console, "warn").mockImplementation((line: unknown) => { lines.push(String(line)); });
+  try {
+    for (let i = 0; i < 3; i++) {
+      const response = (await handlePaneRequest(new Request(url), url, "/api/pane/conversation", {}))!;
+      expect(await response.json()).toMatchObject({ source: "scrollback", turns: [] });
+    }
+    expect(lines.filter((line) => line.includes("conversation."))).toEqual([]);
+  } finally { warn.mockRestore(); }
+});
+
+it("still reports an agent pane herdr gives no folder, and does not count it as a recovery", async () => {
+  panes["w:nocwd"] = { agent: "copilot", cwd: "", process: [] };
+  const url = new URL("http://x/api/pane/conversation?pane_id=w:nocwd");
+  const lines: string[] = [];
+  const warn = spyOn(console, "warn").mockImplementation((line: unknown) => { lines.push(String(line)); });
+  try {
+    const response = (await handlePaneRequest(new Request(url), url, "/api/pane/conversation", {}))!;
+    expect(await response.json()).toMatchObject({ source: "scrollback", turns: [] });
+    const records = lines.filter((line) => line.includes("conversation.")).map((line) => JSON.parse(line));
+    expect(records).toEqual([expect.objectContaining({ event: "conversation.failed", operation: "conversation.agent_cwd_missing" })]);
+  } finally { warn.mockRestore(); }
+});
 
 it("names an omo pane that herdr labels pi omo in the commands route, and types into it as omo only once omo holds a session", async () => {
   panes["w:p1"] = { agent: "pi", process: [{ ...OMO_PROCESS, cwd: root }] };
