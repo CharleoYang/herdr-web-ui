@@ -1,0 +1,13 @@
+{
+  "S1": ["python3", "spec/001-chat-realtime/check-s1.py"],
+  "S2": ["python3", "spec/001-chat-realtime/check-s2.py"],
+  "S2-R": ["python3", "spec/001-chat-realtime/check-s2r.py"],
+  "S4": ["python3", "spec/001-chat-realtime/check-s4.py"],
+  "T-01": ["bun", "test", "server/conversation-push.contract.test.ts"],
+  "T-02": ["bun", "test", "server/conversation-push.contract.test.ts"],
+  "T-03": ["bun", "test", "src/lib/ws.test.ts"],
+  "T-04": ["bun", "test", "server/conversation-push.contract.test.ts", "src/lib/ws.test.ts"],
+  "T-05": ["bun", "test", "server/conversation-push.contract.test.ts", "src/lib/ws.test.ts"],
+  "S5-R": ["bun", "test", "server/conversation-push.contract.test.ts", "src/lib/ws.test.ts"],
+  "S5.7": ["bun", "test", "server/conversation-push.contract.test.ts", "src/lib/ws.test.ts", "src/lib/conversationRefresh.test.ts"]
+}

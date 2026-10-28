@@ -1,0 +1,39 @@
+{
+  "scope": {"kind": "all_advancement"},
+  "objective": "A visible chat applies conversation and prompt updates from the existing WebSocket without the 2s invalidation or prompt poll, and a reconnect still matches the REST conversation page.",
+  "non_goals": [
+    "Electron or Tauri packaging",
+    "xterm WebGL",
+    "Replacing the 5s session roster poll, device poll, usage poll, or worktree branch poll",
+    "Deriving chat turns from raw PTY bytes"
+  ],
+  "criteria": [
+    {
+      "id": "push-contract",
+      "description": "Conversation push contract passes, including no delta or prompt frame unless the snapshot advertises the feature.",
+      "validation_argv": ["bun", "test", "server/conversation-push.contract.test.ts"],
+      "validation_timeout_seconds": 120
+    },
+    {
+      "id": "client-refresh",
+      "description": "Client socket tests pass. A bridge without the new feature still uses the existing conversation-changed plus REST cadence.",
+      "validation_argv": ["bun", "test", "src/lib/ws.test.ts"],
+      "validation_timeout_seconds": 120
+    }
+  ],
+  "bindings": [
+    {"todo_id": "todo_40d1895091ccd535b6df9900", "criterion_ids": ["push-contract", "client-refresh"]},
+    {"todo_id": "todo_b4840a8c8cde6680264b0fee", "criterion_ids": ["push-contract", "client-refresh"]},
+    {"todo_id": "todo_cda079660b0cd7b5d8881fc4", "criterion_ids": ["push-contract", "client-refresh"]},
+    {"todo_id": "todo_afd04338637b1c833fb9998a", "criterion_ids": ["push-contract", "client-refresh"]},
+    {"todo_id": "todo_f5fddff2cbfae6218de3e77b", "criterion_ids": ["push-contract"]},
+    {"todo_id": "todo_acc94b3205e90a312850c89a", "criterion_ids": ["push-contract"]},
+    {"todo_id": "todo_9319da75f86cbdcabd474ed2", "criterion_ids": ["client-refresh"]},
+    {"todo_id": "todo_be07e93f0bb20018d41b0c6b", "criterion_ids": ["push-contract", "client-refresh"]},
+    {"todo_id": "todo_44080fb1f2e6254b48a60054", "criterion_ids": ["push-contract", "client-refresh"]},
+    {"todo_id": "todo_6d4233a9102e8c580b9eb9d9", "criterion_ids": ["push-contract", "client-refresh"]},
+    {"todo_id": "todo_369c506bc6a85dc4b5181ec9", "criterion_ids": ["push-contract", "client-refresh"]},
+    {"todo_id": "todo_35d10e49c2baf18728aab2e7", "criterion_ids": ["push-contract", "client-refresh"]},
+    {"todo_id": "todo_79fbe0d611e1e5e246845c91", "criterion_ids": ["push-contract", "client-refresh"]}
+  ]
+}

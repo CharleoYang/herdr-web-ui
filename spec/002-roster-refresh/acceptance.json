@@ -1,0 +1,32 @@
+{
+  "scope": {"kind": "all_advancement"},
+  "objective": "Use current valid machine SSE snapshots without redundant five-second roster reads, preserving bounded REST reconciliation, fallback, visibility recovery and stale-response fencing.",
+  "non_goals": [
+    "Replacing server discovery or other polling cadences",
+    "Changing conversation or prompt transport",
+    "Electron or Tauri packaging",
+    "Claiming the predecessor chat-realtime feature is released"
+  ],
+  "criteria": [
+    {
+      "id": "roster-ordering",
+      "description": "Existing snapshot and request-ordering regressions retain stale-response fencing and correct roster snapshots.",
+      "validation_argv": ["bun", "test", "src/lib/snapshotRequests.test.ts", "src/lib/snapshot.test.ts"],
+      "validation_timeout_seconds": 120
+    },
+    {
+      "id": "roster-browser",
+      "description": "Actual App, isolated Bun/native bridge and Chromium pass healthy-stream/backstop, unavailable and open-without-snapshot fallback, reconnect, ordering, visibility-policy and explicit-action controls. Preserve console/network and visual evidence; controlled Document visibility is not OS-throttling proof.",
+      "validation_argv": ["bun", "scripts/roster-refresh-browser-qa.ts"],
+      "validation_timeout_seconds": 180
+    }
+  ],
+  "bindings": [
+    {"todo_id": "todo_fc740243385cd2d126e593db", "criterion_ids": ["roster-ordering", "roster-browser"]},
+    {"todo_id": "todo_985d4c984497f7f0bcfaf4ec", "criterion_ids": ["roster-ordering", "roster-browser"]},
+    {"todo_id": "todo_457796131c0d6d1207a0aab5", "criterion_ids": ["roster-ordering", "roster-browser"]},
+    {"todo_id": "todo_4bbb1f41937542cfa60ff4b1", "criterion_ids": ["roster-ordering"]},
+    {"todo_id": "todo_916b6a5f0ef51041835a049d", "criterion_ids": ["roster-browser"]},
+    {"todo_id": "todo_eddbcca29a970912fe724653", "criterion_ids": ["roster-ordering", "roster-browser"]}
+  ]
+}

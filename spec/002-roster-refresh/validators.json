@@ -1,0 +1,7 @@
+{
+  "S1": ["loopx", "--registry", "/Users/yangqi/coding_agent/herdr-web-ui/.loopx/registry.json", "--runtime-root", "/Users/yangqi/.codex/loopx", "feature", "plan", "--goal-id", "spec-002-roster-refresh", "--project", "/Users/yangqi/coding_agent/herdr-web-ui", "--tasks-file", "/Users/yangqi/coding_agent/herdr-web-ui/spec/002-roster-refresh/task.md", "--validation-commands", "/Users/yangqi/coding_agent/herdr-web-ui/spec/002-roster-refresh/validators.json"],
+  "S4": ["loopx", "--registry", "/Users/yangqi/coding_agent/herdr-web-ui/.loopx/registry.json", "--runtime-root", "/Users/yangqi/.codex/loopx", "feature", "plan", "--goal-id", "spec-002-roster-refresh", "--project", "/Users/yangqi/coding_agent/herdr-web-ui", "--tasks-file", "/Users/yangqi/coding_agent/herdr-web-ui/spec/002-roster-refresh/task.md", "--validation-commands", "/Users/yangqi/coding_agent/herdr-web-ui/spec/002-roster-refresh/validators.json"],
+  "T-01": ["bun", "test", "src/lib/snapshotRequests.test.ts", "src/lib/snapshot.test.ts"],
+  "S5-R": ["bun", "test", "src/lib/snapshotRequests.test.ts", "src/lib/snapshot.test.ts"],
+  "S5-E2E": ["bun", "scripts/roster-refresh-browser-qa.ts"]
+}

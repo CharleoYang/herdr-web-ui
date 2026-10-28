@@ -32,6 +32,13 @@ scripts/*.tmp.ts
 .loopx/
 .worktree/
 .pi/
+
+# the fork's feature specs: the design docs, tasks and validators are kept, a LoopX run's
+# projections (its dashboard and cycle snapshots) are not
+.codex/
+spec/*/dashboard.html
+spec/*/report.*
+spec/*/cycles/
 # the iOS app's bundled pages and demo, assembled by app/scripts/build-web.ts
 app/www/
 
