@@ -68,14 +68,14 @@ export const SUBMIT_DELAY_MS = 120;
  * an Alt+key: a composer message waits this long after the pane's last keystroke, so a
  * Stop tapped just before Send still reaches the pane first.
  */
-const TYPED_SETTLE_MS = 300;
+export const TYPED_SETTLE_MS = 300;
 /**
  * A terminal key (WS `keys`) goes through herdr's RPC, around the attach pty: it waits this long
  * after the pane's last pty keystroke so it never overtakes typing on its way through the
  * sidecar and the attach, and the whole TYPED_SETTLE_MS when that keystroke ended in an ESC
  * herdr may still be holding. Short enough that a held arrow between typed letters shows no lag.
  */
-const KEY_SETTLE_MS = 40;
+export const KEY_SETTLE_MS = 40;
 /**
  * Nothing of a composer message is typed once this long has passed since it reached the
  * server (it can wait behind a stalled one in the pane's queue): it answers submit_timeout
