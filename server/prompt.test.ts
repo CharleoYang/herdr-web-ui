@@ -5505,11 +5505,16 @@ Enter to select · ↑/↓ to navigate · Esc to cancel
 
   test("keeps fallback cards when a model title is only transcript text or belongs to another agent", async () => {
     const unknown = "Advanced Reasoning\nThis section explains the tradeoff.\n\nChoose a deployment target:\n  1. Staging\n  2. Production\n\nEnter a number, or Esc to cancel\n";
-    for (const agent of ["claude", "pi", "omp", "codex"]) {
+    for (const agent of ["claude", "omp", "codex"]) {
       await withPane(agent, "blocked", unknown, async () => {
         expect((await card())?.fallback).toBe(true);
       });
     }
+    // a pi pane gets no generic card at all: its keys would be guessed into pi, which may show
+    // pi-ask's form (it takes no typed keys); the terminal answers what no reader knows
+    await withPane("pi", "blocked", unknown, async () => {
+      expect(await card()).toBeNull();
+    });
     await withPane("codex", "blocked", `${codexModels(1)}\nContinue deployment?\n${CODEX_OPENS}\n`, async () => {
       expect((await card())?.fallback).toBe(true);
     });
@@ -5517,9 +5522,9 @@ Enter to select · ↑/↓ to navigate · Esc to cancel
     await withPane("codex", "blocked", codexModels(1).replace(CODEX_OPENS, `Continue deployment\n${CODEX_OPENS}`), async () => {
       expect((await card())?.fallback).toBe(true);
     });
-    // Even a Codex-shaped footer belongs to the other agent's unknown prompt here.
+    // Even a Codex-shaped footer belongs to the other agent's unknown prompt here (no generic card on pi).
     await withPane("pi", "blocked", codexLevels(1), async () => {
-      expect((await card())?.fallback).toBe(true);
+      expect(await card()).toBeNull();
     });
     // A newer picker title supersedes the older model heading in the visible transcript.
     const other = `Advanced Reasoning\n\nSelect Deployment Target\n\n› 1. Staging\n  2. Production\n\n${CODEX_OPENS}\n`;

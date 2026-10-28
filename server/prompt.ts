@@ -1,7 +1,7 @@
 import { createHash, randomBytes } from "node:crypto";
 import type { HerdrPane, InteractivePrompt, PanePromptResponse, PromptAnswer, SessionSnapshot, SlashCommand } from "../shared/protocol.ts";
 import { builtinCommands, cachedPaneCommands } from "./commands.ts";
-import { agentProcesses, readCommandTranscript } from "./conversation.ts";
+import { agentProcesses, paneRunsOmo, readCommandTranscript } from "./conversation.ts";
 import { agentProcessInFront } from "./agent-process.ts";
 import { resolveAgent } from "./pane-context.ts";
 import { processAlive, processStartedAt, processStartUpperBoundAsync } from "./process-start.ts";
@@ -11,6 +11,7 @@ import { HerdrError, paneProcessInfo, paneRead, paneScrollInfo, paneSendKeys, pa
 import { piTranscriptPath } from "./pi.ts";
 import { heldOmoProcess } from "./omo.ts";
 import { OmoAskReader } from "./omo-ask.ts";
+import { answerPiAskUser, bindPiAsk, piAskActivity, piAskUserPrompt } from "./pi-ask-bridge.ts";
 import { badRequest, errorResponse, jsonResponse, setRequestRoute } from "./http.ts";
 import { claudePlanFile } from "./claude-plan.ts";
 import { listPendingQuestionForms, openCodeService, replyOpenCodeForm } from "./opencode-service.ts";
@@ -635,6 +636,7 @@ async function readPrompt(paneId: string, codexHome?: string, openCodeStateDir?:
   // outlive the widget, but that is no input to offer as fallback keys. Known next steps still
   // show immediately; only an unrecognized screen waits for this bounded settling window.
   const settling = Date.now() - (formsAnswered.get(paneId) ?? 0) < FORM_SETTLE_MS;
+  // a pi pane gets no generic card (readKnownPrompt says so through suppressFallback)
   if (known.prompt !== null || known.suppressFallback || status !== "blocked" || !agent || settling) {
     fallbackLogged.delete(paneId);
     return { agent, status, prompt: asked(paneId, known.prompt, turns), pane, panes, snapshot, screen: known.screen, inputUnverified: known.inputUnverified };
@@ -657,6 +659,20 @@ async function readPrompt(paneId: string, codexHome?: string, openCodeStateDir?:
 }
 
 const piAskReader = new OmoAskReader(); // Pi and OmO share the message/toolCall JSONL envelope.
+
+/**
+ * Whether no key may go into the pi pane: the web UI's pi-ask extension serves the pane's pi (its
+ * socket answers, or cannot be read), so a pi-ask form can open there at any moment, between any
+ * check and the key that follows it. pi-ask takes no typed keys (its docs/remote-events.md): such a
+ * pane gets no key-driven card at all, pi's own dialogs included, and the terminal answers them.
+ * The pi-ask card answers through the extension instead. A pi without the extension is as on main.
+ */
+async function piAskRefusesKeys(paneId: string, signal?: AbortSignal): Promise<boolean> {
+  return await piAskActivity(paneId, signal) !== "absent";
+}
+
+/** A pi-ask form opened under a key-driven answer: nothing more is sent. */
+class PiAskFormOpen extends Error {}
 async function readKnownPrompt(
   paneId: string,
   pane: { cwd?: string | null; agent_status?: string; agent_session?: HerdrPane["agent_session"] },
@@ -812,6 +828,12 @@ async function readKnownPrompt(
   }
 
   if (!["claude", "omp", "codex", "omo", "pi", "gjc", "hermes", "cmd", "opencode", ""].includes(agent)) return { prompt: null };
+  const piTranscript = agent === "pi" ? await piTranscriptPath(paneId).catch(() => null) : null;
+  // pi-ask's ask_user form, as the web UI's pi extension reports it: answered through pi-ask, never keys
+  if (piTranscript && "path" in piTranscript) {
+    const card = await bindPiAsk(paneId, piTranscript, signal);
+    if (card) return { prompt: publicPrompt(piAskUserPrompt(paneId, piTranscript.path, card)) };
+  }
   let screen = await liveScreen(paneId);
   const questionnaire = agent === "pi" && isPiQuestionnaireScreen(screen);
   const piTabs = agent === "pi" && (questionnaire && /[□■]/.test(screen)
@@ -840,7 +862,7 @@ async function readKnownPrompt(
   const omoTrusted = (agent !== "claude" && agent !== "") || pane.agent_status === "blocked";
   let piNative: ParsedPrompt | null = null;
   if (agent === "pi") {
-    const transcript = await piTranscriptPath(paneId).catch(() => null);
+    const transcript = piTranscript;
     if (transcript && "path" in transcript) {
       try {
         const calls = pendingPiQuestionnaires(transcript.path);
@@ -858,7 +880,7 @@ async function readKnownPrompt(
   if (piTabs && !questionnaire && !piNative) {
     // A saved custom answer replaces the Other label. Only the pane's verified pending call
     // can prove that last row is still input, not a clipped third/fourth ordinary option.
-    const transcript = await piTranscriptPath(paneId).catch(() => null);
+    const transcript = piTranscript;
     if (transcript && "path" in transcript) {
       try {
         const matches = piAskReader.read(transcript.path).flatMap(call => {
@@ -874,6 +896,17 @@ async function readKnownPrompt(
   const prompt = piNative ? publicPrompt(piNative)
     : parseInteractivePrompt(agent, screen, omoAsks[0] ?? null, omoTrusted, omoAsks, agent === "claude" ? heldCandidate(paneId) : null, pane.agent_status === "working");
   if (prompt && await claudeHeldIsGrey(paneId, prompt)) return { prompt: null, screen };
+  // pi-ask's form with no card: pi-ask takes no typed keys (its docs/remote-events.md), so no card
+  // that answers by keys is offered, pi's own dialogs included (the answer would refuse them too):
+  // the terminal answers it. The pane's pi says so through the extension (any open form, a card or
+  // not, with or without a session written yet); without it, an open ask_user call in the session
+  // does. Asked after the screen read, so a form that opened during it counts
+  // A pi pane gets no generic card: its Enter/Esc would be keys guessed into pi, which may be showing
+  // pi-ask's form (it takes no typed keys); the terminal answers what no reader knows. herdr labels an
+  // OmO pane `pi` while OmO waits: told apart by its process tree, it keeps the card other agents get
+  if (agent === "pi" && (prompt === null || parsedByPublicPrompt.get(prompt)?.responder.startsWith("fallback"))
+    && !(await paneRunsOmo(paneId).catch(() => false))) return { prompt: null, screen, suppressFallback: true };
+  if (agent === "pi" && await piAskRefusesKeys(paneId, signal)) return { prompt: null, screen, suppressFallback: true };
   if (!prompt && agent === "gjc") {
     const fallback = parseFallbackPrompt(agent, screen);
     if (parsedByPublicPrompt.get(fallback)?.responder === "fallback-gjc-menu") return { prompt: fallback, screen };
@@ -1229,6 +1262,19 @@ export async function handlePromptRequest(request: Request, url: URL, options: P
         return jsonResponse({ error: { code: "reply_failed", message: `Failed to reply to OpenCode form (HTTP ${replyResult.status}).` } }, 502);
       }
 
+      if (parsedPrompt?.responder === "pi-ask-user" && parsedPrompt.piAskUser) {
+        const { response, answered } = await answerPiAskUser(body.pane_id, parsedPrompt, body, deadline);
+        if (response.ok) askingEnded(body.pane_id);
+        if (answered) {
+          const sent = chatSent.get(body.pane_id)?.commands.at(-1);
+          // pi-ask itself took the answer to the form the sent command opened
+          if (sent?.dialogId === prompt.id) noteCommandEvidence(body.pane_id, sent.id, { kind: "native", at: Date.now() });
+          formsAnswered.set(body.pane_id, Date.now());
+          if (formsAnswered.size > 64) formsAnswered.delete(formsAnswered.keys().next().value!);
+        }
+        return response;
+      }
+
       if (body.step_back === true || body.step_index !== undefined) {
         const native = parsedPrompt?.piAskForm;
         if (!native || body.step_back === true && body.step_index !== undefined
@@ -1258,7 +1304,10 @@ export async function handlePromptRequest(request: Request, url: URL, options: P
         try {
           const moved = await navigatePiAsk(parsedPrompt, target, {
             deadline: deadlineAt, active,
-            send: key => paneSendKeys(body.pane_id, [key]),
+            send: async key => {
+              if (await piAskRefusesKeys(body.pane_id, deadline)) throw new PiAskFormOpen();
+              await paneSendKeys(body.pane_id, [key]);
+            },
             read: async () => {
               if (!active()) return null;
               const live = await readPrompt(body.pane_id, options.codexHome, options.openCodeStateDir, openCodeState, deadline);
@@ -1268,6 +1317,9 @@ export async function handlePromptRequest(request: Request, url: URL, options: P
           if (!moved) return promptChanged();
           askingEnded(body.pane_id);
           return jsonResponse({ ok: true });
+        } catch (error) {
+          if (error instanceof PiAskFormOpen) return promptChanged();
+          throw error;
         } finally { answersUnderWay.delete(body.pane_id); }
       }
 
@@ -1388,6 +1440,8 @@ export async function handlePromptRequest(request: Request, url: URL, options: P
           }
         };
         const sendStep = async (step: AnswerStep, move: boolean, more: boolean): Promise<void> => {
+          // right before each key: a pi-ask form that opened since the read takes none of them
+          if (agent === "pi" && await piAskRefusesKeys(body.pane_id, deadline)) throw new PiAskFormOpen();
           const first = !move && !committed;
           if (!move) committed = true;
           try {
@@ -1485,6 +1539,7 @@ export async function handlePromptRequest(request: Request, url: URL, options: P
           && body.option_index !== parsed.rejectWithEscapeIndex) noteCommandEvidence(body.pane_id, sent.id, { kind: "dialog", at: Date.now() });
       } catch (error) {
         if (error instanceof InvalidAnswer) return badRequest("invalid_answer", error.message);
+        if (error instanceof PiAskFormOpen) return promptChanged();
         throw error;
       } finally {
         answersUnderWay.delete(body.pane_id);

@@ -201,6 +201,35 @@ which follows GJC's provider child: a finished turn can stay on working, so no d
 comes and no INPUT shows for an open question. Install the extension and restart GJC to
 get both chat and done alerts back.
 
+The `ask_user` form of the [`@eko24ive/pi-ask`](https://www.npmjs.com/package/@eko24ive/pi-ask)
+pi package draws its own widget, which the chat cannot read off the screen, and pi-ask answers
+only through its own events inside the pi process, never typed keys. To answer it from the chat,
+explicitly install the web UI's pi extension on each PC that runs pi, from this checkout:
+
+```sh
+bun scripts/install-pi-integration.ts
+```
+
+Nothing installs it for you: the web UI never adds or changes pi's settings, hooks or extensions
+on its own. Restart running pi sessions to load it. The installer writes only its own file,
+`~/.pi/agent/extensions/herdr-web-ui.js` (or under `PI_CODING_AGENT_DIR`), and refuses to replace
+a file it did not write; it does not replace pi settings or other extensions, and no running
+session is modified by it. To remove it, run the same command with `--remove` and restart pi.
+Without the extension the form stays in Terminal, exactly as before. On a remote PC with only the
+runtime bundle, run it with the bundle's Bun as for GJC above. The extension listens on a socket
+only your user can open, `herdr-web-ui-ask/<pid>.sock` in the same directory, and relays the
+card's answer to pi-ask as its submit event: the form then shows as a card with one question per
+step, its options and **Type your own answer**. The card shows only when the pane's pi process
+answers on that socket, writes the session herdr reports for the pane, has one form open and
+that form's `ask_user` call is still unanswered on pi's current branch (after a `/tree` move
+too); anything else, a form opened by `/answer` or `/ask:replay`, Windows, and pi without the
+extension use Terminal. pi-ask is never answered with typed keys: a pi pane never gets the
+generic card of guessed keys that other agents get for a prompt no reader knows, and where the
+extension serves the pane's pi, pi's own dialogs (select, confirm, input) show no card either, since
+a pi-ask form can open there at any moment. The terminal answers those; without the extension,
+pi's own dialogs keep their cards as before. Notes and
+**Elaborate** stay in Terminal. Checked with pi 1.4.0 and pi-ask 1.2.0.
+
 Command Code chat needs the session herdr reports for the pane. Command Code sends that report
 and herdr keeps only the sessions of the agents it knows natively, so no released herdr accepts
 it yet: the pane's status, title and model arrive, its conversation does not. Without it the

@@ -6,7 +6,7 @@ import "./PromptCard.css";
 import { ApiError } from "../lib/api.ts";
 import { useMachineApi } from "../lib/machineContext.tsx";
 import type { InteractivePrompt, PromptAnswer } from "../../shared/protocol.ts";
-import { blocksStepNavigation, focusFollowsAnswer, pressOrigin, type TypedAnswer } from "../lib/promptAnswer.ts";
+import { blocksStepNavigation, focusFollowsAnswer, pressOrigin, sendsChecksWithText, type TypedAnswer } from "../lib/promptAnswer.ts";
 import { promptWords } from "../lib/promptText.ts";
 import { dismissKeyboardOn } from "../lib/keyboard.ts";
 import { useT } from "../lib/i18n.ts";
@@ -86,9 +86,9 @@ export function PromptCard({ paneId, prompt, onPromptChanged, onAnswered, typedA
    * prompt took its place, or after its pane was left, changes nothing there.
    */
   const answer = async (choice: Omit<PromptAnswer, "pane_id" | "prompt_id">, press?: { nativeEvent: Event; currentTarget: EventTarget }): Promise<boolean> => {
-    // Native OpenCode multiselect fields accept checks and a custom entry in the same array.
+    // Native OpenCode multiselect fields and pi-ask's take checks and a custom entry in one answer.
     // Both buttons and Enter submit the whole field, including edits restored by Back.
-    if (prompt.agent === "opencode" && !prompt.fallback && prompt.multi_select && (choice.option_indices !== undefined || choice.custom_text !== undefined)) {
+    if (sendsChecksWithText(prompt) && (choice.option_indices !== undefined || choice.custom_text !== undefined)) {
       choice = {
         option_indices: [...selected].sort((a, b) => a - b),
         ...(custom.trim() ? { custom_text: custom.trim() } : {}),
@@ -295,13 +295,13 @@ export function PromptCard({ paneId, prompt, onPromptChanged, onAnswered, typedA
         </div>
       )}
       {prompt.multi_select && (
-        <button type="button" className={`btn${selected.size > 0 ? " btn-primary" : ""} prompt-card-submit`} disabled={pending || (selected.size === 0 && !prompt.optional && !(prompt.agent === "opencode" && custom.trim()))} onClick={(event) => void answer({ option_indices: [...selected].sort((a, b) => a - b) }, event)}>
+        <button type="button" className={`btn${selected.size > 0 ? " btn-primary" : ""} prompt-card-submit`} disabled={pending || (selected.size === 0 && !prompt.optional && !(sendsChecksWithText(prompt) && custom.trim()))} onClick={(event) => void answer({ option_indices: [...selected].sort((a, b) => a - b) }, event)}>
           {selected.size > 0 ? t("Submit ({n})", { n: selected.size }) : t("Submit")}
         </button>
       )}
       {prompt.custom_option_index !== null && (
         <div className="prompt-card-custom">
-          {hasChoices && <span className="prompt-card-custom-label" id={customLabelId}>{prompt.agent === "opencode" && prompt.multi_select ? t("Custom answer") : t("Or type your own answer")}</span>}
+          {hasChoices && <span className="prompt-card-custom-label" id={customLabelId}>{sendsChecksWithText(prompt) ? t("Custom answer") : t("Or type your own answer")}</span>}
           <div className="prompt-card-custom-row">
             <input className="input" value={custom} disabled={pending} placeholder={prompt.options[prompt.custom_option_index] !== undefined ? words.label(prompt.custom_option_index) : t("Type an answer")} aria-label={hasChoices ? undefined : t("Custom answer")} aria-labelledby={hasChoices ? customLabelId : undefined} onChange={(event) => setCustom(event.currentTarget.value)} onKeyDown={(event) => {
               // an IME's Enter commits the candidate; WebKit can send it after compositionend, as key code 229
