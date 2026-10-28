@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { Database } from "bun:sqlite";
 import { createHash } from "node:crypto";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { UsageReport } from "../shared/protocol.ts";
@@ -126,6 +126,25 @@ describe("providers", () => {
       { kind: "session", scope: null, used_percent: 42, resets_at: "2026-09-29T14:00:00.000Z", starts_at: "2026-09-29T09:00:00.000Z" },
       { kind: "week", scope: null, used_percent: 63.4, resets_at: "2026-10-03T00:00:00.000Z", starts_at: "2026-09-26T00:00:00.000Z" },
       { kind: "week", scope: "Sonnet", used_percent: 5, resets_at: null, starts_at: null },
+    ]);
+  });
+
+  it("reads Claude's windows from the status line Claude's own payload keeps, without a request", async () => {
+    keychain.set("Claude Code-credentials|me", { status: "found", value: JSON.stringify({ claudeAiOauth: { accessToken: "k", expiresAt: NOW + HOUR, subscriptionType: "max" } }) });
+    const path = join(home, ".herdr", "statusline-last.json");
+    write(path, { session_id: "s", model: { display_name: "Opus 5.5" }, rate_limits: {
+      five_hour: { used_percentage: 17, resets_at: (NOW + 2 * HOUR) / 1000 },
+      seven_day: { used_percentage: 64, resets_at: (NOW + 48 * HOUR) / 1000 },
+    } });
+    utimesSync(path, new Date(NOW), new Date(NOW));
+    const [usage] = (await new UsageService(context("darwin"), only("claude")).report()).providers;
+    // the endpoint answers 403 from some networks; nothing is asked of it when the line has the numbers
+    expect(requests).toEqual([]);
+    expect(usage!.problem).toBeNull();
+    expect(usage!.plan).toBe("max");
+    expect(usage!.windows).toEqual([
+      { kind: "session", scope: null, used_percent: 17, resets_at: new Date(NOW + 2 * HOUR).toISOString(), starts_at: new Date(NOW + 2 * HOUR - 5 * HOUR).toISOString() },
+      { kind: "week", scope: null, used_percent: 64, resets_at: new Date(NOW + 48 * HOUR).toISOString(), starts_at: new Date(NOW + 48 * HOUR - 7 * 24 * HOUR).toISOString() },
     ]);
   });
 

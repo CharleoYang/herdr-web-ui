@@ -22,6 +22,7 @@ import { closeSync, mkdtempSync, openSync, readdirSync, readSync, rmSync, writeF
 import { open, type FileHandle } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
+import { readStatusline, type StatuslinePayload } from "./statusline.ts";
 import type { ProviderUsage, UsageProblem, UsageProviderId, UsageReport, UsageWindow } from "../shared/protocol.ts";
 import { jsonResponse } from "./http.ts";
 import { opencodeDatabasePath } from "./opencode.ts";
@@ -298,6 +299,18 @@ function claudeWindow(value: unknown, kind: UsageWindow["kind"], scope: string |
   return used === null ? null : { kind, scope, used_percent: percent(used), resets_at: resetsAt, starts_at: startOf(resetsAt, seconds) };
 }
 
+/**
+ * Claude's windows from the payload its own status line draws (server/statusline.ts): the five-hour
+ * session and the week, exactly the numbers the CLI shows, with no request and no token. The API
+ * below stays the fallback for a machine whose status line has not written a payload yet.
+ */
+function claudeStatuslineWindows(payload: StatuslinePayload): UsageWindow[] {
+  const windows: UsageWindow[] = [];
+  if (payload.fiveHour) windows.push({ kind: "session", scope: null, used_percent: percent(payload.fiveHour.usedPercent), resets_at: payload.fiveHour.resetsAt, starts_at: startOf(payload.fiveHour.resetsAt, FIVE_HOURS) });
+  if (payload.sevenDay) windows.push({ kind: "week", scope: null, used_percent: percent(payload.sevenDay.usedPercent), resets_at: payload.sevenDay.resetsAt, starts_at: startOf(payload.sevenDay.resetsAt, SEVEN_DAYS) });
+  return windows;
+}
+
 const claude: UsageProvider = {
   id: "claude",
   async signIns(ctx) {
@@ -311,6 +324,11 @@ const claude: UsageProvider = {
     return found.flat();
   },
   async read(ctx, signIn) {
+    const local = readStatusline(ctx.home, ctx.now());
+    if (local !== null) {
+      const windows = claudeStatuslineWindows(local);
+      if (windows.length > 0) return { plan: signIn.plan ?? null, windows };
+    }
     const body = await requestJson(ctx, "https://api.anthropic.com/api/oauth/usage", {
       headers: { authorization: `Bearer ${signIn.token}`, accept: "application/json", "anthropic-beta": "oauth-2025-04-20", "user-agent": USER_AGENT },
     });
