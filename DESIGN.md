@@ -3156,8 +3156,18 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   where subscribing anew mends it (the push service retired the subscription, the server does not
   know it, it was made for another server key), reading **Turning alerts on…** and disabled
   while the repair runs; **Alerts**, opening Settings → Alerts, for a refusal, which
-  re-subscribing does not mend and Send test answers. Not dismissible: the line leaves on the
-  push the repair or a test proves, or when alerts are turned off here.
+  re-subscribing does not mend and Send test answers. The update notice's dismiss button closes
+  the line for that fault on this device, across reloads and open browser tabs. Another fault,
+  a look where the server answers for a held subscription with no fault, alerts turned off or
+  the device locking ends the dismissal; a look that proves nothing keeps it. Settings keeps
+  showing the fault even while the line is dismissed.
+- A failed **Turn alerts on again** replaces the fault sentence with its reason: the browser
+  would not make a push subscription (in Brave, turn on **Use Google services for push
+  messaging** in its privacy settings), the page's service worker is not running (reload, then
+  try again), or the PC did not take the subscription (try again). The reason and the repair
+  stay in Settings through looks with no new health evidence; a notice already showing the
+  fault keeps them too. Working alerts, another fault, alerts turned off or a new repair ends
+  the old reason.
 - What it says is decided once (`lib/pushHealth.ts`) and read by this line and by the Test
   notification row of Settings → Alerts alike, so the two never disagree and no second banner
   competes: Settings' hint carries the same sentence, its **Turn alerts on again** is the same
@@ -3171,7 +3181,8 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   existing Send test / Turn alerts on again pair, extended rather than a second surface. Neither
   the Codex app nor the Claude app surfaces push-delivery health, so there is no precedent to
   follow there; Agent of Empires' classifier (MIT, THIRD_PARTY_NOTICES.md) is adapted for the
-  rule, with its repair narrowed to the faults re-subscribing mends.
+  rule, with its repair narrowed to the faults re-subscribing mends. Dismissal follows the update
+  notice's button and the PC-action notice's per-fault lifetime (`lib/machineNotice.ts`).
 
 ### Token gate
 - A centered password card replaces the entire shell while authentication is required. It has a real
