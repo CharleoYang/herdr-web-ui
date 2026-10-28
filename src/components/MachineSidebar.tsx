@@ -313,7 +313,7 @@ function MachineActionNotice({ machine, onSetup }: { machine: Machine; onSetup(m
     setBusy(true); setError(null);
     try { await request(); } catch (e) { setError(e instanceof Error ? e.message : String(e)); } finally { setBusy(false); }
   };
-  if (machine.updating) {
+  if (machine.updating && machine.action_required !== "windows_login" && machine.action_required !== "windows_start_failed") {
     const updating = machine.updating;
     return <div className="machine-action is-updating" role="status">
       <p className="machine-action-text"><strong>{t(updating.ovis ? "Updating this PC's Ovis" : "Updating the bridge")}</strong><span>{t("You can keep using the app; this PC reconnects when it is done.")}</span></p>
@@ -325,6 +325,12 @@ function MachineActionNotice({ machine, onSetup }: { machine: Machine; onSetup(m
   if (machine.action_required === "connect") return <div className="machine-action is-setup" role="status">
     <p className="machine-action-text"><strong>{t("Saved in herdr")}</strong><span>{t("Connect once to enable automatic reconnection. Installation and startup need separate approval.")}</span></p>
     <button type="button" className="btn btn-primary" onClick={() => onSetup(machine, false)}>{t("Connect")}</button>
+  </div>;
+  if (machine.action_required === "windows_login" || machine.action_required === "windows_start_failed") return <div className="machine-action" role="status">
+    <p className="machine-action-text"><strong>{t(machine.action_required === "windows_start_failed" ? "Windows desktop startup failed" : "Waiting for Windows sign-in")}</strong>{machine.action_required === "windows_login" && <span>{t("Sign in to Windows on this PC; Ovis will reconnect automatically.")}</span>}</p>
+    {machine.error && machine.error !== "Waiting for Windows sign-in on this PC." && <p className="machine-action-reason">{machineErrorText(machine.error, t)}</p>}
+    <p className="field-hint">{t("Signing out of Windows ends herdr and its panes; lock the PC instead.")}</p>
+    <button type="button" className="btn" onClick={() => onSetup(machine, false)}>{t("Review startup options")}</button>
   </div>;
   // another app's bridge runs on this PC: neither an update from here nor an approval fixes that,
   // so it is named as what it is, with the server's reason and a plain reconnect
@@ -429,7 +435,7 @@ export function MachineActionBanner({ machines, onSetup }: { machines: Machine[]
     const kept = keepDismissed(dismissed, machines);
     if (kept.length !== dismissed.length) { setDismissed(kept); writeDismissed(kept); }
   }, [machines, dismissed]);
-  const running = machines.find((machine) => machine.updating);
+  const running = machines.find((machine) => machine.updating && machine.action_required !== "windows_login" && machine.action_required !== "windows_start_failed");
   if (running?.updating) {
     const view = describeProgress(running.updating.progress);
     return <div className="update-notice" role="status">
@@ -441,13 +447,15 @@ export function MachineActionBanner({ machines, onSetup }: { machines: Machine[]
   if (!first) return null;
   const conflict = first.action_required === "bridge_conflict";
   const update = first.action_required === "update_bridge";
+  const login = first.action_required === "windows_login";
+  const startupFailed = first.action_required === "windows_start_failed";
   const others = waiting.length > 1 ? t(" (+{n} more)", { n: waiting.length - 1 }) : "";
   const own = ownOvisAction(first);
   // a failed update of it says so here; the PC's card says why
   const failure = ownUpdateFailure(first);
   return <div className="update-notice" role="status">
-    <span title={failure === null ? undefined : machineErrorText(failure, t)}>{own ? t(failure ? "Updating {name}'s own Ovis failed{others}." : own.updatable ? "{name}'s own Ovis needs an update to reconnect{others}." : "{name}'s own Ovis needs an update on that PC{others}.", { name: first.name, others }) : t(conflict ? "{name} has a bridge connection conflict{others}." : update ? "{name} needs a bridge update to reconnect{others}." : "{name} needs web access setup{others}.", { name: first.name, others })}</span>
-    <button type="button" className="btn" onClick={() => update ? void machineRequest(`/${encodeURIComponent(first.id)}/update-bridge`, "POST").catch(() => onSetup(first, true)) : onSetup(first, false)}>{own ? t(own.updatable ? "Update this PC's Ovis" : "Reconnect") : t(conflict ? "Reconnect" : update ? "Update bridge" : "Set up web access")}</button>
+    <span title={failure === null ? undefined : machineErrorText(failure, t)}>{own ? t(failure ? "Updating {name}'s own Ovis failed{others}." : own.updatable ? "{name}'s own Ovis needs an update to reconnect{others}." : "{name}'s own Ovis needs an update on that PC{others}.", { name: first.name, others }) : t(startupFailed ? "Windows desktop startup failed on {name}{others}." : login ? "{name} is waiting for Windows sign-in{others}." : conflict ? "{name} has a bridge connection conflict{others}." : update ? "{name} needs a bridge update to reconnect{others}." : "{name} needs web access setup{others}.", { name: first.name, others })}</span>
+    <button type="button" className="btn" onClick={() => update ? void machineRequest(`/${encodeURIComponent(first.id)}/update-bridge`, "POST").catch(() => onSetup(first, true)) : onSetup(first, false)}>{own ? t(own.updatable ? "Update this PC's Ovis" : "Reconnect") : t(login || startupFailed ? "Review startup options" : conflict ? "Reconnect" : update ? "Update bridge" : "Set up web access")}</button>
     <button type="button" className="icon-button update-notice-dismiss" aria-label={t("Dismiss")} title={t("Dismiss")} onClick={() => { const next = [...dismissed, ...waiting.map(noticeKey)]; setDismissed(next); writeDismissed(next); }}><X /></button>
   </div>;
 }
