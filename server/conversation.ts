@@ -40,7 +40,7 @@ import nodePath, { basename, dirname, relative, sep, type PlatformPath } from "n
 import { authorizedTranscript } from "./transcript-store.ts";
 
 import type { ConversationMetadata, ConversationTurn, HerdrPane, SessionSnapshot } from "../shared/protocol.ts";
-import { herdrRpc, paneProcessInfo, paneRead, sessionSnapshot, type ProcessInfo } from "./herdr/client.ts";
+import { herdrRpc, paneProcessInfo, paneRead, paneScrollInfo, sessionSnapshot, type ProcessInfo } from "./herdr/client.ts";
 import { resolveAgent } from "./pane-context.ts";
 import { codexFreshSession, codexHistorySegments, createCodexTranscriptParser, codexOutputText, codexTranscriptPath, defaultCodexHome, forgetAllCodexState, forgetCodexStateFor, paneCodexHome, parseCodexTranscript, readRange } from "./codex.ts";
 import { CODEX_IMAGE_REF, CODEX_TOOL_IMAGE_REF, codexOutputPicture, codexTranscriptImage, DataUrlPictureScan, finish, finishAsync, forgetOmpBlobTypes, InlinePictureScan, MAX_IMAGE_BYTES, ompBlobAnchor, ompBlobDigest, ompBlobPictureSteps, type Steps } from "./codex-images.ts";
@@ -1367,6 +1367,25 @@ export async function paneTranscript(paneId: string, codexHome?: string, snapsho
 }
 
 /**
+ * The pane's live screen, or "" when nothing proves it: herdr's viewport, read while herdr reports
+ * it at the bottom with the same history before and after the read. Scrolled up, on this device or
+ * another, the viewport is history; and herdr's detection read is no stand-in, since on a short
+ * screen it reaches up into the history above (herdr 0.9.5: a cleared 7-row screen read as 34 rows).
+ * Whatever the agent drew there before (another model, a conversation) is not what it shows now.
+ * A scroll herdr does not report, or a lookup that fails, proves nothing either: pane.get then gives
+ * no geometry, and a viewport scrolled up into the blank rows under a short screen reads the same
+ * as the live one, so no screen is read rather than guessed (unlike viewportShowsLive's text check).
+ */
+async function bottomViewport(paneId: string): Promise<string> {
+  const scroll = () => paneScrollInfo(paneId).catch(() => null);
+  const before = await scroll();
+  if (before?.offset_from_bottom !== 0) return "";
+  const text = await paneRead({ paneId, source: "visible", format: "text", timeoutMs: 2_000 }).then((read) => read.text, () => "");
+  const after = text === "" ? null : await scroll();
+  return after?.offset_from_bottom === 0 && after.max_offset_from_bottom === before.max_offset_from_bottom ? text : "";
+}
+
+/**
  * pane -> agent session -> transcript turns. Read-only, same-user files only.
  * Claude sessions are looked up by id under ~/.claude/projects; omp sessions
  * come from herdr or the pane's omp process (ompTranscriptPath); omo sessions are resolved from its own store by
@@ -1385,11 +1404,11 @@ export async function paneConversation(paneId: string, codexHome?: string, page:
 
   // no transcript states the model yet: the agent's own screen does (start-screen.ts). A screen
   // that cannot be read leaves it unknown. omp follows its transcript only: catalog discovery
-  // can refresh the CLI's OAuth credentials and is never initiated by the bridge.
-  const screenMetadata = async (source: RecognizedConversation["source"]): Promise<ConversationMetadata> => {
-    const screen = await paneRead({ paneId, source: "visible", format: "text", timeoutMs: 2_000 }).then((read) => read.text, () => "");
-    return startScreenMetadata(source, screen);
-  };
+  // can refresh the CLI's OAuth credentials and is never initiated by the bridge. Only the live
+  // screen counts (bottomViewport): history can show an older frame of the agent, with a model it
+  // no longer runs.
+  const screenMetadata = async (source: RecognizedConversation["source"]): Promise<ConversationMetadata> =>
+    startScreenMetadata(source, await bottomViewport(paneId));
   const notBegun = async (source: RecognizedConversation["source"], id: string, read?: ConversationMetadata): Promise<RecognizedConversation> => {
     // what the screen states can change with the pane's output, with no file to watch: the chat re-reads on it
     const screen = readsStartScreen(source);
@@ -1426,7 +1445,7 @@ export async function paneConversation(paneId: string, codexHome?: string, page:
       // a Codex that reported no session yet (one started in the terminal): the terminal stands in
       // for the chat, and Codex's live status line still states the model and effort it runs at
       if (pane.agent === "codex" && page.before === undefined && page.since === undefined && page.from === undefined) {
-        const text = await paneRead({ paneId, source: "visible", format: "text", timeoutMs: 2_000 }).then((read) => read.text, () => "");
+        const text = await bottomViewport(paneId);
         const screen = startScreenMetadata("codex-transcript", text);
         // unless it has begun no conversation at all: then it has its greeting, as one this server
         // started does. At work or asking, its first turn may have begun.

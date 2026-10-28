@@ -2390,11 +2390,18 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   The bridge never runs that command or infers an omp model from its status line or directory.
   Codex is read only from the live footer beneath its composer; an answer quoting the /model
   picker or a draft cannot supply a model, and while a popup hides the footer the model is unknown.
-  A Codex started in a terminal
-  reports no session, so its terminal-output fallback carries the status line's model. Such an
-  answer is marked `screen`, and the chat re-reads it on terminal output, so a switch made in the
-  terminal shows once the agent draws it. A name the screen cannot tie to one id draws no pill,
-  and an agent's default model never stands in for the session's.
+  Only the live screen is read: the viewport, while herdr reports it at the bottom with the same
+  history before and after the read; where herdr reports no scroll, nothing proves the live screen
+  and no model is named. History can show an older frame with a model the agent no
+  longer runs, so while the terminal is scrolled up (on this device or another) no model is named
+  until it is back at the bottom; herdr's detection read is no stand-in, since on a short screen it
+  reaches up into the history above. A Codex started in a terminal
+  reports no session, so its terminal-output fallback carries the status line's model, and whether
+  it has begun nothing yet (its greeting) is decided on the same live screen. Such an answer is
+  marked `screen`, and the chat re-reads it on terminal output, so a switch made in the terminal
+  shows once the agent draws it. A name on the screen that the
+  agent's own naming does not turn into one id draws no pill (no catalog is looked up), nor does a
+  screen that states no model, and an agent's default model never stands in for the session's.
 - The model is drawn by name only where its id is one `modelLabel` (`src/lib/modelName.ts`) can
   name for certain, from the vendor's own regular naming and matched whole:
   `claude-<family>-<major>[-<minor>]`, also behind `anthropic/`, is `<Family> <major>.<minor>`
