@@ -398,9 +398,9 @@ function pageBefore(stream: TranscriptStream, source: StreamSource, to: number, 
 }
 
 /**
- * Keep prompt boundaries and settled turns between reads. Codex, OMP and Claude also
- * fold only the live task's appended complete records; other native readers reparse
- * that task. Stream generations and byte boundaries invalidate rewritten history.
+ * Keep prompt boundaries and settled turns between reads. Codex, Claude, OMP, OMO and
+ * GJC also fold only the live task's appended complete records; other native readers
+ * reparse that task. Stream generations and byte boundaries invalidate rewritten history.
  */
 interface LiveScan {
   id: string;
@@ -556,10 +556,16 @@ function parseTurns(source: RecognizedConversation["source"], path: string, text
     }
   }
   return source === "codex-transcript" ? parseCodexTranscript(text, Infinity)
-    // pi keeps a picture inline and omp in its blob store, and the image endpoint answers both; omo and
-    // gjc are read the same way but would carry image refs nothing answers, so they name none
     : source === "claude-transcript" ? parseClaudeTranscript(text, Infinity, { subagents: subagentsOnPage(path, text), noticed })
-      : parseOmpTranscript(text, Infinity, { images: source === "pi-transcript" || source === "cmd-transcript" || source === "omp-transcript", blobs: source === "omp-transcript" ? ompBlobStore(path) : null, callIds: source === "gjc-transcript", taskTitles });
+      : parseOmpTranscript(text, Infinity, ompReading(source, path, taskTitles));
+}
+
+/** How the omp record fold reads a source, the same for a one-shot parse and a live one: pi keeps a
+ * picture inline and omp in its blob store, and the image endpoint answers both; omo and gjc are read
+ * the same way but would carry image refs nothing answers, so they name none. gjc's tool parts carry
+ * their call ids, which the chat matches gjc's rewrites by */
+function ompReading(source: RecognizedConversation["source"], path: string, taskTitles?: Map<string, string>) {
+  return { images: source === "pi-transcript" || source === "cmd-transcript" || source === "omp-transcript", blobs: source === "omp-transcript" ? ompBlobStore(path) : null, callIds: source === "gjc-transcript", taskTitles };
 }
 
 /** The blob store of the omp transcript a stream reads (ompBlobStore), for its turn scan; null for any other agent. */
@@ -568,7 +574,7 @@ function turnBlobs(stream: TranscriptStream, source: StreamSource): string | nul
   return source === "omp-transcript" && live !== undefined ? ompBlobStore(live) : null;
 }
 
-type IncrementalSource = "codex-transcript" | "omp-transcript" | "claude-transcript";
+type IncrementalSource = "codex-transcript" | "omp-transcript" | "omo-transcript" | "gjc-transcript" | "claude-transcript";
 
 interface LiveTranscriptTurn {
   source: IncrementalSource;
@@ -586,6 +592,12 @@ interface LiveTranscriptTurn {
   subagents?: { ids: Set<string>; details: Map<string, SubagentDetail> };
 }
 const liveTranscriptTurns = new Map<string, LiveTranscriptTurn>();
+/** The original Codex cache's entry/source-byte budgets. OMO and GJC folds have budgets of their
+ * own: chats read in turn whose tasks no longer fit evict each other on every poll, so OMO and
+ * GJC, folded after the others, must not take room that Codex, OMP or Claude chats have had. */
+const LIVE_TURN_ENTRIES = 8;
+const LIVE_TURN_BYTES = 2 * TRANSCRIPT_WINDOW_BYTES;
+const liveTurnBudget = (source: IncrementalSource) => source === "omo-transcript" || source === "gjc-transcript" ? "omo-gjc" : "codex-omp-claude";
 
 /** Append-only task folds; snapshots never lend mutable state to an earlier HTTP answer. */
 function incrementalLiveTurn(path: string, stream: TranscriptStream, source: IncrementalSource, start: number, before: SettledTurns): { turns: ConversationTurn[]; metadata: ConversationMetadata } {
@@ -609,7 +621,7 @@ function incrementalLiveTurn(path: string, stream: TranscriptStream, source: Inc
       }
     }
   }
-  // OMP and Claude used to reread the live task, so growth must not hide an in-place edit.
+  // Every reader but Codex used to reread the live task, so growth must not hide an in-place edit.
   // Verify committed bytes without decoding or reparsing them; keep only their digest.
   const currentBytes = source === "codex-transcript" ? undefined : readStream(stream, start, stream.length);
   let digest = currentBytes ? createHash("sha256") : undefined;
@@ -624,8 +636,8 @@ function incrementalLiveTurn(path: string, stream: TranscriptStream, source: Inc
   if (!cached) {
     const subagents = source === "claude-transcript" ? { ids: new Set<string>(), details: new Map<string, SubagentDetail>() } : undefined;
     const parser = source === "codex-transcript" ? createCodexTranscriptParser()
-      : source === "omp-transcript" ? createOmpTranscriptParser({ images: true, blobs: ompBlobStore(path), taskTitles: new Map(before.taskTitles) })
-      : createClaudeTranscriptParser({ subagents: subagents!.details, noticed: new Set(before.noticed) });
+      : source === "claude-transcript" ? createClaudeTranscriptParser({ subagents: subagents!.details, noticed: new Set(before.noticed) })
+      : createOmpTranscriptParser(ompReading(source, path, new Map(before.taskTitles)));
     cached = { source, id: stream.id, start, pageStart: before.start, prefixBoundary: before.tail, scanned: start,
       boundary: bytesBefore(stream, start), parser, metadata: before.metadata, subagents };
   }
@@ -650,13 +662,17 @@ function incrementalLiveTurn(path: string, stream: TranscriptStream, source: Inc
     cached.boundary = bytesBefore(stream, cached.scanned);
   }
   if (digest) cached.contentHash = digest.update(bytes.subarray(0, complete)).digest("hex");
-  // The original Codex cache's entry/source-byte budgets are shared by all three readers.
-  // Retain normalized state only, never raw source records or the speculative tail.
-  remember(liveTranscriptTurns, path, cached, 8);
-  let retained = [...liveTranscriptTurns.values()].reduce((sum, turn) => sum + turn.scanned - turn.start, 0);
-  for (const [key, turn] of liveTranscriptTurns) {
-    if (retained <= 2 * TRANSCRIPT_WINDOW_BYTES) break;
+  // Retain normalized state only, never raw source records or the speculative tail. The least
+  // recently read entries of this budget make room.
+  liveTranscriptTurns.delete(path);
+  liveTranscriptTurns.set(path, cached);
+  const budget = [...liveTranscriptTurns].filter(([, turn]) => liveTurnBudget(turn.source) === liveTurnBudget(source));
+  let entries = budget.length;
+  let retained = budget.reduce((sum, [, turn]) => sum + turn.scanned - turn.start, 0);
+  for (const [key, turn] of budget) {
+    if (entries <= LIVE_TURN_ENTRIES && retained <= LIVE_TURN_BYTES) break;
     liveTranscriptTurns.delete(key);
+    entries -= 1;
     retained -= turn.scanned - turn.start;
   }
   return { turns: cached.parser.snapshot(tail), metadata: parseConversationMetadata(tail, source, cached.metadata) };
@@ -712,7 +728,7 @@ function liveTurns(path: string, stream: TranscriptStream, source: RecognizedCon
   }
   settled.observedEnd = stream.length;
   rememberPage(settledTurns, key, settled, 8);
-  if (source === "codex-transcript" || source === "omp-transcript" || source === "claude-transcript") {
+  if (source === "codex-transcript" || source === "omp-transcript" || source === "omo-transcript" || source === "gjc-transcript" || source === "claude-transcript") {
     const live = incrementalLiveTurn(path, stream, source, last, settled);
     return { turns: [...settled.turns, ...live.turns], metadata: live.metadata };
   }
@@ -727,6 +743,16 @@ export function piPageCacheUsage(): { pages: number; settled: number; withinBudg
   const pages = [...cache.values()].filter(item => item.source === "pi-transcript" || item.source === "cmd-transcript");
   const settled = [...settledTurns.values()].filter(item => item.source === "pi-transcript" || item.source === "cmd-transcript");
   return { pages: pages.length, settled: settled.length, withinBudget: [...pages, ...settled].every(item => withinRetentionBudget(item, PI_PAGE_CACHE_BYTES)) };
+}
+
+/** Retention diagnostics only: the live tasks folded between reads, by path, never their contents. */
+export function liveTurnCacheUsage(): { paths: string[]; withinBudget: boolean } {
+  const turns = [...liveTranscriptTurns.values()];
+  const withinBudget = (["codex-omp-claude", "omo-gjc"] as const).every((name) => {
+    const budget = turns.filter((turn) => liveTurnBudget(turn.source) === name);
+    return budget.length <= LIVE_TURN_ENTRIES && budget.reduce((sum, turn) => sum + turn.scanned - turn.start, 0) <= LIVE_TURN_BYTES;
+  });
+  return { paths: [...liveTranscriptTurns.keys()], withinBudget };
 }
 
 /** Forget every scan and parse kept between polls (tests compare against a cold read). */
