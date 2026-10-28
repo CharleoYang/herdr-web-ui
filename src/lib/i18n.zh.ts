@@ -297,7 +297,6 @@ const BASE: Record<string, string> = {
   "Held input": "保留的输入",
 };
 
-/** The parts ZH is made of; src/lib/i18n.test.ts fails when a key is in two parts, since a spread keeps only the last. */
 export const ZH_PARTS: Record<string, Record<string, string>> = {
   base: BASE,
   settings: SETTINGS_ZH,

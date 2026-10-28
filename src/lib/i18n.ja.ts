@@ -295,7 +295,6 @@ const BASE: Record<string, string> = {
   "Held input": "保持した入力",
 };
 
-/** The parts JA is made of; src/lib/i18n.test.ts fails when a key is in two parts, since a spread keeps only the last. */
 export const JA_PARTS: Record<string, Record<string, string>> = {
   base: BASE,
   settings: SETTINGS_JA,

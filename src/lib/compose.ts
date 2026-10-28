@@ -123,7 +123,9 @@ export function openCodeRefusalNote(code: string, message: string, tt: (text: st
 export function submitNote(code: string, message: string, agent?: string | null): string {
   const opencode = openCodeRefusalNote(code, message);
   if (opencode !== null) return opencode;
-  if (code === "submit_partial") return t("Not confirmed: the terminal draft was cleared or may have changed. Your message stayed here. Check the terminal before sending again.");
+  // a cleared draft with no Enter receipt is not a lost message: the agent may already hold it as a
+  // queued turn, so the words say both, and the terminal is where the reader decides
+  if (code === "submit_partial") return t("Not confirmed: it may already be queued in the terminal. Your message stayed here. Check the terminal before sending again.");
   if (code === "agent_blocked") return t("Not sent: the agent is waiting for an answer in the terminal. Answer it first.");
   if (code === "read_only") return t("Not sent: this view only watches the pane.");
   if (code === "held_input") return t("Not sent: send or discard the held input first.");

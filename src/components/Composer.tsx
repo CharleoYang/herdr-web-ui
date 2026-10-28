@@ -835,7 +835,7 @@ export function Composer({
     try {
       const result = onSend(text, clearDraft, sendAnyway);
       if (!(result instanceof Promise)) { settle(result); composerDrafts.end(draftKey, sendId); return true; }
-      void result.then(settle).catch(() => { if (mounted.current) setNote(t("Not confirmed. Check the terminal before sending again.")); }).finally(() => composerDrafts.end(draftKey, sendId));
+      void result.then(settle).catch(() => { if (mounted.current) setNote(t("Not confirmed: it may already have reached the agent. Check the terminal before sending again.")); }).finally(() => composerDrafts.end(draftKey, sendId));
     } catch {
       composerDrafts.end(draftKey, sendId);
       if (mounted.current) setNote(t("Not confirmed. Check the terminal before sending again."));

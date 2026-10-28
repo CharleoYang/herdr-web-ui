@@ -1,4 +1,4 @@
-import { createContext, memo, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type ComponentType } from "react";
+import { createContext, memo, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ComponentType } from "react";
 import { createPortal } from "react-dom";
 import {
   ArrowDown, BookOpen, Check, ChevronDown, ChevronRight, Circle, CircleAlert, CircleCheck, CircleDot, CircleQuestionMark, CircleSlash, CircleX, Copy, Layers, SquareTerminal, Target, Undo2,
@@ -42,6 +42,7 @@ import { followGlides } from "../lib/followScroll.ts";
 import { useMediaQuery } from "../lib/useMediaQuery.ts";
 import { statusEdgeRead } from "../lib/status.ts";
 import { askedQuestions } from "../../shared/askQuestions.ts";
+import { currentWaitingSend, forgetWaitingSend, subscribeWaitingSends, waitingKey, waitingText } from "../lib/sentWaiting.ts";
 import { ConversationRefresh } from "../lib/conversationRefresh.ts";
 import { teammateMessageParts, type TeammateMessage } from "../lib/teammateMessage.ts";
 import { usePageVisible } from "../lib/visibility.ts";
@@ -2233,10 +2234,24 @@ export const ChatView = memo(function ChatView({ paneId, presentationKey, finish
   // empty (never display: none); its words land a frame after it (lib/useAnnouncedText.ts). The
   // connection's word is the header chip's alone; a slow PC is waited for quietly before it alarms
   const waiting = error !== null && error.kind === "slow" && failures < SLOW_READS_BEFORE_ALARM;
+  // A message this browser sent that the pane has not written as a turn yet: Claude records the user
+  // turn only when its next turn starts, so without this the chat would show nothing at all. The
+  // queue lives in the store, so a reader who goes to another tab and comes back still sees it.
+  const waitKey = waitingKey(machineId, paneId);
+  const sentWaiting = useSyncExternalStore(subscribeWaitingSends, () => currentWaitingSend(waitKey));
+  const stillSending = waitingText(sentWaiting, state.turns);
+  useEffect(() => {
+    if (sentWaiting !== null && waitingText(sentWaiting, state.turns) === null) forgetWaitingSend(waitKey);
+  }, [sentWaiting, state.turns, waitKey]);
   const waitWords = useAnnouncedText(!loaded && error === null ? t("Loading conversation…") : waiting ? t("Waiting for the PC…") : null);
   const retryRead = useCallback(() => { setFailures(0); conversationRefresh.refresh(); }, [conversationRefresh]);
   const footer = <>
       <p className={waitWords === null ? "visually-hidden" : "chat-inline-state"} role="status">{waitWords}</p>
+      {/* sent, and the agent has not started its turn for it yet: say so with the words themselves */}
+      {stillSending !== null && <p className="chat-inline-state chat-sent-waiting" role="status">
+        <span className="chat-sent-waiting-label">{t("Sent · waiting for the agent's next turn")}</span>
+        <span className="chat-sent-waiting-text">{stillSending.length > 160 ? `${stillSending.slice(0, 160)}…` : stillSending}</span>
+      </p>}
       {error !== null && !waiting && (errorStatus === 401
         ? <p className="chat-inline-state chat-inline-error" role="alert">{t("locked — the token gate is asking again")}</p>
         : <FailureLine action={t("Couldn't load the conversation")} failure={error} onRetry={retryRead} />)}
