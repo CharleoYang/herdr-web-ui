@@ -372,7 +372,13 @@ export function createServer(
       // carries a file's first line and its path), as a directory listing and a file read are; the
       // composer's menu that lists them is a drive feature (#2132)
       const commandRows = /^\/api\/(?:machines\/[^/]+\/)?(?:agent|pane)\/commands$/.test(pathname);
-      if (readOnly && (fileRead || directoryListing || repositoryDiff || sessionHistory || commandRows || mutating && !ownPreferences)) {
+      // the paths under a pane's folder that match a query are a directory listing too; they feed the
+      // composer's @-mention picker, a drive feature (#2244)
+      const paneFiles = /^\/api\/(?:machines\/[^/]+\/)?pane\/files$/.test(pathname);
+      // where a plugin action's run stands carries what its command printed when it failed, asked for by a
+      // log id: only the device that started the run (a POST, which a watching device cannot send) asks it
+      const pluginRun = /^\/api\/(?:machines\/[^/]+\/)?plugin\/action$/.test(pathname);
+      if (readOnly && (fileRead || directoryListing || repositoryDiff || sessionHistory || commandRows || paneFiles || pluginRun || mutating && !ownPreferences)) {
         setRequestRoute("watch-refusal");
         return jsonResponse({ error: { code: "read_only", message: "this device can only watch" } }, 403);
       }
