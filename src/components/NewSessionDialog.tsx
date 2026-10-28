@@ -10,12 +10,13 @@ import { ApiError } from "../lib/api.ts";
 import { AgentPicker, rememberAgent, rememberedAgent } from "./AgentPicker.tsx";
 import { DirectoryBrowser, homeRelative } from "./DirectoryBrowser.tsx";
 import { RecentFolderChips } from "./RecentFolderChips.tsx";
+import { Toggle } from "./SettingsControls.tsx";
 import { useMachineApi, useMachineId } from "../lib/machineContext.tsx";
 import { useT } from "../lib/i18n.ts";
 import { useSettings } from "../lib/settings.ts";
 import { launchCapabilities, modelSuggestions } from "../lib/agentLaunchMode.ts";
 import { MAX_COMPOSER_CHARS } from "../lib/compose.ts";
-import { createRequest, firstMessageOutcome, newSessionLaunch, startNewSession } from "../lib/newSession.ts";
+import { createRequest, dialogLaunch, firstMessageOutcome, startNewSession } from "../lib/newSession.ts";
 import { useMachineSessions } from "../lib/machineSessionContext.tsx";
 import { composerDrafts } from "../lib/composerDraft.ts";
 import { paneStorageId } from "../../shared/machines.ts";
@@ -102,6 +103,7 @@ export function NewSessionDialog({ open, defaultCwd, tab = null, onClose, onCrea
   const [name, setName] = useState("");
   const [model, setModel] = useState("");
   const [effort, setEffort] = useState("");
+  const [ultracode, setUltracode] = useState(false);
   const [prompt, setPrompt] = useState("");
   /** the picked agent's skills in the folder, once listed; null while none were asked for or the answer is on its way */
   const [skills, setSkills] = useState<{ rows: SlashCommand[]; note: string | null } | null>(null);
@@ -146,6 +148,7 @@ export function NewSessionDialog({ open, defaultCwd, tab = null, onClose, onCrea
     setName(filled?.name ?? "");
     setModel("");
     setEffort("");
+    setUltracode(false);
     setPrompt("");
     setSkills(null);
     setError(null);
@@ -164,7 +167,15 @@ export function NewSessionDialog({ open, defaultCwd, tab = null, onClose, onCrea
         if (cancelled) return;
         setAgents(next);
         // a linked agent herdr does not offer gives way to the last one picked, as an unknown remembered one does to a shell
-        if (stored && !next.some((agent) => agent.kind === stored)) setAgentKind(stored !== remembered && next.some((agent) => agent.kind === remembered) ? remembered : "");
+        if (stored && !next.some((agent) => agent.kind === stored)) {
+          const kind = stored !== remembered && next.some((agent) => agent.kind === remembered) ? remembered : "";
+          setAgentKind(kind);
+          // what was chosen meanwhile for the agent that gave way goes as pickAgent's choices go
+          const can = launchCapabilities(kind);
+          setModel("");
+          setEffort((current) => can.efforts.includes(current) ? current : "");
+          if (!can.ultracode) setUltracode(false);
+        }
       })
       .catch((reason: unknown) => {
         if (!cancelled) setError(userErrorMessage(reason));
@@ -224,7 +235,7 @@ export function NewSessionDialog({ open, defaultCwd, tab = null, onClose, onCrea
   const pendingLabel = selectedAgent ? t("Starting {agent}… up to 60s", { agent: selectedAgent.label }) : t("Starting shell…");
   const fieldsDisabled = pending || createdPaneId !== null;
   const can = launchCapabilities(agentKind);
-  const launched = newSessionLaunch({ agent: agentKind, model, effort, prompt }, settings);
+  const launched = dialogLaunch({ agent: agentKind, model, effort, ultracode, prompt }, settings);
   const fault = "fault" in launched ? launched.fault : null;
   const launch = "fault" in launched ? null : launched;
   const suggestions = modelSuggestions(agentKind);
@@ -241,6 +252,7 @@ export function NewSessionDialog({ open, defaultCwd, tab = null, onClose, onCrea
     const next = launchCapabilities(kind);
     if (!next.model || kind !== agentKind) setModel("");
     if (!next.efforts.includes(effort)) setEffort("");
+    if (!next.ultracode) setUltracode(false);
   };
 
   const insertSkill = (skill: SlashCommand): void => {
@@ -379,7 +391,7 @@ export function NewSessionDialog({ open, defaultCwd, tab = null, onClose, onCrea
             <span className="field-hint">{t(tab ? "Tab name (optional)" : "Optional workspace label")}</span>
           </label>
           {/* the launch's own choices, only where the agent's command line takes them (lib/agentLaunchMode.ts) */}
-          {(can.model || can.efforts.length > 0) && <div className="new-session-launch">
+          {(can.model || can.efforts.length > 0 || can.ultracode) && <div className="new-session-launch">
             {can.model && <div className="field">
               <label className="field-label" htmlFor="new-session-model">{t("Model")}</label>
               <input
@@ -408,6 +420,12 @@ export function NewSessionDialog({ open, defaultCwd, tab = null, onClose, onCrea
                 {can.efforts.map((level) => <option key={level} value={level}>{level}</option>)}
               </select>
               <span id="new-session-effort-hint" className="field-hint">{t("Levels depend on the model.")}</span>
+            </div>}
+            {/* Claude Code's own term, a setting beside the level rather than one of them; off adds nothing */}
+            {can.ultracode && <div className="field new-session-ultracode">
+              <label className="field-label" htmlFor="new-session-ultracode">{t("Ultracode")}</label>
+              <Toggle id="new-session-ultracode" checked={ultracode} label={t("Ultracode")} disabled={fieldsDisabled} describedBy="new-session-ultracode-hint" onChange={setUltracode} />
+              <span id="new-session-ultracode-hint" className="field-hint">{t("Dynamic workflows at any effort level. Needs Claude Code 2.1.284 or later.")}</span>
             </div>}
           </div>}
           {agentKind !== "" && <div className="field">

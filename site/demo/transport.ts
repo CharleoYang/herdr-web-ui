@@ -26,7 +26,7 @@ import { neighborPane } from "../../src/lib/layoutMap.ts";
 import { closeLayoutPane, resizeLayout, setLayoutSplitRatio, splitLayout, swapLayoutPanes } from "../../src/lib/layoutTree.ts";
 import { rollupStatus } from "../../src/lib/status.ts";
 import { movedTabOrder } from "../../src/lib/tabOrder.ts";
-import { agentSkillRows, CHATS, DEMO_PUSH, PROMPT, SESSION_HISTORY_AGENTS, sessionHistoryRows, SPECS, type DemoSpec } from "./fixtures.ts";
+import { agentSkillRows, CHATS, DEMO_PUSH, PROMPT, resumedSession, SESSION_HISTORY_AGENTS, sessionHistoryRows, SPECS, type DemoSpec } from "./fixtures.ts";
 import { DemoHistory } from "./history.ts";
 import { screenAgent, screenCommand, screenFrame } from "./agentScreens.ts";
 import machinesFixture from "./fixtures/machines.json";
@@ -1798,9 +1798,9 @@ async function route(url: URL, method: string, init: RequestInit | undefined, in
     const agent = launch?.kind ?? null;
     const firstFault = firstMessageFault(body["first_message"], agent);
     if (firstFault !== null) return error("invalid_first_message", firstFault, 400);
-    // a session resumed from the history dialog (`codex resume <id>`, `claude --resume <id>`: the id
-    // last) is the one the new pane shows, as herdr reports a pane's session
-    const resumed = agent !== null && Array.isArray(launch?.args) && launch.args.length === 2 && typeof launch.args[1] === "string" ? launch.args[1] : null;
+    // a session resumed from the history dialog is the one the new pane shows, as herdr reports a pane's
+    // session; any other two arguments (`--effort high`, `--settings {"ultracode":true}`) name none
+    const resumed = resumedSession(agent, launch?.args);
     const id = workspace.workspace_id;
     const siblings = snap.panes.filter((p) => p.workspace_id === id);
     const cwd = String(body["cwd"] ?? siblings[0]?.cwd ?? "/home/demo");
