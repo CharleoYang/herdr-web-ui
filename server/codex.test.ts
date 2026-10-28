@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, spyOn } from "bun:test";
+import { dlopen, FFIType, ptr } from "bun:ffi";
 import { appendFileSync, mkdirSync, mkdtempSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, posix, win32 } from "node:path";
@@ -15,6 +16,59 @@ const message = (role: string, text: string, phase?: string) => item({
   type: "message", role, content: [{ type: role === "user" ? "input_text" : "output_text", text }], ...(phase ? { phase } : {}),
 });
 const jsonl = (...records: unknown[]) => records.map((record) => JSON.stringify(record)).join("\n");
+
+/** This thread's CPU time in milliseconds, where the system keeps a clock for it (Linux, macOS), or null. */
+const threadClock = ((): (() => number) | null => {
+  const id = process.platform === "linux" ? 3 : process.platform === "darwin" ? 16 : null;
+  if (id === null) return null;
+  try {
+    const { symbols } = dlopen(process.platform === "linux" ? "libc.so.6" : "libSystem.B.dylib", { clock_gettime: { args: [FFIType.i32, FFIType.ptr], returns: FFIType.i32 } });
+    const time = new BigInt64Array(2);
+    return () => {
+      if (symbols.clock_gettime(id, ptr(time)) !== 0) throw new Error("clock_gettime(CLOCK_THREAD_CPUTIME_ID) failed");
+      return Number(time[0]!) * 1000 + Number(time[1]!) / 1e6;
+    };
+  } catch { return null; }
+})();
+
+/**
+ * How many times longer `make(large)` runs than `make(small)` in CPU time, and what the large one
+ * returns. A budget in wall-clock milliseconds failed on loaded GitHub runners (1,013 to 1,062 ms
+ * against 1,000, #2142) with nothing slower in the code: a busy host stretches the clock while the
+ * work waits for a core. CPU time does not stretch that way, but any budget in milliseconds still
+ * depends on the runner's processor; the growth from one size to the next does not, and a scan that
+ * goes quadratic grows by the square of the step. This thread's CPU time where the system keeps it,
+ * else the process's. Each size runs once untimed, then three times, and the least of each is
+ * compared: being preempted or slowed only adds time.
+ */
+const cpuGrowth = <T,>(make: (size: number) => () => T, small: number, large: number): { result: T; ratio: number } => {
+  const now = (): number => {
+    if (threadClock !== null) return threadClock();
+    const { user, system } = process.cpuUsage();
+    return (user + system) / 1000;
+  };
+  const runSmall = make(small);
+  const runLarge = make(large);
+  runSmall();
+  const result = runLarge();
+  // a run of a fraction of a millisecond is timed over as many runs as take two; twenty where the
+  // process's clock may count in steps of milliseconds, so no small run reads none
+  const shortest = threadClock === null ? 20 : 2;
+  let runs = 1;
+  const timed = (run: () => T): number => {
+    const start = now();
+    for (let index = 0; index < runs; index += 1) run();
+    return now() - start;
+  };
+  while (timed(runSmall) < shortest) runs *= 2;
+  let leastSmall = Infinity;
+  let leastLarge = Infinity;
+  for (let round = 0; round < 3; round += 1) {
+    leastSmall = Math.min(leastSmall, timed(runSmall));
+    leastLarge = Math.min(leastLarge, timed(runLarge));
+  }
+  return { result, ratio: leastLarge / leastSmall };
+};
 
 describe("a Codex process's own store", () => {
   it.skipIf(process.platform !== "linux" && process.platform !== "darwin")("reads CODEX_HOME from the process's environment, and nothing from one without it", async () => {
@@ -175,11 +229,16 @@ describe("Codex conversation records", () => {
   });
 
   it("bounds citation parsing with many unmatched backtick lengths", () => {
-    const text = "Unmatched delimiters: " + Array.from({ length: 1000 }, (_, i) => "`".repeat(i + 1) + " x ").join("");
-    const transcript = jsonl(message("assistant", `${text}<oai-mem-citation>hidden</oai-mem-citation>`));
-    const started = performance.now();
-    expect(parseCodexTranscript(transcript)[0]?.parts).toEqual([{ kind: "text", text: text.trimEnd() }]);
-    expect(performance.now() - started).toBeLessThan(1000);
+    const delimiters = (count: number) => "Unmatched delimiters: " + Array.from({ length: count }, (_, i) => "`".repeat(i + 1) + " x ").join("");
+    const text = delimiters(1000);
+    // five times the delimiters is 25 times the text: about 12 times the CPU time as written, 120 when
+    // each unmatched delimiter looks for its match in the rest of the text
+    const { result, ratio } = cpuGrowth((count) => {
+      const transcript = jsonl(message("assistant", `${delimiters(count)}<oai-mem-citation>hidden</oai-mem-citation>`));
+      return () => parseCodexTranscript(transcript);
+    }, 200, 1000);
+    expect(result[0]?.parts).toEqual([{ kind: "text", text: text.trimEnd() }]);
+    expect(ratio).toBeLessThan(40);
   });
 
   it("hides injected context, metadata and developer messages while preserving the real request", () => {
@@ -841,21 +900,29 @@ describe("Codex rollout resolution", () => {
   });
 
   it("reads short answers in bounded time however many unclosed links the answers hold", () => {
-    const many = answered(...Array.from({ length: 450 }, () => "](".repeat(1000)));
-    const candidates = Array.from({ length: 32 }, (_, index) => ({ path: `unclosed-${index}`, text: many }));
     const screen = Array.from({ length: 400 }, () => "q".repeat(120)).join("\n");
-    const started = performance.now();
-    expect(matchShortCodexAnswers(screen, candidates)).toBeNull();
-    expect(performance.now() - started).toBeLessThan(1000);
+    // five times as many: about 3 times the CPU time as written, 15 when cutting at /\]\([^)\s]*\)/
+    // rescans from every unclosed "]("
+    const { result, ratio } = cpuGrowth((unclosed) => {
+      const many = answered(...Array.from({ length: 450 }, () => "](".repeat(unclosed)));
+      const candidates = Array.from({ length: 32 }, (_, index) => ({ path: `unclosed-${index}`, text: many }));
+      return () => matchShortCodexAnswers(screen, candidates);
+    }, 1000, 5000);
+    expect(result).toBeNull();
+    expect(ratio).toBeLessThan(8);
   });
 
   it("reads short answers in bounded time however many links a large answer has", () => {
-    const huge = answered("[abcdefghijklmnop](/a)".repeat(40_000));
-    const candidates = Array.from({ length: 32 }, (_, index) => ({ path: `large-${index}`, text: huge }));
     const screen = Array.from({ length: 400 }, () => "q".repeat(120)).join("\n");
-    const started = performance.now();
-    expect(matchShortCodexAnswers(screen, candidates)).toBeNull();
-    expect(performance.now() - started).toBeLessThan(1000);
+    // five times the links: about 5 times the CPU time as written, 21 when the work per link grows
+    // with the links before it (an unshift)
+    const { result, ratio } = cpuGrowth((links) => {
+      const huge = answered("[abcdefghijklmnop](/a)".repeat(links));
+      const candidates = Array.from({ length: 32 }, (_, index) => ({ path: `large-${index}`, text: huge }));
+      return () => matchShortCodexAnswers(screen, candidates);
+    }, 8_000, 40_000);
+    expect(result).toBeNull();
+    expect(ratio).toBeLessThan(10);
   });
 
   it("does not bind using user context, tool output or a previous session above the welcome card", () => {
