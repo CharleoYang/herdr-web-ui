@@ -278,17 +278,25 @@ export function composerDelivery(agent: string | null, status?: AgentStatus): "q
  * braille spinner in the window title (osc_title_working, 1100) and "Waiting for N background agents
  * to finish" (background_agents_working, 965) as working, both above the idle prompt box
  * (live_prompt_box, 950): a main agent that ended its turn while a subagent it started still runs is
- * reported as working, and the composer holds the message. The screen decides instead: the input row
- * is at rest (lib/inputRow.ts `ready`), and no live turn says how to interrupt it. A turn that is
- * still running keeps one of those markers, and a blocked form asks for esc.
+ * reported as working, and the composer holds the message. Override only on positive evidence:
+ * an empty input box and the waiting line, with no running-turn marker anywhere above the box.
+ * `lines` must be logical screen lines (lib/inputRow.ts readScreenLines), not physical rows.
  */
 export function claudeMainAtRest(row: string | null, lines: readonly string[]): boolean {
   if (row !== "ready") return false;
-  const recent = lines.filter((line) => line.trim().length > 0).slice(-12);
-  for (const line of recent) {
+  const rule = (line: string): boolean => /^[─━]{8,}$|^─{2,}\s.*─$/u.test(line.trim());
+  let lower = lines.length - 1;
+  while (lower >= 0 && !rule(lines[lower]!)) lower--;
+  if (lower < 0) return false;
+  let upper = lower - 1;
+  while (upper >= 0 && !rule(lines[upper]!)) upper--;
+  if (upper < 0) return false;
+  const above = lines.slice(0, upper);
+  if (!above.some((line) => /^\s*Waiting for [1-9]\d* background agents? to finish\s*$/u.test(line))) return false;
+  for (const line of above) {
     if (/esc to (?:interrupt|cancel)/i.test(line)) return false;
-    // the shape of a running turn's own line, which its summary separates with an ellipsis
-    if (/(?:^|\s)[*·✢✳✶✻✽●◐◓◑◒]\s+\S.*…(?:\s+\(\d+[smh](?:\s|·)|\s*$)/u.test(line)) return false;
+    if (/^\s*(?:[*·✢✳✶✻✽●◐◓◑◒]\s+)?Compacting\b/iu.test(line)) return false;
+    if (/^\s*[*·✢✳✶✻✽●◐◓◑◒]\s+\S.*(?:…|\.{3}|\(\d+(?:\.\d+)?[smh](?:\s|[)·]))/u.test(line)) return false;
   }
   return true;
 }

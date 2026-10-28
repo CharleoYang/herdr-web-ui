@@ -610,6 +610,7 @@ describe("claudeMainAtRest", () => {
   // the real shape of a Claude screen whose main turn ended while two subagents ran: herdr's claude
   // manifest still says working (a braille title spinner, plus background_agents_working)
   const restingWithSubagents = [
+    "  Waiting for 2 background agents to finish",
     "  ◯ impl-mismatch2-sonnet      Resume store-mismatch build        24m 28s · ↓ 132.6k tokens",
     "  ◯ qa-p00win3-sonnet          P00 Windows checks and latency     9m 8s · ↓ 91.2k tokens",
     "  ────────────────────────────────────────────────────────────────",
@@ -624,9 +625,9 @@ describe("claudeMainAtRest", () => {
   });
 
   it("holds the message while a turn says how to interrupt it", () => {
-    expect(claudeMainAtRest("ready", ["  ❯", "  ✻ Forming… (3m 35s · ↓ 4.8k tokens) · esc to interrupt"])).toBe(false);
-    expect(claudeMainAtRest("ready", ["  ❯", "  ● Forming… (3m 35s · ↓ 4.8k tokens · thought for 1s)"])).toBe(false);
-    expect(claudeMainAtRest("ready", ["  ❯", "  enter to confirm · esc to cancel"])).toBe(false);
+    expect(claudeMainAtRest("ready", ["  ✻ Forming… (3m 35s · ↓ 4.8k tokens) · esc to interrupt", ...restingWithSubagents])).toBe(false);
+    expect(claudeMainAtRest("ready", ["  ● Forming… (3m 35s · ↓ 4.8k tokens · thought for 1s)", ...restingWithSubagents])).toBe(false);
+    expect(claudeMainAtRest("ready", ["  enter to confirm · esc to cancel", ...restingWithSubagents])).toBe(false);
   });
 
   it("holds the message while the row holds a draft", () => {
@@ -637,7 +638,7 @@ describe("claudeMainAtRest", () => {
   });
 
   it("does not read a row it cannot see as at rest", () => {
-    expect(claudeMainAtRest("ready", ["  ⏵⏵ auto mode on · ← 2 agents"])).toBe(true);
-    expect(claudeMainAtRest("ready", ["  ────────────────", "  ⏵⏵ auto mode on"])).toBe(true);
+    expect(claudeMainAtRest("ready", ["  ⏵⏵ auto mode on · ← 2 agents"])).toBe(false);
+    expect(claudeMainAtRest("ready", ["  ────────────────", "  ⏵⏵ auto mode on"])).toBe(false);
   });
 });

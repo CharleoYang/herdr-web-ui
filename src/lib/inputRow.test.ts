@@ -3,7 +3,7 @@ import { Terminal } from "@xterm/xterm";
 import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 
-import { FrameGate, inputRowState, readScreen, readsInputRow, type InputRowState, type ScreenSnapshot } from "./inputRow.ts";
+import { FrameGate, inputRowState, readScreen, readScreenLines, readsInputRow, type InputRowState, type ScreenSnapshot } from "./inputRow.ts";
 import { matchHerdrWidths } from "./terminalWidths.ts";
 import { SCREEN_AUTO_RETURN, watchReturn } from "./terminalPeek.ts";
 
@@ -18,6 +18,27 @@ const terminal = (cols: number, rows = 40): Terminal => {
   matchHerdrWidths(term);
   return term;
 };
+
+test("logical screen lines preserve spaces across wraps but not hard line breaks", async () => {
+  const term = terminal(40, 5);
+  const text = `${"a".repeat(39)} b`;
+  try {
+    await parse(term, `${text}\r\nnext`);
+    expect(readScreenLines(term.buffer.active, term.rows)).toEqual([text, "next", "", ""]);
+  } finally {
+    term.dispose();
+  }
+});
+
+test("logical screen lines reject a wrapped line clipped at the screen top", async () => {
+  const term = terminal(40, 2);
+  try {
+    await parse(term, `${"a".repeat(81)}\r\nnext`);
+    expect(readScreenLines(term.buffer.active, term.rows)).toBeNull();
+  } finally {
+    term.dispose();
+  }
+});
 
 /** A static recording (one row per line, SGR only) as the screen shows it. */
 async function screenOf(text: string, cols: number): Promise<ScreenSnapshot> {

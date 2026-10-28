@@ -1,11 +1,16 @@
 import { expect, it, spyOn } from "bun:test";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
+import { Terminal } from "@xterm/xterm";
+import { readFileSync } from "node:fs";
+import { claudeMainAtRest } from "./compose.ts";
+import { inputRowState, readScreen, readScreenLines } from "./inputRow.ts";
+import { matchHerdrWidths } from "./terminalWidths.ts";
 import { paneStorageId } from "../../shared/machines.ts";
 import { PendingMessageStore, pendingMessages } from "./pendingMessages.ts";
 import { paneLifetimes } from "./paneLifetime.ts";
 import { useComposerSends, type ComposerSendsDeps } from "./useComposerSends.ts";
-import type { HerdrSocket, SubmitResult } from "./ws.ts";
+import type { HerdrSocket, SubmitDelivery, SubmitResult } from "./ws.ts";
 
 // A bridge without `submit` takes a message as raw input and sends no receipt (ws.ts `unconfirmed`):
 // nothing says the pane got it, so its text must not go as if it had (#1591).
@@ -37,6 +42,54 @@ function sends(pane: string, answer: SubmitResult, shown: string[], extra: Parti
   }
   renderToStaticMarkup(createElement(Composer));
   return actions;
+}
+
+const waiting = "Waiting for 2 background agents to finish";
+const idleBox = ["─".repeat(40), "❯", "─".repeat(40)];
+const closedClaude = readFileSync(new URL("../../server/fixtures/claude-rewind-2.1.304-closed-40.txt", import.meta.url), "utf8");
+
+for (const autoSendQueued of [false, true]) {
+  it.each([
+    ["wrapped running turn", [
+      "✻ Investigating the authentication flow further… (3m 35s · ↓ 4.8k tokens) · esc to interrupt",
+      waiting, ...idleBox,
+    ], false],
+    ["spinner above thirteen agents", [
+      "✻ Investigating… (3m 35s · ↓ 4.8k tokens)",
+      ...Array.from({ length: 13 }, (_, index) => `◯ background-agent-${index}`),
+      waiting, ...idleBox,
+    ], false],
+    ["short duration", ["✻ Investigating… (3s)", waiting, ...idleBox], false],
+    ["duration without ellipsis", ["✻ Investigating (3s)", waiting, ...idleBox], false],
+    ["compaction", ["✻ Compacting conversation… (3s)", waiting, ...idleBox], false],
+    ["idle footer", [waiting, ...closedClaude.trimEnd().split("\n")], true],
+    ["plain idle", [waiting, ...idleBox], true],
+    ["idle without waiting evidence", [...idleBox], false],
+    ["permission dialog", [waiting, "Do you want to proceed?", "❯ 1. Yes", "  2. No", "esc to cancel"], false],
+  ] as const)(`Claude %s chooses safe delivery with autoSendQueued=${autoSendQueued}`, async (_name, rows, immediate) => {
+    const term = new Terminal({ cols: 40, rows: 60, scrollback: 0, allowProposedApi: true });
+    matchHerdrWidths(term);
+    try {
+      await new Promise<void>((resolve) => term.write(rows.join("\r\n"), resolve));
+      const shown: string[] = [], deliveries: SubmitDelivery[] = [];
+      const actions = sends("claude-at-rest", { ok: true }, shown, {
+        agentStatus: "working",
+        settings: { autoSendQueued },
+        inputAtRest: () => {
+          const screen = readScreen(term.buffer.active, term.cols, term.rows);
+          return claudeMainAtRest(inputRowState("claude", screen), readScreenLines(term.buffer.active, term.rows) ?? []);
+        },
+        submitComposerMessage: (_text, delivery) => {
+          deliveries.push(delivery);
+          return Promise.resolve({ ok: true });
+        },
+      });
+      expect(await actions.composerSend("follow up")).toBe(true);
+      expect(deliveries).toEqual([immediate ? "immediate" : autoSendQueued ? "queue" : "hold"]);
+    } finally {
+      term.dispose();
+    }
+  });
 }
 
 it.each([
