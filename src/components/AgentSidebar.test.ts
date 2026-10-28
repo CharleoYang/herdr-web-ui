@@ -26,7 +26,7 @@ const machine = (panes: HerdrPane[], state: Machine["state"] = "connected"): Mac
 
 function render(machines: Machine[]): string {
   return renderToStaticMarkup(createElement(SettingsProvider, {
-    children: createElement(AgentSidebar, { machines, selectedMachineId: "local", selectedPaneId: null, stateWord: () => "disconnected", onSelect: () => {} }),
+    children: createElement(AgentSidebar, { machines, selectedMachineId: "local", selectedPaneId: null, stateWord: () => "disconnected", onSelect: () => {}, tabActions: { openTerminalTab: async () => {}, moveTabToWorkspace: async () => {} } }),
   }));
 }
 const decode = (text: string): string => text.replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, "\"").replace(/&#x27;/g, "'").replace(/&amp;/g, "&");

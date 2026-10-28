@@ -88,6 +88,11 @@ export interface AgentSidebarProps {
   /** this device only watches: it sees the shared mutes and cannot change them */
   watching?: boolean;
   onSelect(machineId: string, paneId: string): void;
+  /** the app's own tab actions: they carry the split halves, the refresh and the notices */
+  tabActions: {
+    openTerminalTab(target: { machineId: string; workspaceId: string; kind?: string }): Promise<void>;
+    moveTabToWorkspace(target: { machineId: string; tabId: string; workspaceId: string }): Promise<void>;
+  };
   /** the palette's Rename tab (or F2): the tab of this pane opens its name field, once */
   renameRequest?: { machineId: string; paneId: string } | null;
   onRenameHandled?(): void;
@@ -109,7 +114,7 @@ interface PinMenu { key: string; anchor: HTMLElement; point?: { x: number; y: nu
  * right-click (or the context-menu key) opens the menu. A row's ⋯, or a right-click on it, opens its
  * menu, which pins or unpins it, and mutes or unmutes its alerts for every browser and device.
  */
-export function AgentSidebar({ machines, selectedMachineId, selectedPaneId, stateWord, watching = false, onSelect, renameRequest = null, onRenameHandled }: AgentSidebarProps) {
+export function AgentSidebar({ machines, selectedMachineId, selectedPaneId, stateWord, watching = false, onSelect, tabActions, renameRequest = null, onRenameHandled }: AgentSidebarProps) {
   const t = useT();
   const listId = useId();
   const [collapsed, setCollapsed] = useState(() => window.matchMedia?.(DRAWER_QUERY).matches === true);
@@ -143,7 +148,7 @@ export function AgentSidebar({ machines, selectedMachineId, selectedPaneId, stat
   const kindGroups = useMemo(() => agentKindGroups(split.rest), [split.rest]);
   // The tab strip is gone: a name is edited here. `renaming` is the row's field, `settled` the tab
   // whose edit Enter or Escape already ended (the blur that follows is not a second save).
-  const [renaming, setRenaming] = useState<{ machineId: string; tabId: string; value: string } | null>(null);
+  const [renaming, setRenaming] = useState<{ machineId: string; paneId: string; tabId: string; value: string } | null>(null);
   const settled = useRef<string | null>(null);
   const [tabNote, setTabNote] = useState<{ machineId: string; text: string } | null>(null);
   const [foldedWorkspaces, setFoldedWorkspaces] = useState<Set<string>>(() => new Set());
@@ -231,7 +236,7 @@ export function AgentSidebar({ machines, selectedMachineId, selectedPaneId, stat
     const toggleMenu = (anchor: HTMLElement, point?: { x: number; y: number }, previousFocus?: HTMLElement | null): void =>
       setMenu(menuOpen ? null : { key: pinKey, anchor, point, previousFocus });
     const tab = entry.tab;
-    const editing = tab !== null && tab !== undefined && renaming?.machineId === machine.id && renaming.tabId === tab.tab_id;
+    const editing = tab !== null && tab !== undefined && renaming?.machineId === machine.id && renaming.paneId === pane.pane_id;
     return <li className={`agent-item${selected ? " is-selected" : ""}${online ? "" : " is-offline"}${filterContext ? " is-filter-context" : ""}${editing ? " is-renaming" : ""}`} key={paneStorageId(machine.id, pane.pane_id)} data-machine={machine.id} data-pane={pane.pane_id} data-pin-key={pinKey}
       onMouseDownCapture={(event) => { if (event.button === 2 || (event.button === 0 && event.ctrlKey)) event.preventDefault(); }}
       onContextMenu={(event) => onRowContextMenu(event, toggleMenu)}>
@@ -243,7 +248,7 @@ export function AgentSidebar({ machines, selectedMachineId, selectedPaneId, stat
         placeholder={name ?? undefined}
         value={renaming.value}
         onFocus={(event) => event.currentTarget.select()}
-        onChange={(event) => setRenaming({ machineId: machine.id, tabId: tab.tab_id, value: event.target.value })}
+        onChange={(event) => setRenaming({ machineId: machine.id, paneId: pane.pane_id, tabId: tab.tab_id, value: event.target.value })}
         onBlur={() => {
           if (settled.current === tab.tab_id) { settled.current = null; setRenaming(null); return; }
           saveRename(machine.id, tab.tab_id, true);
@@ -319,14 +324,14 @@ export function AgentSidebar({ machines, selectedMachineId, selectedPaneId, stat
   const noted = (machineId: string, reason: unknown): void => {
     setTabNote({ machineId, text: reason instanceof Error ? reason.message : String(reason) });
   };
+  // the app's action opens the new pane itself, and leaves the reader where they went meanwhile
   const newTab = (machine: Machine, workspaceId: string, kind?: string): void => {
-    void api.createTab({ workspace_id: workspaceId, ...(kind ? { agent: { kind } } : {}) }, machine.id).then((created) => {
-      onSelect(machine.id, created.pane_id);
-    }, (reason: unknown) => noted(machine.id, reason));
+    void tabActions.openTerminalTab({ machineId: machine.id, workspaceId, ...(kind ? { kind } : {}) }).catch((reason: unknown) => noted(machine.id, reason));
   };
-  const beginRename = (machineId: string, tab: { tab_id: string; label: string; number: number }, place: number): void => {
+  // one row edits the name: a tab with two panes draws two rows, and both would otherwise open a field
+  const beginRename = (machineId: string, paneId: string, tab: { tab_id: string; label: string; number: number }, place: number): void => {
     settled.current = null;
-    setRenaming({ machineId, tabId: tab.tab_id, value: customTabLabel(tab, place) ?? "" });
+    setRenaming({ machineId, paneId, tabId: tab.tab_id, value: customTabLabel(tab, place) ?? "" });
   };
   // Enter or a click elsewhere saves what was typed; Escape settles first, so the blur after it saves nothing
   const saveRename = (machineId: string, tabId: string, fromBlur = false): void => {
@@ -346,8 +351,10 @@ export function AgentSidebar({ machines, selectedMachineId, selectedPaneId, stat
   const shiftTab = (machineId: string, workspaceId: string, tabId: string, by: number): void => {
     const tabs = machines.find((machine) => machine.id === machineId)?.snapshot?.tabs.filter((candidate) => candidate.workspace_id === workspaceId) ?? [];
     const at = tabs.findIndex((candidate) => candidate.tab_id === tabId);
-    const to = at + by;
-    if (at < 0 || to < 0 || to >= tabs.length) return;
+    if (at < 0 || at + by < 0 || at + by >= tabs.length) return;
+    // herdr's boundary is counted BEFORE the source leaves the row (MoveTabRequest): a step right
+    // from index `at` inserts after the next tab, at `at + 2`, and a step left is `at - 1`
+    const to = by > 0 ? at + 2 : at - 1;
     void api.moveTab(tabId, to, machineId).catch((reason: unknown) => noted(machineId, reason));
   };
   // F2 or the palette asks for this pane's tab by name; the request is one-shot
@@ -357,7 +364,9 @@ export function AgentSidebar({ machines, selectedMachineId, selectedPaneId, stat
     const pane = machine?.snapshot?.panes.find((candidate) => candidate.pane_id === renameRequest.paneId);
     const tabs = machine?.snapshot?.tabs.filter((candidate) => candidate.workspace_id === pane?.workspace_id) ?? [];
     const tab = pane ? tabs.find((candidate) => candidate.tab_id === pane.tab_id) : undefined;
-    if (machine && tab) beginRename(machine.id, tab, tabs.indexOf(tab) + 1);
+    // a second press while the field is open keeps what was typed in it (the strip's rule)
+    const alreadyOpen = renaming?.machineId === machine?.id && renaming?.paneId === renameRequest.paneId;
+    if (machine && tab && !alreadyOpen) beginRename(machine.id, renameRequest.paneId, tab, tabs.indexOf(tab) + 1);
     onRenameHandled?.();
   }, [renameRequest]);
 
@@ -432,12 +441,12 @@ export function AgentSidebar({ machines, selectedMachineId, selectedPaneId, stat
         const others = (machine.snapshot?.workspaces ?? []).filter((workspace) => workspace.workspace_id !== tab.workspace_id);
         const menuTab = { tab_id: tab.tab_id, label: tab.label, number: tab.number };
         return [
-          { id: "rename-tab", label: t("Rename tab"), icon: Pencil, run: () => beginRename(machine.id, menuTab, at + 1) },
+          { id: "rename-tab", label: t("Rename tab"), icon: Pencil, run: () => beginRename(machine.id, menuRow.entry.pane.pane_id, menuTab, at + 1) },
           ...(at > 0 ? [{ id: "tab-left", label: t("Move tab left"), icon: ArrowLeft, run: () => shiftTab(machine.id, tab.workspace_id, tab.tab_id, -1) }] : []),
           ...(at >= 0 && at < tabs.length - 1 ? [{ id: "tab-right", label: t("Move tab right"), icon: ArrowRight, run: () => shiftTab(machine.id, tab.workspace_id, tab.tab_id, 1) }] : []),
           ...others.map((workspace) => ({
             id: `tab-to-${workspace.workspace_id}`, label: t("Move to workspace: {workspace}", { workspace: workspace.label }), icon: FolderInput,
-            run: () => { void api.moveTabToWorkspace(tab.tab_id, workspace.workspace_id, machine.id).catch((reason: unknown) => noted(machine.id, reason)); },
+            run: () => { void tabActions.moveTabToWorkspace({ machineId: machine.id, tabId: tab.tab_id, workspaceId: workspace.workspace_id }).catch((reason: unknown) => noted(machine.id, reason)); },
           })),
           { id: "close-tab", label: t("Close tab"), icon: X, danger: true, run: () => closeTabOf(machine.id, tab.tab_id) },
         ];

@@ -36,7 +36,8 @@ export interface AppActions {
    * A shell tab in the same workspace, at once and with no dialog, as herdr's own new tab: the
    * new pane opens unless another one was opened meanwhile. Rejects with herdr's refusal.
    */
-  openTerminalTab: (target?: { machineId: string; workspaceId: string }) => Promise<void>;
+  /** herdr's own new tab at once: a shell, or `kind`'s agent, in the workspace's folder */
+  openTerminalTab: (target?: { machineId: string; workspaceId: string; kind?: string }) => Promise<void>;
   /**
    * A one-pane tab into a new tab at the end of another workspace on its PC, its process running.
    * Where its pane is shown, in either half of a split, the app follows it there, and what was typed
