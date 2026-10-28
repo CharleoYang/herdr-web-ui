@@ -13,8 +13,9 @@ const waitAsync = (Atomics as unknown as { waitAsync: (cells: Int32Array, index:
 
 /** A held answer: the thread runs its task, then waits until `release`. */
 const gate = () => {
-  const cells = new Int32Array(new SharedArrayBuffer(8));
+  const cells = new Int32Array(new SharedArrayBuffer(12));
   cells[1] = -1;
+  cells[2] = -1;
   return {
     buffer: cells.buffer as SharedArrayBuffer,
     release: () => { Atomics.store(cells, 0, 1); Atomics.notify(cells, 0); },
@@ -23,6 +24,11 @@ const gate = () => {
       const waited = waitAsync(cells, 1, -1, 10_000);
       if ((waited.async ? await waited.value : waited.value) === "timed-out") throw new Error("the held thread never ran its task");
       return cells[1]!;
+    },
+    /** The FIFO a FIFO gate's thread, ended inside its read, never closed: closed once that thread is gone. */
+    closeFifo: () => {
+      const fd = Atomics.exchange(cells, 2, -1);
+      if (fd >= 0) closeSync(fd);
     },
   };
 };
@@ -171,6 +177,7 @@ describe("file threads", () => {
     closeSync(writer);
     await fileThreadsClosed();
     expect(() => fstatSync(fd)).toThrow();
+    hold.closeFifo();
   });
 
   it("keeps a descriptor its thread is reading open until that thread is gone, when the last server stops", async () => {
@@ -189,10 +196,13 @@ describe("file threads", () => {
     const other = openSync(big, "r");
     expect(other).not.toBe(fd);
     closeSync(other);
-    // the read returns, the thread is gone, and only then is its descriptor closed
-    closeSync(openSync(fifo, "w"));
+    // the read returns (a write that never waits: the thread opened the FIFO before it said it ran), the thread is gone, and only then is its descriptor closed
+    const writer = openSync(fifo, fsConstants.O_WRONLY | fsConstants.O_NONBLOCK);
+    writeSync(writer, "x");
+    closeSync(writer);
     await fileThreadsClosed();
     expect(() => fstatSync(fd)).toThrow();
+    hold.closeFifo();
   });
 
   it("ends its threads, a busy one too, when the last server holding them stops", async () => {
