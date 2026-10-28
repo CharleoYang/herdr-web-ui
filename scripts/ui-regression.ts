@@ -1923,6 +1923,19 @@ try {
   await tabName.fill("build");
   await page.keyboard.press("Enter");
   await until(async () => (await tabsInHerdr()).join() === "first,build", "the menu's rename reaches herdr");
+  // a click elsewhere ends the name field as Enter does: the name typed so far reaches herdr
+  await strip.getByRole("tab", { name: "build", exact: true }).dblclick();
+  await tabName.waitFor();
+  await tabName.fill("clicked-away");
+  await page.locator(".app-header .context-title-text").click();
+  await tabName.waitFor({ state: "detached" });
+  await until(async () => (await tabsInHerdr()).join() === "first,clicked-away", "a name field left by a click elsewhere saves what was typed");
+  assert.deepEqual(await strip.getByRole("tab").allTextContents(), ["first", "clicked-away"], "the strip says the name herdr took");
+  // and back, so the row this case was built on keeps its names
+  await strip.getByRole("tab", { name: "clicked-away", exact: true }).dblclick();
+  await tabName.fill("build");
+  await page.keyboard.press("Enter");
+  await until(async () => (await tabsInHerdr()).join() === "first,build", "the name goes back");
   // One new neighbour puts build between two tabs for both adjacent move actions.
   await herdrRpc("pane.focus", { pane_id: createdTab.pane_id });
   const neighbour = await herdrRpc<{ tab: { tab_id: string } }>("tab.create", { workspace_id: created.workspace_id, label: "neighbour", focus: false });

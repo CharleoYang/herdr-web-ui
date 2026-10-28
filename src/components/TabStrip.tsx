@@ -86,6 +86,8 @@ export function TabStrip({ snapshot, workspace, selectedPane, onSelectPane, onNe
   const [error, setError] = useState<string | null>(null);
   // the tab whose name field just went: its button takes the focus back in the same commit, so the next key lands on it
   const refocus = useRef<string | null>(null);
+  /** The tab whose edit Enter or Escape already ended: a blur that follows (Safari blurs a removed node) is not a second save. */
+  const settled = useRef<string | null>(null);
   // tabs whose close is on its way: a second press, or a held Delete, does not send another
   const closing = useRef(new Set<string>());
   // A requested close: register focus return before the native snapshot can remove its tab.
@@ -102,7 +104,7 @@ export function TabStrip({ snapshot, workspace, selectedPane, onSelectPane, onNe
     previousOwner.current = owner;
     // Native IDs can repeat on another PC. A pending dialog never changes its target PC.
     setPicker(null); setEditing(null); setConfirm(null); setSent(null); setError(null);
-    refocus.current = null; closed.current = null;
+    refocus.current = null; closed.current = null; settled.current = null;
   }, [owner]);
   const panes = rosterPanes(snapshot.panes.filter((pane) => pane.workspace_id === workspace.workspace_id), selectedPane.pane_id);
   // The snapshot order is authoritative; number identifies a tab and does not change on a move.
@@ -217,6 +219,7 @@ export function TabStrip({ snapshot, workspace, selectedPane, onSelectPane, onNe
 
   const beginRename = (tab: HerdrTab): void => {
     setError(null);
+    settled.current = null;
     setEditing({ tabId: tab.tab_id, value: sent?.tabId === tab.tab_id ? sent.label : customTabLabel(tab, tabs.findIndex((candidate) => candidate.tab_id === tab.tab_id) + 1) ?? "" });
   };
   // The request is one-shot (the app clears it once handled), so the effect depends on it alone: a
@@ -245,11 +248,20 @@ export function TabStrip({ snapshot, workspace, selectedPane, onSelectPane, onNe
     window.requestAnimationFrame(() => strip.current?.querySelector<HTMLElement>(`[role="tab"][data-tab-id="${CSS.escape(tabId)}"]`)?.focus());
   };
 
-  // an empty name is not sent: herdr would keep it, and its own tab row would show nothing
-  const saveRename = (tab: HerdrTab): void => {
+  // an empty name is not sent: herdr would keep it, and its own tab row would show nothing.
+  // A click elsewhere ends the edit as Enter does: the field's blur saves what was typed.
+  const saveRename = (tab: HerdrTab, fromBlur = false): void => {
     const label = editing?.value.trim() ?? "";
-    if (label === "") { setError(t("A tab needs a name.")); return; }
-    refocus.current = tab.tab_id;
+    if (label === "") {
+      // a blur over an empty field is the reader leaving it; Enter on one asks what is wrong, and
+      // the field stays for another try
+      if (fromBlur) { settled.current = tab.tab_id; setEditing(null); }
+      else setError(t("A tab needs a name."));
+      return;
+    }
+    settled.current = tab.tab_id;
+    // only Enter puts the focus back on the tab: a blur means the reader went somewhere else
+    if (!fromBlur) refocus.current = tab.tab_id;
     setEditing(null);
     if (label === nameOf(tab)) return;
     setSent({ tabId: tab.tab_id, label });
@@ -417,13 +429,16 @@ export function TabStrip({ snapshot, workspace, selectedPane, onSelectPane, onNe
                   value={editing.value}
                   onFocus={(event) => event.currentTarget.select()}
                   onChange={(event) => setEditing({ tabId: tab.tab_id, value: event.target.value })}
-                  onBlur={() => setEditing(null)}
+                  onBlur={() => {
+                    if (settled.current === tab.tab_id) { settled.current = null; setEditing(null); return; }
+                    saveRename(tab, true);
+                  }}
                   onKeyDown={(event) => {
                     event.stopPropagation();
                     // an IME's Enter and Escape are the composition's, not the field's
                     if (event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229) return;
                     if (event.key === "Enter") saveRename(tab);
-                    if (event.key === "Escape") { refocus.current = tab.tab_id; setEditing(null); }
+                    if (event.key === "Escape") { settled.current = tab.tab_id; refocus.current = tab.tab_id; setEditing(null); }
                   }}
                 />
               ) : (
