@@ -1128,15 +1128,17 @@ process.stdin.on("data", (chunk) => {
       await within(closed.promise, "the stream closing after the last verified pane stopped being OpenCode");
       expect(openCodeNativeState()).toEqual({ stream: false, panes: [] });
 
-      // a replacement server: its collector learns the pane verified before it started, and ends it
+      // a replacement server, started before the old one stops (the last server's stop releases every pane):
+      // its collector learns the pane verified before it started, and ends it
       opened = Promise.withResolvers<void>();
       closed = Promise.withResolvers<void>();
       ending = await startPane("ses_lifecycleHandover");
       await verify(ending.paneId);
       await within(opened.promise, "the stream opening for the handed-over pane");
-      server.stop();
+      const replaced = server;
       server = createServer({ port: 0, hostname: "127.0.0.1", token: "", stateDir: join(root, "state"), opencodeDb: database });
       await server.statusReady;
+      replaced.stop();
       expect(openCodeNativeState()).toEqual({ stream: true, panes: [ending.paneId] });
       await workspaceClose(ending.workspaceId);
       ending = undefined;
