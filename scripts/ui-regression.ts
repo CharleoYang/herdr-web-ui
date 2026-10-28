@@ -1829,7 +1829,11 @@ try {
   const terminalResponse = page.waitForResponse((response) => response.url().endsWith("/api/tab/create") && response.request().method() === "POST");
   await page.locator(`.agent-workspace[data-machine="local"][data-workspace="${created.workspace_id}"] > .agent-workspace-line .agent-head-add`).click();
   const terminalAnswer = await terminalResponse;
-  assert.deepEqual(terminalAnswer.request().postDataJSON(), { workspace_id: created.workspace_id }, "the workspace head's + asks for a tab in that workspace");
+  // the head's + goes through the app's own new-tab action, which also names the folder and a null
+  // label: what this case is about is the workspace it opens in and that no agent is started
+  const headBody = terminalAnswer.request().postDataJSON() as { workspace_id?: string; agent?: unknown };
+  assert.equal(headBody.workspace_id, created.workspace_id, "the workspace head's + asks for a tab in that workspace");
+  assert.equal(headBody.agent ?? null, null, "the head's + starts no agent");
   assert.equal(terminalAnswer.ok(), true, "the new tab request succeeds");
   const terminalTab = await terminalAnswer.json() as WorkspaceCreated;
   assert.equal(terminalTab.workspace_id, created.workspace_id, "the shell tab joins the workspace");
