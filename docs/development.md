@@ -761,6 +761,13 @@ The [CI workflow](../.github/workflows/ci.yml) runs on every PR and `main` push:
   list names a script that does not exist; it pins no count, so PRs that add scripts do not
   conflict on it.
 
+  `scripts/windows-terminal-browser-qa.ts` needs native Windows, so the browser lane leaves it out
+  (it is on that list) and `windows-terminal-qa.yml` runs it on a GitHub-hosted Windows runner: on pull requests
+  that touch the mirror, the terminal's viewport code or the xterm patch, weekly on main, and on
+  a manual dispatch (**Actions → Windows terminal QA**). It is not a required check. To run it on
+  a Windows PC: `bun install --frozen-lockfile`, `bun run build`, then
+  `bun scripts/windows-terminal-browser-qa.ts` with herdr on PATH and Chromium installed.
+
 `bun run check browser` and `bun run check full` still run the serial lane, `scripts/ci-browser.sh`
 (`BROWSER_PARALLEL=1` hands it to the parallel runner).
 The serial lane prints each script's wall seconds and exit code, including the shared demo
@@ -823,7 +830,8 @@ request runs, and `"ubuntu-24.04"` keeps only main GitHub-hosted. `CI_SELF_HOSTE
 or main's jobs wait for one.
 
 Detect changes, the Integration and browser summary, the Windows and macOS jobs,
-`remote-bundles.yml`, `windows-install.yml` and `pr-title.yml` always stay GitHub-hosted.
+`remote-bundles.yml`, `windows-install.yml`, `windows-terminal-qa.yml` and `pr-title.yml` always
+stay GitHub-hosted.
 
 In `ci.yml`, Detect changes picks the runner with `scripts/ci-runner-route.sh`. A fork pull request
 always gets `ubuntu-24.04`, whatever the variable says. Since that script runs from the pull
