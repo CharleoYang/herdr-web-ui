@@ -868,6 +868,12 @@ it("keeps where web links open to a tab or the panel, a tab by default", () => {
   }
 });
 
+it("groups agents by workspace until coding-agent grouping is chosen", () => {
+  expect(DEFAULT_SETTINGS.agentGrouping).toBe("workspace");
+  expect(sanitizeSettings({ agentGrouping: "agent" }).agentGrouping).toBe("agent");
+  for (const bad of ["kinds", "", null, true]) expect(sanitizeSettings({ agentGrouping: bad }).agentGrouping).toBe("workspace");
+});
+
 describe("shared settings", () => {
   it("shares exactly the settings SETTING_SCOPE marks shared", () => {
     const shared = Object.entries(SETTING_SCOPE).filter(([, scope]) => scope === "shared").map(([key]) => key).sort();

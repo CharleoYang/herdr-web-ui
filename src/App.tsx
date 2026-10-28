@@ -1,5 +1,5 @@
 import { type CSSProperties, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Bell, Ellipsis, FolderOpen, Link, Menu, MessageSquare, PanelLeft, Search, SquareTerminal, X } from "lucide-react";
+import { Bell, ChevronsDownUp, Ellipsis, FolderOpen, Link, ListTodo, Menu, MessageSquare, PanelLeft, Search, SquareTerminal, X } from "lucide-react";
 
 import type { HerdrPane } from "../shared/protocol.ts";
 import { authenticate, createTab, moveTabToWorkspace, pairDevice, shareSeen, signOut, splitPane, swapPaneWith, zoomPane } from "./lib/api.ts";
@@ -548,6 +548,11 @@ export function App() {
     { id: "palette", label: t("Search panes and actions"), icon: Search, ...(paletteKeys ? { hint: paletteKeys } : {}), run: () => openPalette() },
     ...(selectedPane && !selectedPane.restore_error ? [{ id: "find", label: t("Find in terminal"), icon: Search, run: actions.openFind }] : []),
     ...(selectedPane && (selectedPane.agent === "omp" || !btwShown) && view === "chat" && !selectedPane.restore_error ? [{ id: "btw", label: `${t("Side conversations")} (BTW)`, icon: MessageSquare, checked: btwShown, run: () => setBtwShown(!btwShown) }] : []),
+    // the chat's pinned plan, above the message box: one switch for the list and one for its folding
+    ...(selectedPane && view === "chat" && !selectedPane.restore_error ? [
+      { id: "todos", label: t("Todo list"), icon: ListTodo, checked: settings.showTodos, run: () => updateSettings({ showTodos: !settings.showTodos }) },
+      ...(settings.showTodos ? [{ id: "todos-fold", label: t("Fold todo list"), icon: ChevronsDownUp, title: t("When off, the pinned todo list stays open"), checked: settings.foldTodos, run: () => updateSettings({ foldTodos: !settings.foldTodos }) }] : []),
+    ] : []),
     // from 769px Files has its own button beside the lens switch; a phone keeps it here
     ...(selectedPane && !wideScreen ? [{ id: "files", label: t("Browse files"), icon: FolderOpen, run: () => setFilesOpen(true) }] : []),
     // the address says where the app is (lib/deepLink.ts); a phone has no address bar to copy it from

@@ -8,6 +8,21 @@
   background: var(--bg-elevated);
   font-size: var(--fs-xs);
 }
+
+/* in the rail the dock fills the column and the rail scrolls its list, not the dock */
+.chat-side .chat-subagents {
+  width: 100%;
+  margin: 0;
+}
+
+.chat-side .chat-subagents-list {
+  max-height: none;
+}
+/* in the rail's narrow header the bare count and its caption read as one phrase: "2 unfinished" */
+.chat-side .chat-subagents-toggle > span:not(.chat-subagents-summary) {
+  display: none;
+}
+
 .chat-subagents-toggle {
   display: flex;
   align-items: center;

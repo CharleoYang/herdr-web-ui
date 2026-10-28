@@ -9,6 +9,7 @@
  */
 export const CHAT_KO: Record<string, string> = {
   "Todo": "할 일",
+  "Pane details": "창 상세",
   "Antigravity chat is unavailable. Open Terminal to see activity and tool calls.": "Antigravity 채팅을 사용할 수 없습니다. 터미널을 열어 작업 상태와 도구 호출을 확인하세요.",
   "Chat read timed out.": "대화 읽기 시간이 초과되었습니다.",
   "Thinking…": "생각 중…",

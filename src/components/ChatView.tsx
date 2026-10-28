@@ -777,7 +777,7 @@ function GoalActivity({ goal }: { goal: GoalState }) {
  *  transcript: folding the tool rows never hides it, and it stands outside the `role="log"` scroller,
  *  so a change to the list is not read as a new message. Closed it is one row: the mark, the word,
  *  the count and the running step. */
-function TodoPanel({ items, open, onToggle }: { items: TodoItem[]; open: boolean; onToggle: (open: boolean) => void }) {
+function TodoPanel({ items, open, collapsible, onToggle }: { items: TodoItem[]; open: boolean; collapsible: boolean; onToggle: (open: boolean) => void }) {
   const t = useT();
   const total = items.length;
   const completed = items.filter((i) => i.status === "completed").length;
@@ -793,8 +793,8 @@ function TodoPanel({ items, open, onToggle }: { items: TodoItem[]; open: boolean
   }
 
   return (
-    <details className={`chat-todo chat-todo-pinned${allDone ? " is-done" : blocked ? " is-blocked" : inProgress ? " is-active" : ""}`} open={open} onToggle={(event) => onToggle(event.currentTarget.open)}>
-      <summary>
+    <details className={`chat-todo chat-todo-pinned${allDone ? " is-done" : blocked ? " is-blocked" : inProgress ? " is-active" : ""}`} open={collapsible ? open : true} onToggle={(event) => { if (collapsible) onToggle(event.currentTarget.open); }}>
+      <summary aria-disabled={collapsible ? undefined : true} onClick={collapsible ? undefined : (event) => event.preventDefault()}>
         <span className="chat-todo-mark" aria-hidden="true">
           {allDone ? <CheckSquare /> : <ListTodo />}
         </span>
@@ -802,7 +802,7 @@ function TodoPanel({ items, open, onToggle }: { items: TodoItem[]; open: boolean
         <span className="chat-todo-progress">{total > 0 ? t("{done} of {total} done", { done: completed, total }) : ""}</span>
         {inProgress && <span className="chat-todo-active-task">· {inProgress.label}</span>}
         {blocked && !inProgress && <span className="chat-todo-blocked-task">· {t("blocked")}</span>}
-        <ChevronDown className="chat-skill-caret" aria-hidden="true" />
+        {collapsible && <ChevronDown className="chat-skill-caret" aria-hidden="true" />}
       </summary>
       <div className="chat-todo-detail">
         {groups.map((group, gIdx) => (
@@ -2237,7 +2237,7 @@ export const ChatView = memo(function ChatView({ paneId, presentationKey, finish
     }
     return null;
   }, [turns]);
-  const [todosOpen, setTodosOpen] = useState(false);
+  const [todosOpen, setTodosOpen] = useState(true);
   // a tick takes the reader to its turn: reading there, follow left off
   const jumpToTurn = useCallback((index: number) => {
     pagingAway.current = true; stickToBottom.current = false; setAway(true);
@@ -2346,6 +2346,7 @@ export const ChatView = memo(function ChatView({ paneId, presentationKey, finish
       && (agentStatus !== "done" || conversationFinishPresented({ source: state.conversationSource, turns: state.turns }))
       && readPresentation === presentationKey && (state.source === "conversation" ? ChatTimeline !== null : agent === null) ? presentationKey : undefined}>
     <div className="chat-frame-body">
+    <div className="chat-main">
     <div className="chat-frame-scroll">
     {state.source === "conversation" ? ChatTimeline === null
       // its chunk is still loading: no turn is read until it arrives, so this is the loading state
@@ -2381,9 +2382,13 @@ export const ChatView = memo(function ChatView({ paneId, presentationKey, finish
     {jump}
     </div>
     {state.conversationSource === "omp-transcript" && <BtwPanel key={`${machineId}:${paneId}:${historyId}`} paneId={paneId} visible={visible} />}
-    {state.conversationSource === "omp-transcript" && <OmpAgentsPanel key={`agents:${machineId}:${paneId}:${historyId}`} paneId={paneId} visible={visible} />}
-    {/* the agent's own list: the chat's last row, just above the input card */}
-    {state.source === "conversation" && currentTodos !== null && <TodoPanel items={currentTodos} open={todosOpen} onToggle={setTodosOpen} />}
+    </div>
+    {/* the pane's own facts beside the conversation: its unfinished subagents and the agent's plan,
+        both open. A pane with neither draws no rail (the empty aside is not shown) */}
+    <aside className="chat-side" aria-label={t("Pane details")}>
+      {state.conversationSource === "omp-transcript" && <OmpAgentsPanel key={`agents:${machineId}:${paneId}:${historyId}`} paneId={paneId} visible={visible} expanded />}
+      {state.source === "conversation" && settings.showTodos && currentTodos !== null && <TodoPanel items={currentTodos} open={settings.foldTodos ? todosOpen : true} collapsible={settings.foldTodos} onToggle={setTodosOpen} />}
+    </aside>
     </div>
     </div>
   {/* The prompt card is not part of the transcript: it is drawn on the composer's column, over the

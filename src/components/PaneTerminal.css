@@ -149,6 +149,29 @@
   overflow: hidden;
 }
 
+/* The chat rail (ChatView's `.chat-side`) takes the pane's right side once the pane is wide enough
+   to hold it beside the transcript. The stack is the size container these rows ask, so the input
+   card, the queued messages and the prompt dock keep the conversation's own column instead of
+   centering under the rail; a narrower pane docks the rail under the transcript (ChatTimeline.css)
+   and they keep the full width. */
+.terminal-stack.is-chat {
+  container-type: inline-size;
+}
+
+@container (min-width: 761px) {
+  .terminal-stack.is-chat:has(.chat-side:not(:empty)) > .composer {
+    padding-right: calc(var(--space-4) + clamp(16rem, 24%, 22rem));
+  }
+
+  .terminal-stack.is-chat:has(.chat-side:not(:empty)) > .prompt-dock,
+  .terminal-stack.is-chat:has(.chat-side:not(:empty)) > .pending-messages,
+  .terminal-stack.is-chat:has(.chat-side:not(:empty)) > .composer-queue {
+    width: min(calc(100% - 2 * var(--space-4) - clamp(16rem, 24%, 22rem)), var(--chat-w));
+    margin-left: var(--space-4);
+    margin-right: auto;
+  }
+}
+
 /* A phone's glass header lies over the stack's top (styles.css): the transcript reaches up under
    it (ChatView.css), so the clip opens upward by that height and stays shut below and aside */
 @media (max-width: 768px) {

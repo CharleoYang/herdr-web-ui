@@ -9,6 +9,7 @@
  */
 export const CHAT_JA: Record<string, string> = {
   "Todo": "タスク",
+  "Pane details": "ペインの詳細",
   "Antigravity chat is unavailable. Open Terminal to see activity and tool calls.": "Antigravityのチャットを利用できません。ターミナルを開いて動作状況とツール呼び出しを確認してください。",
   "Chat read timed out.": "会話の読み込みがタイムアウトしました。",
   "Thinking…": "思考中…",

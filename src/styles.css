@@ -1767,7 +1767,6 @@ button {
   flex: 0 0 var(--sidebar-shown-w);
   min-height: 0;
   background: var(--bg-panel);
-  border-right: var(--hairline) solid var(--border);
   padding-left: env(safe-area-inset-left, 0px);
 }
 
@@ -2186,7 +2185,6 @@ button {
     justify-content: space-between;
     margin: calc(-1 * env(safe-area-inset-top, 0px)) var(--space-2) calc(-1 * var(--hairline)) 0;
     padding: env(safe-area-inset-top, 0px) var(--space-3) 0 calc(var(--space-3) + env(safe-area-inset-left, 0px));
-    border-right: var(--hairline) solid var(--border);
     background: var(--bg-panel);
   }
 }

@@ -9,6 +9,7 @@
  */
 export const CHAT_ZH: Record<string, string> = {
   "Todo": "待办",
+  "Pane details": "面板详情",
   "Antigravity chat is unavailable. Open Terminal to see activity and tool calls.": "Antigravity 聊天暂不可用。请打开终端查看运行状态和工具调用。",
   "Chat read timed out.": "读取对话超时。",
   "Thinking…": "思考中…",

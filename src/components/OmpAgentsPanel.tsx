@@ -40,15 +40,15 @@ const OMP_AGENTS_TTL_MS = 30_000;
 const ompAgentsByPane = new Map<string, { at: number; agents: OmpAgent[] }>();
 
 /** A journal checkpoint, not a process monitor. Kept outside the virtual transcript. */
-export function OmpAgentsPanel(props: { paneId: string; visible: boolean }) {
+export function OmpAgentsPanel(props: { paneId: string; visible: boolean; expanded?: boolean }) {
   return <OmpAgentsDock {...props} t={useT()} />;
 }
 
 /** The dock with its translator given, so a test renders it without the settings provider's DOM. */
-export function OmpAgentsDock({ paneId, visible, t }: { paneId: string; visible: boolean; t: Translate }) {
+export function OmpAgentsDock({ paneId, visible, expanded = false, t }: { paneId: string; visible: boolean; expanded?: boolean; t: Translate }) {
   const { fetchPaneOmpAgents } = useMachineApi();
   const [agents, setAgents] = useState<OmpAgent[]>([]);
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(expanded);
   const [error, setError] = useState<string | null>(null);
   // Read when the pane appears, then only while the dock is open: a closed dock kept the
   // child transcripts re-read every three seconds for a count nobody was looking at.

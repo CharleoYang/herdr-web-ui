@@ -1073,13 +1073,17 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   Hover is `color-mix(in srgb, var(--bg-hover) 50%, var(--bg-panel))`, only where a pointer hovers;
   selection is `--bg-hover`; keyboard focus draws the ring inside the row and no fill. No rule
   separates sections: `--space-4` and a dim `--fs-sm` head do.
-- The PC/workspace list and the lower Agents list scroll independently above the fixed footer.
-  Agents takes the height of its rows, at most half the sidebar, docked above the footer; the
-  workspace list has the rest. The Agents heading stays outside its scroll area and shows its
-  count only while folded. A list that is cut fades out at its lower edge. An empty or folded
-  Agents list gives its space back; PC and workspace folds do not hide agent rows. In the drawer
-  (`max-width: 768px`) the list starts folded. Until the PCs are in and every connected PC's
+- The PC/workspace list and the lower Agents list share the sidebar three to seven: the devices
+  keep a third of the height, their agents the rest, and each list scrolls independently above the
+  fixed footer. Neither takes a fixed height; a folded or empty Agents list gives its share back to
+  the devices, and a sidebar without workspaces gives it all to the agents. The Agents heading stays
+  outside its scroll area and shows its count only while folded. The devices list, the Agents tree,
+  the chat transcript and the chat rail scroll under the wheel without a native bar, and a list
+  that is cut fades out at its lower edge; PC and workspace folds do not hide agent rows. In the
+  drawer (`max-width: 768px`) the list starts folded. Until the PCs are in and every connected PC's
   panes have come, an empty list says **Loading agents…**, never "No agents running".
+- No rule marks the sidebar's edge or parts the chat rail from the transcript, and the workspace
+  tree marks its depth by indentation alone: surfaces and space part them, not lines.
 - A PC's header is the head of its workspaces, and the caret beside its `+` is the one fold over
   them. The roster has no label or fold of its own.
 - **Settings → Remote PCs → Show in sidebar** hides a PC on this device (`lib/hiddenMachines.ts`,
@@ -1157,7 +1161,14 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   reach, and following the row while open), say each whole. A PC that is away draws none, as it draws no
   state. A plugin's line for the agent (`display_agent`) leads the place, as before, where it says
   more than the mark and the title; it changes live like the tokens.
-- The Agents list is flat and every row names its own place. Pinned agents (pinned from a row's
+- The Agents list is a tree in one of two shapes, chosen at its head (`.agent-group-switch`; the
+  choice is a setting shared with the other browsers): **by workspace**, a head per workspace and
+  its agents under it, or **by coding agent**, a head per agent kind (its brand mark and the number
+  of agents it holds) with its workspaces under it and their agents under those. The rows leave the
+  workspace (and the PC) to the head: the context line keeps the agent, its tab and its plugin
+  tokens, while the tooltip still names the whole place. A head is open until the reader folds it;
+  a filter opens every head it keeps, so a match is seen, never only kept. Groups follow their first
+  row in **Agents order**, and the rows inside a group keep that order. Pinned agents (pinned from a row's
   menu) stand first, in the order they were pinned, in a card (a `--hairline` `--border` edge,
   `--radius-lg`, no fill, so hover and selection read inside it as elsewhere),
   with no mark of their own (the card says so); the rest follow `--space-2` below in the
@@ -2074,6 +2085,11 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   words are never behind the fold. A block the reader opened or folded stays as they left it, and
   so does one they focused or clicked inside: the fold at the end of a turn never takes the rows
   from under them.
+- A running turn that is folded keeps its newest tool row under the header (`.work-block-latest`),
+  drawn as that row would be: one line of what the agent is doing now, outside the fold, while the
+  older rows stay put away. Todo calls are the pinned plan's, so they are skipped; a turn before
+  its first tool keeps none. This follows the Claude and Codex apps' live activity line the same
+  way the block follows their one-row-per-action transcript.
 - The header is one line: the counts (`.work-block-summary`) take the width the title and the
   failure count leave and end in an ellipsis. `· 1 failed` (`.work-block-failed`) is its own item
   and is never cut, because the fold hides the failed row; at the largest chat type on the
@@ -2125,10 +2141,21 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   app: one row per action, folded under the turn); Agent of Empires' todo cards gave only the
   evidence that contiguous plan updates read better as one item, and none of its code is used.
 
+### Chat rail (`.chat-side`)
+- The pane's own facts sit beside the conversation, not under it: OMP's unfinished subagents
+  (`.chat-subagents`) above the agent's latest plan (`.chat-todo-pinned`), both open on arrival.
+  The transcript keeps the chat lane in `.chat-main`; the rail is `clamp(16rem, 24%, 22rem)` and
+  draws only when the pane has a fact to show (`.chat-side:empty` is hidden).
+- A narrow pane (~760px and under) docks the rail under the transcript instead of narrowing the
+  conversation: two columns while 560px or more fits, one scrolling column below. On a phone the
+  input card floats over the transcript's end, so the docked rail stops above it
+  (`--composer-over`), exactly as the transcript's last line does.
+
 ### Turn todo list (`.chat-todo`)
-- The pane's latest todo state is a single collapsible `.chat-todo-pinned` dock outside the
-  message scroller, above the composer. Scrolling transcript rows or folding a work block does
-  not move or duplicate this progress panel. It is not a separate list on every historical turn.
+- The pane's latest todo state is a single collapsible `.chat-todo-pinned` dock in the chat rail
+  beside the message scroller, open on arrival. Scrolling transcript rows or folding a work block
+  does not move or duplicate this progress panel. It is not a separate list on every historical
+  turn.
 - Claude `TodoWrite` and Codex `update_plan` inputs provide complete lists; OMP/OmO tool answers
   provide phase-grouped states, with flat OMP `init.items` input as the fallback. A later empty
   list clears the earlier state.
@@ -2136,6 +2163,10 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   stays on one line in a narrow panel; expanding reveals phase headings, status icons and notes.
   Collapsing hides the details without requiring their DOM nodes to be removed. The same
   semantic color tokens are used as elsewhere in the interface.
+- The header's ⋯ menu carries two device switches: **Todo list** hides the dock (the transcript's
+  plan rows stay as they are), and **Fold todo list** turns the dock's own folding off, leaving it
+  always expanded with its summary read-only. Both are this device's settings, like the composer's
+  own switches; the fold switch is offered only while the list is shown.
 
 ### OMP side conversations (`.chat-btw`)
 - A separate collapsed dock above Todo, outside the main message log, reads OMP's persisted

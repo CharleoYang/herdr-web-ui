@@ -1,6 +1,16 @@
 .session-modal {
   width: min(100%, 560px);
 }
+
+/* the sheet scrolls under the wheel; its bar would draw a second edge on a short list */
+.session-modal .modal-body {
+  scrollbar-width: none;
+}
+
+.session-modal .modal-body::-webkit-scrollbar {
+  display: none;
+}
+
 .session-agent {
   margin-bottom: var(--space-4);
 }

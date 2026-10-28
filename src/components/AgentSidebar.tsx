@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
-import { Bell, BellOff, ChevronDown, ChevronRight, Ellipsis, Pin, PinOff, Terminal } from "lucide-react";
+import { Bell, BellOff, ChevronDown, ChevronRight, Ellipsis, Layers, Pin, PinOff, Terminal } from "lucide-react";
 
 import type { Machine } from "../../shared/machines.ts";
 import { paneStorageId } from "../../shared/machines.ts";
@@ -8,9 +8,10 @@ import type { AgentStatus, PlanSummary } from "../../shared/protocol.ts";
 import { currentAgentRowTokens, subscribeAgentRowTokens } from "../lib/agentRowTokens.ts";
 import { useT } from "../lib/i18n.ts";
 import { useAnnouncedText } from "../lib/useAnnouncedText.ts";
-import { agentRoster, type AgentRow } from "../lib/agentRoster.ts";
+import { agentKindGroups, agentRoster, workspaceGroups, type AgentRow, type AgentWorkspaceGroup } from "../lib/agentRoster.ts";
 import { currentPaneMutes, paneMuteKey, prunePaneMutes, setPaneMutes, subscribePaneMutes, togglePaneMute } from "../lib/paneMutes.ts";
 import { agentContext, agentTabName, paneMark } from "../lib/sidebarAgents.ts";
+import { agentDisplayLabel } from "../lib/compose.ts";
 import { useSettings } from "../lib/settings.ts";
 import { useSidebarActivity } from "../lib/sidebarActivity.tsx";
 import { machineFilter } from "../lib/sidebarFilter.ts";
@@ -106,7 +107,8 @@ export function AgentSidebar({ machines, selectedMachineId, selectedPaneId, stat
   const t = useT();
   const listId = useId();
   const [collapsed, setCollapsed] = useState(() => window.matchMedia?.(DRAWER_QUERY).matches === true);
-  const { settings } = useSettings();
+  const { settings, update } = useSettings();
+  const grouping = settings.agentGrouping;
   // shared with the other browsers of this server (lib/preferencesSync.ts)
   const pinned = useSyncExternalStore(subscribeSidebarPins, currentSidebarPins, currentSidebarPins);
   // the panes whose alerts are off, shared the same way; null on a server that keeps no such list, which then offers no mute
@@ -128,6 +130,19 @@ export function AgentSidebar({ machines, selectedMachineId, selectedPaneId, stat
     return { pinned: roster.pinned.filter(kept), rest: roster.rest.filter(kept) };
   }, [roster, filter]);
   const rows = useMemo(() => [...split.pinned, ...split.rest], [split]);
+  // The rest of the list as a tree: workspace heads over their agents, or coding-agent heads over
+  // their workspaces. A head is open until the reader folds it; a filter opens every head it
+  // keeps, so a match is seen, not only kept.
+  const restGroups = useMemo(() => workspaceGroups(split.rest), [split.rest]);
+  const kindGroups = useMemo(() => agentKindGroups(split.rest), [split.rest]);
+  const [foldedWorkspaces, setFoldedWorkspaces] = useState<Set<string>>(() => new Set());
+  const [foldedKinds, setFoldedKinds] = useState<Set<string>>(() => new Set());
+  const toggled = (current: Set<string>, key: string): Set<string> => {
+    const next = new Set(current);
+    if (next.has(key)) next.delete(key);
+    else next.add(key);
+    return next;
+  };
   // a folded list (a phone's starts so) opens while the filter keeps rows in it, so a match or the selection is
   // seen, not only kept; its caret then folds and opens it for the filter's time, the list's own fold untouched
   const [filterFold, setFilterFold] = useState<boolean | null>(null);
@@ -165,8 +180,9 @@ export function AgentSidebar({ machines, selectedMachineId, selectedPaneId, stat
   // herdr names a PC only beside another: the rows' line does the same
   const machineName = (machine: Machine): string | null => machines.length > 1 ? machine.name : null;
 
-  // what a row says of its agent, for the row and for its open menu
-  const describe = ({ machine, entry }: AgentRow) => {
+  // what a row says of its agent, for the row and for its open menu; in a workspace group the head
+  // says the PC and the workspace, so the row does not say them again
+  const describe = ({ machine, entry }: AgentRow, inWorkspace = false) => {
     const { pane, workspace, tab, agent, agentLabel } = entry;
     const online = machine.state === "connected";
     const title = pane.label?.trim() || agent?.title?.trim() || pane.title?.trim() || displayPaneTitle(pane);
@@ -176,7 +192,7 @@ export function AgentSidebar({ machines, selectedMachineId, selectedPaneId, stat
     const tabs = machine.snapshot?.tabs.filter((candidate) => candidate.workspace_id === workspace.workspace_id) ?? [];
     const mark = paneMark(entry);
     const markAgent = mark && hasAgentMark(mark) ? mark : null;
-    const parts = { agentLabel: kindLabel, title, markAgent, machineName: machineName(machine), workspaceLabel: workspace.label, tabName: agentTabName(tab, tabs, t) };
+    const parts = { agentLabel: kindLabel, title, markAgent, machineName: inWorkspace ? null : machineName(machine), workspaceLabel: inWorkspace ? "" : workspace.label, tabName: agentTabName(tab, tabs, t) };
     const contextParts = agentContext(parts);
     const context = contextParts.join(" · ");
     const kind = kindLabel?.trim() || null;
@@ -186,15 +202,18 @@ export function AgentSidebar({ machines, selectedMachineId, selectedPaneId, stat
     return { online, title, name, mark, context, markKind, tokens };
   };
 
-  const agentItem = (row: AgentRow) => {
+  const agentItem = (row: AgentRow, inWorkspace = false) => {
     const { machine, entry } = row;
     const { pane, agent } = entry;
     const selected = machine.id === selectedMachineId && pane.pane_id === selectedPaneId;
     // under the filter a row it did not match is there for the selection: drawn as context, and said so
     const filterContext = filter.active && machineFilter(filter, machine.id)?.matchedPanes.has(pane.pane_id) !== true;
-    const { online, title, name, mark, context, markKind, tokens } = describe(row);
+    const shown = describe(row, inWorkspace);
+    // the tooltip says where the row runs even when its head already does: it is read alone
+    const full = inWorkspace ? describe(row) : shown;
+    const { online, title, name, mark, context, markKind, tokens } = shown;
     // the row cuts a long value: the tooltip, and a phone's menu sheet, say each in full
-    const tooltip = [...new Set([pane.pane_id, title, context, ...tokens, markKind, name, agent?.display_agent, pane.cwd, online ? null : stateWord(machine)].filter(Boolean))].join("\n");
+    const tooltip = [...new Set([pane.pane_id, title, full.context, ...tokens, markKind, name, agent?.display_agent, pane.cwd, online ? null : stateWord(machine)].filter(Boolean))].join("\n");
     const pinKey = sidebarPinKey(machine.id, pane.pane_id);
     const menuOpen = menu?.key === pinKey;
     // one menu for the ⋯ and a right-click, which opens it at the pointer and leaves the focus where it was
@@ -221,6 +240,26 @@ export function AgentSidebar({ machines, selectedMachineId, selectedPaneId, stat
     </li>;
   };
 
+  // one workspace head over its agents: the row of both groupings, at the top or under a kind
+  const workspaceItem = (group: AgentWorkspaceGroup) => {
+    const groupFolded = !filter.active && foldedWorkspaces.has(group.key);
+    const groupId = `${listId}-workspace-${encodeURIComponent(group.key)}`;
+    return <li className="agent-workspace" key={group.key} data-machine={group.machine.id} data-workspace={group.workspace.workspace_id}>
+      <button type="button" className="agent-workspace-header" aria-expanded={!groupFolded} aria-controls={groupId} onClick={() => setFoldedWorkspaces((current) => toggled(current, group.key))}>
+        {groupFolded ? <ChevronRight className="agent-workspace-caret" aria-hidden="true" /> : <ChevronDown className="agent-workspace-caret" aria-hidden="true" />}
+        <span className="agent-workspace-copy">
+          <span className="agent-workspace-name">{group.workspace.label}</span>
+          {group.workspace.worktree?.repo_name && group.workspace.worktree.repo_name !== group.workspace.label && <span className="agent-workspace-repo">{group.workspace.worktree.repo_name}</span>}
+          {machines.length > 1 && <span className="agent-workspace-machine">{group.machine.name}</span>}
+        </span>
+        {group.rows.length > 1 && <span className="agent-workspace-count" aria-hidden="true">{group.rows.length}</span>}
+      </button>
+      <ul className="agent-list agent-workspace-rows" id={groupId} hidden={groupFolded}>
+        {group.rows.map((row) => agentItem(row, true))}
+      </ul>
+    </li>;
+  };
+
   // no PCs yet (the roster is still on its way), or a connected PC whose panes have not come in: not "none running"
   const loading = machines.length === 0 || machines.some((machine) => machine.state === "connected" && machine.snapshot === null);
   // the empty list's line is a live region that is in the list from its first render, clipped while empty (never
@@ -240,20 +279,47 @@ export function AgentSidebar({ machines, selectedMachineId, selectedPaneId, stat
   // Settings -> Sidebar rows -> One line: an agent row is one line too, its place dim after its title
   const oneLine = settings.sidebarRows === "one";
   return <section ref={sectionRef} className={`agents-sidebar${folded ? " is-collapsed" : ""}${rows.length === 0 ? " is-empty" : ""}${oneLine ? " is-one-line" : ""}`} aria-label={t("Agents")}>
-    <button type="button" className="agent-section-toggle sidebar-section-label" aria-expanded={!folded} aria-controls={listId} onClick={() => { if (filter.active) setFilterFold(!folded); else setCollapsed(!collapsed); }}>
-      {folded ? <ChevronRight className="agent-section-caret" aria-hidden="true" /> : <ChevronDown className="agent-section-caret" aria-hidden="true" />}
-      <span>{t("Agents")}</span>
-      {/* the count is of the agents running, filter or not */}
-      {folded && allRows.length > 0 && <span className="agent-section-count">{allRows.length}</span>}
-    </button>
+    <div className="agent-section-head">
+      <button type="button" className="agent-section-toggle sidebar-section-label" aria-expanded={!folded} aria-controls={listId} onClick={() => { if (filter.active) setFilterFold(!folded); else setCollapsed(!collapsed); }}>
+        {folded ? <ChevronRight className="agent-section-caret" aria-hidden="true" /> : <ChevronDown className="agent-section-caret" aria-hidden="true" />}
+        <span>{t("Agents")}</span>
+        {/* the count is of the agents running, filter or not */}
+        {folded && allRows.length > 0 && <span className="agent-section-count">{allRows.length}</span>}
+      </button>
+      {/* the tree's shape: workspaces over their agents, or coding agents over their workspaces */}
+      <button type="button" className="agent-group-switch" onClick={() => update({ agentGrouping: grouping === "workspace" ? "agent" : "workspace" })}>
+        <Layers aria-hidden="true" />
+        <span>{t(grouping === "workspace" ? "Group by agent" : "Group by workspace")}</span>
+      </button>
+    </div>
     <div className="agent-list-contents" id={listId} hidden={folded}>
       <p className={shownEmpty === null ? "visually-hidden" : "agent-empty"} role="status">{shownEmpty}</p>
       {rows.length > 0 && <>
         {split.pinned.length > 0 && <>
           <p className="sidebar-pinned-label" aria-hidden="true"><span><Pin />{t("Pinned")}</span></p>
-          <ul className="agent-list agent-list-pinned sidebar-pinned" aria-label={t("Pinned")}>{split.pinned.map(agentItem)}</ul>
+          <ul className="agent-list agent-list-pinned sidebar-pinned" aria-label={t("Pinned")}>{split.pinned.map((row) => agentItem(row))}</ul>
         </>}
-        {split.rest.length > 0 && <ul className="agent-list">{split.rest.map(agentItem)}</ul>}
+        {split.rest.length > 0 && (grouping === "workspace"
+          ? <ul className="agent-list">{restGroups.map((group) => workspaceItem(group))}</ul>
+          : <ul className="agent-list">
+            {kindGroups.map((kind) => {
+              const kindFolded = !filter.active && foldedKinds.has(kind.key);
+              const kindId = `${listId}-kind-${encodeURIComponent(kind.key)}`;
+              return <li className="agent-kind" key={kind.key} data-kind={kind.key}>
+                <button type="button" className="agent-workspace-header agent-kind-header" aria-expanded={!kindFolded} aria-controls={kindId} onClick={() => setFoldedKinds((current) => toggled(current, kind.key))}>
+                  {kindFolded ? <ChevronRight className="agent-workspace-caret" aria-hidden="true" /> : <ChevronDown className="agent-workspace-caret" aria-hidden="true" />}
+                  {/* a head says the kind as its rows do: no agent of a PC's own is a Shell */}
+                  <span className="agent-kind-mark" aria-hidden="true">{kind.key === "" ? <Terminal size={16} /> : <AgentMark agent={kind.key} size={16} />}</span>
+                  <span className="agent-workspace-copy"><span className="agent-workspace-name">{agentDisplayLabel(kind.key === "" ? null : kind.key)}</span></span>
+                  {kind.rows.length > 1 && <span className="agent-workspace-count" aria-hidden="true">{kind.rows.length}</span>}
+                </button>
+                <ul className="agent-list agent-kind-rows" id={kindId} hidden={kindFolded}>
+                  {kind.workspaces.map((group) => workspaceItem(group))}
+                </ul>
+              </li>;
+            })}
+          </ul>
+        )}
       </>}
     </div>
     {menu && menuShown && <RowMenu anchor={menu.anchor} point={menu.point} restoreFocusTo={menu.previousFocus} title={menuShown.title} subtitle={menuShown.context} detail={menuShown.tokens.join(" · ") || undefined} onClose={closeMenu} items={[

@@ -1,11 +1,12 @@
-/* Agents takes the height of its rows, at most half the sidebar, docked above the footer; the
-   workspace list has the rest. Parted from it by space, not a rule. */
+/* Agents and the PCs above them share the sidebar three to seven: the devices keep a third of
+   the height, their agents the rest, and each list scrolls its own rows. Neither takes a fixed
+   height; a folded or empty Agents list gives its share back to the devices. Parted from them by
+   space, not a rule. */
 .agents-sidebar {
   display: flex;
-  flex: 0 1 auto;
+  flex: 7 1 0;
   flex-direction: column;
   min-height: 0;
-  max-height: 50%;
   padding: var(--space-2) var(--side-gutter) 0;
 }
 
@@ -25,6 +26,12 @@
   overflow-y: auto;
   overscroll-behavior: contain;
   scroll-padding-bottom: var(--space-4);
+  /* the tree scrolls under the wheel; its bar would be a second edge beside its rows */
+  scrollbar-width: none;
+}
+
+.agent-list-contents::-webkit-scrollbar {
+  display: none;
 }
 
 .agents-sidebar.is-empty .agent-list-contents { flex: 0 0 auto; }
@@ -42,10 +49,50 @@
 
 .agents-sidebar.is-empty .agent-list-contents::after { display: none; }
 
+/* the head: the fold, and the tree's shape switch at its right */
+.agent-section-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
 .agent-section-toggle {
-  flex: 0 0 auto;
-  width: 100%;
+  flex: 1 1 auto;
+  width: auto;
+  min-width: 0;
   cursor: pointer;
+}
+
+/* the same tree by workspace, or by coding agent over its workspaces */
+.agent-group-switch {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: var(--space-1);
+  min-height: var(--side-row);
+  padding: 0 var(--space-2);
+  border: 0;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--text-dim);
+  font: inherit;
+  font-size: var(--fs-xs);
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.agent-group-switch svg {
+  width: var(--space-4);
+  height: var(--space-4);
+}
+
+.agent-group-switch:focus-visible { outline-offset: calc(var(--ring-offset) * -1); }
+
+@media (hover: hover) {
+  .agent-group-switch:hover {
+    background: var(--side-hover);
+    color: var(--text);
+  }
 }
 
 /* the fold's caret hangs in the leading cell and shows when it is of use */
@@ -77,6 +124,93 @@
   margin: 0;
   padding: 0;
   list-style: none;
+}
+
+/* The rest of the list is a tree. By workspace: one head per workspace, its agents indented under
+   it. By coding agent: one head per agent kind, its workspaces indented under it, and their agents
+   under those. A head says its name, where it runs, and (over one agent) how many it holds; the
+   rows under it leave those words to it. */
+.agent-workspace + .agent-workspace { margin-top: var(--space-1); }
+
+.agent-workspace-header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  min-height: var(--side-row);
+  padding: 0 var(--space-2) 0 0;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--text-dim);
+  font: inherit;
+  font-size: var(--fs-sm);
+  text-align: left;
+  cursor: pointer;
+}
+
+.agent-workspace-header:focus-visible { outline-offset: calc(var(--ring-offset) * -1); }
+
+@media (hover: hover) {
+  .agent-workspace-header:hover {
+    background: var(--side-hover);
+    color: var(--text);
+  }
+}
+
+.agent-workspace-caret {
+  flex: none;
+  width: var(--space-4);
+  height: var(--space-4);
+  opacity: 0.7;
+}
+
+.agent-workspace-copy {
+  display: flex;
+  flex: 1 1 auto;
+  align-items: baseline;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.agent-workspace-name,
+.agent-workspace-repo,
+.agent-workspace-machine {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent-workspace-name {
+  color: var(--text);
+  font-size: var(--fs-sm);
+}
+
+.agent-workspace-repo,
+.agent-workspace-machine {
+  color: var(--text-dim);
+  font-size: var(--fs-xs);
+}
+
+.agent-workspace-count {
+  flex: none;
+  color: var(--text-dim);
+  font-size: var(--fs-xs);
+  font-variant-numeric: tabular-nums;
+}
+
+.agent-workspace-rows {
+  padding-left: var(--space-5);
+}
+
+/* a kind's workspaces stand under its head, their agent rows under the workspace heads */
+.agent-kind-rows {
+  padding-left: var(--space-4);
+}
+
+.agent-kind-mark {
+  display: inline-flex;
+  flex: none;
 }
 
 /* Pinned agents stand first in a card (Sidebar.css); the Agents head stays the list's only head. */

@@ -4,19 +4,87 @@
   display: flex;
   flex-direction: column;
   min-height: 0;
+  /* the rail's query asks the pane, not the window */
+  container-type: inline-size;
 }
 
 .chat-frame-body {
   position: relative;
   flex: 1 1 auto;
   min-height: 0;
-  /* a column: the pinned todo panel (ChatView.tsx TodoPanel) may take a row above the transcript */
+  /* the conversation's column and, when the pane has facts to show, the rail beside it */
+  display: flex;
+  flex-direction: row;
+}
+
+/* the conversation: its scroller, and the docks that still sit under it (side conversations) */
+.chat-main {
+  position: relative;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
   display: flex;
   flex-direction: column;
 }
 
-/* the transcript region: the frame's whole height, less whatever the pinned todo panel took. The
-   minimap and the jump button are inside it, so both stay within the conversation's own box. */
+/* the pane's own facts beside the conversation: its unfinished subagents and the agent's plan,
+   both open. A pane with neither draws no rail (`.chat-side:empty`) */
+.chat-side {
+  flex: 0 0 clamp(16rem, 24%, 22rem);
+  min-width: 0;
+  overflow-y: auto;
+  /* on a phone the input card floats over the frame's end (Composer.css): the rail's content keeps
+     clear of it, docked beside the transcript or under it */
+  padding: var(--space-2) var(--space-3) calc(var(--space-2) + var(--composer-over, 0px));
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.chat-side:empty {
+  display: none;
+}
+
+/* the rail scrolls under the wheel; its bar would draw a second edge on the pane's right */
+.chat-side {
+  scrollbar-width: none;
+}
+
+.chat-side::-webkit-scrollbar {
+  display: none;
+}
+
+/* a narrow pane keeps the chat's width: the rail becomes a dock under it, still open */
+@container (max-width: 760px) {
+  .chat-frame-body {
+    flex-direction: column;
+  }
+
+  .chat-side {
+    flex: 0 0 auto;
+    max-height: calc(45% - var(--composer-over, 0px));
+    /* a phone's input card floats over the transcript's end (Composer.css): the dock stops above it */
+    margin-bottom: var(--composer-over, 0px);
+  }
+}
+
+/* a docked rail with room for two columns shows both facts fully open rather than scrolled */
+@container (max-width: 760px) and (min-width: 560px) {
+  .chat-side {
+    flex-direction: row;
+    align-items: flex-start;
+  }
+
+  .chat-frame .chat-side > .chat-subagents,
+  .chat-frame .chat-side > .chat-todo-pinned {
+    flex: 1 1 0;
+    width: auto;
+    min-width: 0;
+  }
+}
+
+/* the transcript region: the frame's height, beside the rail. The minimap and the jump button are
+   inside it, so both stay within the conversation's own box. */
 .chat-frame-scroll {
   position: relative;
   flex: 1 1 auto;

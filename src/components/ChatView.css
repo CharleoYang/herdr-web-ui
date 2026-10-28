@@ -57,6 +57,13 @@
   /* and a row brought into view (an opened screen preview) stops clear of the card, not under it */
   scroll-padding-bottom: var(--composer-over, 0px);
   background: var(--bg);
+  /* the transcript scrolls under the wheel and its own minimap; its native bar would be a
+     second edge inside the conversation */
+  scrollbar-width: none;
+}
+
+.chat-view::-webkit-scrollbar {
+  display: none;
 }
 
 /* From 769px the header over the chat has no bar and no rule (styles.css): the transcript
@@ -911,6 +918,18 @@
   padding-top: var(--space-1);
 }
 
+/* folded while the agent works, the block keeps its newest row under the head: one line, drawn
+   like the rows it would show, so the fold never hides what is happening now */
+.work-block-latest {
+  padding-top: var(--space-1);
+}
+
+/* that row's pictures already sit on the block's head line (LineImages): the kept row does not
+   repeat them */
+.work-block-latest .work-images {
+  display: none;
+}
+
 .work-row {
   display: flex;
   flex-direction: column;
@@ -1730,6 +1749,17 @@
   margin: 0 auto calc(var(--space-2) + var(--composer-over, 0px));
 }
 
+/* beside the conversation the plan fills the rail's column instead of centering over the box */
+.chat-side .chat-todo-pinned {
+  width: 100%;
+  margin: 0;
+}
+
+/* the rail scrolls; the open plan takes its own height instead of a boxed-in scroll area */
+.chat-side .chat-todo-pinned[open] .chat-todo-detail {
+  max-height: none;
+}
+
 .chat-todo-pinned[open] .chat-todo-detail {
   max-height: min(40dvh, 20rem);
   overflow-y: auto;
@@ -1747,6 +1777,11 @@
 }
 
 .chat-todo > summary::-webkit-details-marker { display: none; }
+
+/* folding turned off: the summary says the count and the running step, but is not a control */
+.chat-todo > summary[aria-disabled="true"] {
+  cursor: default;
+}
 
 .chat-todo-mark {
   display: inline-flex;

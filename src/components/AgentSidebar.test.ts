@@ -6,6 +6,7 @@ import type { Machine } from "../../shared/machines.ts";
 import type { AgentInfo, HerdrPane, SessionSnapshot } from "../../shared/protocol.ts";
 import { setAgentRowTokens } from "../lib/agentRowTokens.ts";
 import { SettingsProvider } from "../lib/settings.ts";
+import { SETTINGS_STORAGE_KEY } from "../lib/themeBoot.ts";
 import { AgentSidebar } from "./AgentSidebar.tsx";
 
 const pane = (pane_id: string, extra: Partial<HerdrPane> = {}): HerdrPane => ({
@@ -31,7 +32,7 @@ function render(machines: Machine[]): string {
 const decode = (text: string): string => text.replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, "\"").replace(/&#x27;/g, "'").replace(/&amp;/g, "&");
 /** the text of each element with this class, entities as the browser reads them */
 const texts = (html: string, className: string): string[] =>
-  [...html.matchAll(new RegExp(`<span class="${className}">(.*?)</span>`, "g"))].map((match) => decode(match[1]!));
+  [...html.matchAll(new RegExp(`<span class="${className}"[^>]*>(.*?)</span>`, "g"))].map((match) => decode(match[1]!));
 /** each agent row's tooltip, line by line */
 const tooltips = (html: string): string[][] =>
   [...html.matchAll(/class="agent-select agent-row"[^>]* title="([^"]*)"/g)].map((match) => decode(match[1]!).split("\n"));
@@ -91,8 +92,50 @@ describe("AgentSidebar plugin tokens", () => {
       pane("w1:p2", { display_agent: "Claude", title: "Refactor" }),
     ])]);
     const lines = [...html.matchAll(/<span class="agent-context">(.*?)<\/span>/g)].map((match) => match[1]);
-    expect(lines[0]).toStartWith("needs a login · 8m ago · checkout-api");
+    // the workspace head says the place: the row keeps who it is, not where it runs
+    expect(lines).toEqual(["needs a login · 8m ago"]);
+    expect(texts(html, "agent-workspace-name")).toEqual(["checkout-api"]);
     // the mark already draws Claude: the line does not say it again
-    expect(lines[1]).toBe("checkout-api");
+    expect(html.match(/class="agent-context"/g)?.length).toBe(1);
+  });
+
+  test("the rest of the list is a tree: one head per workspace, its rows under it", () => {
+    const html = render([machine([pane("w1:p1"), pane("w1:p2")])]);
+    expect(html.match(/class="agent-workspace-header"/g)?.length).toBe(1);
+    expect(texts(html, "agent-workspace-name")).toEqual(["checkout-api"]);
+    // more than one agent under the head: the count says how many
+    expect(texts(html, "agent-workspace-count")).toEqual(["2"]);
+    const head = html.indexOf("agent-workspace-header");
+    const rows = html.indexOf("agent-workspace-rows");
+    expect(rows).toBeGreaterThan(head);
+    expect(html.slice(rows)).toContain('data-pane="w1:p1"');
+    expect(html.slice(rows)).toContain('data-pane="w1:p2"');
+    // its place is the head's: the rows' tooltips still name it whole
+    expect(tooltips(html).every((lines) => lines.includes("checkout-api"))).toBe(true);
+  });
+
+  test("grouping by coding agent heads each kind over its workspaces", () => {
+    // the stored choice: this browser groups coding agents over their workspaces
+    Object.defineProperty(globalThis, "window", { configurable: true, value: {
+      matchMedia: () => ({ matches: false }),
+      localStorage: { getItem: (key: string) => key === SETTINGS_STORAGE_KEY ? JSON.stringify({ agentGrouping: "agent" }) : null, setItem() {} },
+    } });
+    const html = render([machine([pane("w1:p1"), pane("w1:p2", { agent: "codex" })])]);
+    expect(html.match(/class="agent-kind"/g)?.length).toBe(2);
+    // each kind head, then its workspace head, in the roster's order; a head names its kind as its rows do
+    expect(texts(html, "agent-workspace-name")).toEqual(["Claude", "checkout-api", "Codex", "checkout-api"]);
+    // the switch offers the other shape
+    expect(html).toContain("Group by workspace");
+  });
+
+  test("a pane that runs no agent heads a Shell, not a nameless group", () => {
+    Object.defineProperty(globalThis, "window", { configurable: true, value: {
+      matchMedia: () => ({ matches: false }),
+      localStorage: { getItem: (key: string) => key === SETTINGS_STORAGE_KEY ? JSON.stringify({ agentGrouping: "agent" }) : null, setItem() {} },
+    } });
+    const html = render([machine([pane("w1:p1", { agent: null }), pane("w1:p2", { agent: "codex" })])]);
+    expect(texts(html, "agent-workspace-name")).toEqual(["Shell", "checkout-api", "Codex", "checkout-api"]);
+    // the head's own data says which kind it holds: the empty one is the panes that run none
+    expect(html).toContain('data-kind=""');
   });
 });
