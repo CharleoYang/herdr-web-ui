@@ -1070,6 +1070,17 @@ export const Turn = memo(function Turn({ paneId, turn, rowKey, live, waiting, sh
       <pre className="chat-compact-text chat-notice-text">{notice.text}</pre>
     </ChatDetails>;
   }
+  // a command the user ran in the agent's shell, without the model (bash mode): what went in, then what came out
+  const shell = turn.parts.find((part): part is Extract<ConversationPart, { kind: "shell" }> => part.kind === "shell");
+  if (shell !== undefined) {
+    return <article className="chat-turn chat-turn-user chat-shell">
+      <p className="chat-shell-command"><SquareTerminal aria-hidden="true" /><code>{shell.command}</code></p>
+      {shell.stdout && <pre className="chat-tool-io">{shell.stdout}</pre>}
+      {shell.stderr && <pre className="chat-tool-io chat-shell-stderr">{shell.stderr}</pre>}
+      <div className="chat-turn-meta">{time}</div>
+      {outcome !== null && <OutcomeChip outcome={outcome} actions={outcomeActions} />}
+    </article>;
+  }
   if (turn.role === "user") {
     if (outcome !== null && terminalOnlyOutcome(outcome, outcomeActions)) return <TerminalCommandRow outcome={outcome} actions={outcomeActions} />;
     const text = userText(turn);

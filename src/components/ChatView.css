@@ -1898,6 +1898,31 @@ ol.markdown-list {
   font-size: inherit;
 }
 
+/* a command the user ran in the agent's shell (bash mode): the command, then what it printed */
+.chat-shell-command {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  max-width: 100%;
+  margin: 0;
+  color: var(--text-dim);
+}
+
+.chat-shell-command > svg {
+  width: var(--fs-md);
+  height: var(--fs-md);
+  flex: none;
+}
+
+.chat-shell-command > code {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: var(--text-strong);
+  font-size: var(--fs-sm);
+}
+
+.chat-shell-stderr { color: var(--status-blocked); }
+
 /* a changed screen after the send: a passing view folded under the chip, never a result */
 .chat-outcome-preview {
   max-width: 100%;

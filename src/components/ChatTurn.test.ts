@@ -11,8 +11,8 @@ import { Turn } from "./ChatView.tsx";
 const text = (value: string): ConversationPart => ({ kind: "text", text: value });
 const tool = (command: string): ConversationPart => ({ kind: "tool", name: "Bash", summary: command, input: JSON.stringify({ command }), output: "" });
 
-const render = (parts: ConversationPart[], state: { live: boolean; waiting?: boolean }): string => {
-  const turn: ConversationTurn = { role: "assistant", ts: "2026-01-01T12:00:00Z", end_ts: "2026-01-01T12:01:00Z", parts };
+const render = (parts: ConversationPart[], state: { live: boolean; waiting?: boolean }, role: ConversationTurn["role"] = "assistant"): string => {
+  const turn: ConversationTurn = { role, ts: "2026-01-01T12:00:00Z", end_ts: "2026-01-01T12:01:00Z", parts };
   const languages = Object.getOwnPropertyDescriptor(navigator, "languages");
   Object.defineProperty(navigator, "languages", { configurable: true, value: ["en"] });
   try {
@@ -27,6 +27,17 @@ const render = (parts: ConversationPart[], state: { live: boolean; waiting?: boo
 
 const titles = (html: string) => [...html.matchAll(/class="work-block-title">([^<]*)</g)].map((match) => match[1]);
 const expanded = (html: string) => [...html.matchAll(/class="work-block-head" aria-expanded="(true|false)"/g)].map((match) => match[1] === "true");
+
+describe("a bash-mode command", () => {
+  it("shows the command, then what it printed, and the output of a failed one as an error", () => {
+    const html = render([{ kind: "shell", command: "ls missing", stdout: "", stderr: "ls: missing: No such file or directory" }], { live: false }, "user");
+    expect(html).toContain('<code>ls missing</code>');
+    expect(html).toContain('<pre class="chat-tool-io chat-shell-stderr">ls: missing: No such file or directory</pre>');
+    // a command whose output is not recorded yet, or printed nothing, has no empty box
+    expect(render([{ kind: "shell", command: "true" }], { live: false }, "user")).not.toContain("<pre");
+    expect(render([{ kind: "shell", command: "true", stdout: "", stderr: "" }], { live: false }, "user")).not.toContain("<pre");
+  });
+});
 
 describe("an agent turn's work blocks", () => {
   it("says Working… for a running turn that has written no work or words yet", () => {

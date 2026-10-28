@@ -566,6 +566,170 @@ describe("parseClaudeTranscript", () => {
     expect(notices([info("Message expired", "2026-10-08T08:06:31.117Z"), info("Message expired", "2026-10-08T08:06:31.118Z")])).toEqual(["Message expired\nMessage expired"]);
   });
 
+  it("shows a bash-mode command with what it printed as one turn, which only the command opens", () => {
+    const user = (content: string, ts: string) => JSON.stringify({ type: "user", timestamp: ts, message: { role: "user", content } });
+    const records = [
+      user('<bash-input>echo "Hello"</bash-input>', "2026-10-27T03:00:00.000Z"),
+      user("<bash-stdout>  Hello\n    world\n</bash-stdout><bash-stderr></bash-stderr>", "2026-10-27T03:00:00.100Z"),
+      user("<bash-input>ls extra</bash-input>", "2026-10-27T03:00:01.000Z"),
+      user("<bash-stdout></bash-stdout><bash-stderr>\u001b[31mls: extra: No such file or directory\u001b[39m</bash-stderr>", "2026-10-27T03:00:01.100Z"),
+      // a command whose output was not recorded, then a prompt that quotes the tags
+      user("<bash-input>sleep 60</bash-input>", "2026-10-27T03:00:02.000Z"),
+      user("Why does <bash-input>ls</bash-input> show here?", "2026-10-27T03:00:03.000Z"),
+      // only a whole output entry is one: a prompt that starts like one is a prompt
+      user("<bash-stdout> is the tag I mean", "2026-10-27T03:00:04.000Z"),
+    ];
+    expect(parseClaudeTranscript(records.join("\n"))).toEqual([
+      { role: "user", ts: "2026-10-27T03:00:00.000Z", parts: [{ kind: "shell", command: 'echo "Hello"', stdout: "  Hello\n    world", stderr: "" }] },
+      { role: "user", ts: "2026-10-27T03:00:01.000Z", parts: [{ kind: "shell", command: "ls extra", stdout: "", stderr: "ls: extra: No such file or directory" }] },
+      { role: "user", ts: "2026-10-27T03:00:02.000Z", parts: [{ kind: "shell", command: "sleep 60" }] },
+      { role: "user", ts: "2026-10-27T03:00:03.000Z", parts: [{ kind: "text", text: "Why does <bash-input>ls</bash-input> show here?" }] },
+      { role: "user", ts: "2026-10-27T03:00:04.000Z", parts: [{ kind: "text", text: "<bash-stdout> is the tag I mean" }] },
+    ]);
+    // a page never starts at an output: it would lose its command
+    expect(turnStarts(Buffer.from(records.join("\n")), "claude-transcript")).toHaveLength(5);
+    // an output with no command before it is left out
+    expect(parseClaudeTranscript(records[1]!)).toEqual([]);
+  });
+
+  for (const provenance of [{ origin: { kind: "human" }, permissionMode: "default" }, { permissionMode: "default" }, { origin: { kind: "human" } }]) {
+    for (const array of [false, true]) {
+      it(`keeps bash tags literal in ${array ? "array" : "string"} prompts with ${Object.keys(provenance).join(" and ")}`, () => {
+        for (const text of ["<bash-input>ls</bash-input>", "<bash-stdout>err</bash-stdout>"]) {
+          const record = JSON.stringify({ type: "user", ...provenance, message: { role: "user", content: array ? [{ type: "text", text }] : text } });
+          expect(parseClaudeTranscript(record)).toEqual([{ role: "user", ts: null, parts: [{ kind: "text", text }] }]);
+          expect(turnStarts(Buffer.from(record), "claude-transcript")).toEqual([0]);
+        }
+      });
+    }
+  }
+
+  it("keeps bash output tags literal in queued human prompts", () => {
+    const text = "<bash-stdout>err</bash-stdout>";
+    const record = JSON.stringify({ type: "attachment", attachment: { type: "queued_command", commandMode: "prompt", origin: { kind: "human" }, prompt: text } });
+    expect(parseClaudeTranscript(record)).toEqual([{ role: "user", ts: null, parts: [{ kind: "text", text }] }]);
+  });
+
+  it("preserves literal stream tags inside bash stdout without fabricating stderr", () => {
+    const stdout = "before</bash-stdout><bash-stderr>fake error</bash-stderr><bash-stdout>after";
+    const user = (content: string) => JSON.stringify({ type: "user", message: { role: "user", content } });
+    const records = [user("<bash-input>printf tags</bash-input>"), user(`<bash-stdout>${stdout}</bash-stdout><bash-stderr></bash-stderr>`)];
+    expect(parseClaudeTranscript(records.join("\n"))[0]?.parts).toEqual([{ kind: "shell", command: "printf tags", stdout: `${stdout}</bash-stdout><bash-stderr>`, stderr: "" }]);
+    expect(turnStarts(Buffer.from(records.join("\n")), "claude-transcript")).toEqual([0]);
+  });
+
+  it("preserves literal stream tags inside bash stderr", () => {
+    const stderr = "before</bash-stderr><bash-stderr>after";
+    const user = (content: string) => JSON.stringify({ type: "user", message: { role: "user", content } });
+    const records = [user("<bash-input>printf tags</bash-input>"), user(`<bash-stdout></bash-stdout><bash-stderr>${stderr}</bash-stderr>`)];
+    const parts = parseClaudeTranscript(records.join("\n")).flatMap((turn) => turn.parts);
+    expect(parts).toEqual([{ kind: "shell", command: "printf tags", stdout: "", stderr }]);
+  });
+
+  for (const [stdout, stderr] of [
+    ["", "before</bash-stdout><bash-stderr>after"],
+    ["out", "x</bash-stdout>y"],
+  ] as const) {
+    it(`keeps a printed stdout close inside stderr ${JSON.stringify(stderr)} without adding a turn`, () => {
+      const user = (content: string) => JSON.stringify({ type: "user", message: { role: "user", content } });
+      const records = [
+        user("<bash-input>printf tags</bash-input>"),
+        user(`<bash-stdout>${stdout}</bash-stdout><bash-stderr>${stderr}</bash-stderr>`),
+      ].join("\n");
+      const ambiguous = stderr.includes("</bash-stdout><bash-stderr>");
+      expect(parseClaudeTranscript(records)).toEqual([
+        { role: "user", ts: null, parts: [{ kind: "shell", command: "printf tags",
+          stdout: ambiguous ? `${stdout}</bash-stdout><bash-stderr>${stderr}` : stdout,
+          stderr: ambiguous ? "" : stderr }] },
+      ]);
+      expect(turnStarts(Buffer.from(records), "claude-transcript")).toEqual([0]);
+    });
+  }
+
+  for (const { name, stdout, stderr, ambiguous } of [
+    { name: "N1", stdout: "a</bash-stdout><bash-stderr>b", stderr: "", ambiguous: true },
+    { name: "N2", stdout: 'user("<bash-stdout>Hello</bash-stdout><bash-stderr></bash-stderr>", 1)', stderr: "", ambiguous: true },
+    {
+      name: "N3",
+      stdout: `572: user('<bash-input>echo "Hello"</bash-input>')\n573: user("<bash-stdout>  Hello</bash-stdout><bash-stderr></bash-stderr>")\n575: user("<bash-stdout></bash-stdout><bash-stderr>ls: extra</bash-stderr>")`,
+      stderr: "", ambiguous: true,
+    },
+    { name: "N4", stdout: '{"content":"<bash-stdout>x</bash-stdout><bash-stderr></bash-stderr>"}', stderr: "", ambiguous: true },
+    { name: "N5", stdout: "o</bash-stdout><bash-stderr>p", stderr: "e", ambiguous: true },
+    { name: "N6", stdout: "", stderr: "x</bash-stderr><bash-stdout>y", ambiguous: false },
+    { name: "N7", stdout: "o", stderr: "a</bash-stderr><bash-stdout>b</bash-stdout><bash-stderr>c", ambiguous: true },
+    { name: "H", stdout: "ok", stderr: "x</bash-stdout><bash-stderr>y", ambiguous: true },
+    { name: "Codex R1", stdout: "before</bash-stdout><bash-stderr>after", stderr: "", ambiguous: true },
+    { name: "Codex R2", stdout: "", stderr: "before</bash-stderr><bash-stdout>middle</bash-stdout><bash-stderr>after", ambiguous: true },
+    { name: "empty-candidate collision", stdout: "x", stderr: "y</bash-stdout><bash-stderr>", ambiguous: true },
+    { name: "ambiguous trailing whitespace", stdout: "x</bash-stdout>\n<bash-stderr>y", stderr: "z \n", ambiguous: true },
+  ]) {
+    it(`keeps deterministic bash output ${name} intact in one shell turn`, () => {
+      const user = (content: string) => JSON.stringify({ type: "user", message: { role: "user", content } });
+      const records = [
+        user("<bash-input>printf tags</bash-input>"),
+        user(`<bash-stdout>${stdout}</bash-stdout><bash-stderr>${stderr}</bash-stderr>`),
+      ].join("\n");
+      const expectedStdout = ambiguous ? `${stdout}</bash-stdout><bash-stderr>${stderr}` : stdout;
+      const expectedStderr = ambiguous ? "" : stderr;
+      expect(parseClaudeTranscript(records)).toEqual([
+        { role: "user", ts: null, parts: [{ kind: "shell", command: "printf tags", stdout: expectedStdout, stderr: expectedStderr }] },
+      ]);
+      expect(turnStarts(Buffer.from(records), "claude-transcript")).toEqual([0]);
+    });
+  }
+
+  it("never fabricates stderr or loses payload characters across seeded bash tag pairs", () => {
+    const pieces = ["<bash-stdout>", "</bash-stdout>", "<bash-stderr>", "</bash-stderr>", "one", "two"];
+    const user = (content: string) => JSON.stringify({ type: "user", message: { role: "user", content } });
+    for (const seed of [0x2176, 0xc0de]) {
+      let state = seed;
+      const next = () => {
+        state = (Math.imul(state, 1664525) + 1013904223) >>> 0;
+        return state;
+      };
+      const payload = () => {
+        const count = next() % 9;
+        let text = "";
+        for (let i = 0; i < count; i++) text += pieces[next() % pieces.length];
+        return text;
+      };
+      for (let i = 0; i < 512; i++) {
+        const stdout = payload(), stderr = payload();
+        const records = [
+          user("<bash-input>printf tags</bash-input>"),
+          user(`<bash-stdout>${stdout}</bash-stdout><bash-stderr>${stderr}</bash-stderr>`),
+        ].join("\n");
+        const turns = parseClaudeTranscript(records);
+        expect(turns).toHaveLength(1);
+        const shell = turns[0]?.parts[0];
+        if (shell?.kind !== "shell") throw new Error("Expected one shell card");
+        expect(shell.stderr === "" || shell.stderr === stderr).toBe(true);
+        const shown = `${shell.stdout ?? ""}${shell.stderr ?? ""}`;
+        let at = 0;
+        for (const character of stdout + stderr) {
+          const found = shown.indexOf(character, at);
+          expect(found).toBeGreaterThanOrEqual(at);
+          at = found + 1;
+        }
+        expect(turnStarts(Buffer.from(records), "claude-transcript")).toEqual([0]);
+      }
+    }
+  });
+
+  it("attaches bash output to its shell across an informational notice", () => {
+    const user = (content: string) => JSON.stringify({ type: "user", message: { role: "user", content } });
+    const records = [
+      user("<bash-input>ls</bash-input>"),
+      JSON.stringify({ type: "system", subtype: "informational", content: "Something" }),
+      user("<bash-stdout>README.md</bash-stdout><bash-stderr></bash-stderr>"),
+    ];
+    expect(parseClaudeTranscript(records.join("\n")).map((turn) => turn.parts)).toEqual([
+      [{ kind: "shell", command: "ls", stdout: "README.md", stderr: "" }],
+      [{ kind: "notice", text: "Something", source: "informational" }],
+    ]);
+  });
+
   it("shows a slash command's answer only as the whole entry, as text, and not past its length", () => {
     const local = (content: string) => JSON.stringify({ type: "system", subtype: "local_command", timestamp: "2026-10-07T19:00:00.000Z", content });
     const notices = (lines: string[]) => parseClaudeTranscript(lines.join("\n")).flatMap((turn) => turn.parts).filter((part) => part.kind === "notice").map((part) => (part as { text: string }).text);
