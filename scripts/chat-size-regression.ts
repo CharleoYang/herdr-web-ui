@@ -623,6 +623,8 @@ export async function checkInactiveAttachLifecycle(browser: Browser, origin: str
                 heldReady.push(() => { record(raw, "in"); socket.send(raw); });
                 return;
               }
+              // an older bridge, without the read-only view: it sends no features frame, and its snapshot lists no watch
+              if (legacy && frame.type === "features") return;
               if (legacy && frame.type === "snapshot") {
                 frame.features = frame.features.filter((feature: string) => feature !== "watch");
                 raw = JSON.stringify(frame);
