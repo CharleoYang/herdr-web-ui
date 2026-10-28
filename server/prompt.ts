@@ -1,7 +1,7 @@
 import { createHash, randomBytes } from "node:crypto";
 import type { HerdrPane, InteractivePrompt, PanePromptResponse, PromptAnswer, SessionSnapshot, SlashCommand } from "../shared/protocol.ts";
 import { builtinCommands, cachedPaneCommands } from "./commands.ts";
-import { agentProcesses, paneRunsOmo, readCommandTranscript } from "./conversation.ts";
+import { agentProcesses, ompTranscriptPath, paneRunsOmo, readCommandTranscript } from "./conversation.ts";
 import { agentProcessInFront } from "./agent-process.ts";
 import { resolveAgent } from "./pane-context.ts";
 import { processAlive, processStartedAt, processStartUpperBoundAsync } from "./process-start.ts";
@@ -10,7 +10,8 @@ import { codexTranscriptPath, paneCodexHome, unansweredCodexQuestions } from "./
 import { HerdrError, paneProcessInfo, paneRead, paneScrollInfo, paneSendKeys, paneSendText, type ProcessInfo } from "./herdr/client.ts";
 import { piTranscriptPath } from "./pi.ts";
 import { heldOmoProcess } from "./omo.ts";
-import { OmoAskReader } from "./omo-ask.ts";
+import { OmoAskReader, ompAsksAfter } from "./omo-ask.ts";
+import { ompMarkdownPrompt } from "./omp-ask.ts";
 import { answerPiAskUser, bindPiAsk, piAskActivity, piAskUserPrompt } from "./pi-ask-bridge.ts";
 import { badRequest, errorResponse, jsonResponse, setRequestRoute } from "./http.ts";
 import { claudePlanFile } from "./claude-plan.ts";
@@ -630,7 +631,7 @@ async function readPrompt(paneId: string, codexHome?: string, openCodeStateDir?:
   // counted right before the screen is read, after the snapshot: what matters is whether an
   // answer ran while the screen was being read
   const turns = answerTurns.get(paneId) ?? 0;
-  const known = await readKnownPrompt(paneId, pane, agent, codexHome, panes, openCodeStateDir, openCodeState, signal);
+  const known = await readKnownPrompt(paneId, pane, agent, codexHome, panes, openCodeStateDir, openCodeState, signal, true);
   if (known.stale) return { agent, status, prompt: null, pane, panes, snapshot, stale: true };
   // A custom form just answered can close before Herdr stops reporting blocked. Its hint may
   // outlive the widget, but that is no input to offer as fallback keys. Known next steps still
@@ -673,6 +674,18 @@ async function piAskRefusesKeys(paneId: string, signal?: AbortSignal): Promise<b
 
 /** A pi-ask form opened under a key-driven answer: nothing more is sent. */
 class PiAskFormOpen extends Error {}
+const ompAskReader = new OmoAskReader(ompAsksAfter);
+
+/** An omp Ask card in the agent's own Markdown when its session's open ask call is the menu on screen (omp-ask.ts); else the card as drawn. */
+async function withOmpMarkdown(paneId: string, cwd: string, prompt: InteractivePrompt): Promise<InteractivePrompt> {
+  if (parsedByPublicPrompt.get(prompt)?.responder !== "omp-question") return prompt;
+  try {
+    return ompMarkdownPrompt(prompt, ompAskReader.read((await ompTranscriptPath(paneId, cwd)).path));
+  } catch {
+    return prompt; // no session proved for the pane, or not written yet: the card as drawn
+  }
+}
+
 async function readKnownPrompt(
   paneId: string,
   pane: { cwd?: string | null; agent_status?: string; agent_session?: HerdrPane["agent_session"] },
@@ -682,6 +695,8 @@ async function readKnownPrompt(
   openCodeStateDir?: string,
   openCodeState = defaultOpenCodeState,
   signal?: AbortSignal,
+  /** the card as the chat shows it (omp's own Markdown, withOmpMarkdown); an answer's reads compare only ids and keys, which are the screen's either way */
+  markdown = false,
 ): Promise<{ prompt: InteractivePrompt | null; screen?: string; stale?: boolean; inputUnverified?: true; suppressFallback?: true }> {
   // no native card (no session herdr reports, no verified v2 service, no pending form): OpenCode
   // v1's own question prompt is read off the screen below (dialogs/opencode.ts, #1386)
@@ -893,8 +908,9 @@ async function readKnownPrompt(
       } catch { screen = screen.replace(ANSI_RE, ""); }
     }
   }
-  const prompt = piNative ? publicPrompt(piNative)
+  let prompt = piNative ? publicPrompt(piNative)
     : parseInteractivePrompt(agent, screen, omoAsks[0] ?? null, omoTrusted, omoAsks, agent === "claude" ? heldCandidate(paneId) : null, pane.agent_status === "working");
+  if (markdown && prompt && agent === "omp" && pane.cwd) prompt = await withOmpMarkdown(paneId, pane.cwd, prompt);
   if (prompt && await claudeHeldIsGrey(paneId, prompt)) return { prompt: null, screen };
   // pi-ask's form with no card: pi-ask takes no typed keys (its docs/remote-events.md), so no card
   // that answers by keys is offered, pi's own dialogs included (the answer would refuse them too):

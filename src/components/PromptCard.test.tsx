@@ -61,3 +61,37 @@ describe("Claude's words over its question, read off the screen (#2088)", () => 
     expect(render(asked, ["en"])).not.toContain("prompt-card-words");
   });
 });
+
+describe("an omp Ask card in the agent's own Markdown (#1644)", () => {
+  const ask: InteractivePrompt = {
+    id: "a", agent: "omp", kind: "question", title: "Question", body: null, text_format: "markdown",
+    question: "Which **route** carries it? See [the guide](https://example.com/guide).",
+    options: [{ label: "Use `local` socket", description: "Goes through [the relay](https://example.com/relay)." }],
+    multi_select: false, custom_option_index: 1,
+  };
+
+  it("draws the question and options as Markdown, with links only in the question", () => {
+    const html = render(ask, ["en"]);
+    expect(html).toContain("<strong><span>route</span></strong>");
+    expect(html).toContain('href="https://example.com/guide"');
+    expect(html).toContain("<code>local</code>");
+    // an option answers when clicked: its link is its words
+    expect(html).not.toContain("https://example.com/relay");
+    expect(html).toContain("the relay");
+  });
+
+  it("draws an option's Markdown whole, never reading a link to `recommended` as the Recommended tag (#2220 review)", () => {
+    const twins: InteractivePrompt = { ...ask, options: [{ label: "Keep [production](recommended)", description: null }, { label: "Keep [production]", description: null }], custom_option_index: 2 };
+    const html = render(twins, ["en"]);
+    const labels = [...html.matchAll(/<span class="prompt-card-option-label">(.*?)<\/span><\/span>/g)].map((match) => match[1]!.replace(/<[^>]+>/g, ""));
+    expect(labels).toEqual(["Keep production", "Keep [production]"]);
+    expect(html).not.toContain("prompt-card-tag");
+  });
+
+  it("draws a card read off the screen as plain text", () => {
+    const { text_format: _, ...plain } = ask;
+    const html = render(plain, ["en"]);
+    expect(html).toContain("Which **route** carries it?");
+    expect(html).toContain("Use `local` socket");
+  });
+});

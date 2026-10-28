@@ -1098,7 +1098,7 @@ function ompBlobIdentity({ path, root, identity }: { path: string; root: string;
   } catch { return null; } finally { for (const entry of held) entry.close(); }
 }
 
-async function ompTranscriptPath(paneId: string, cwd: string): Promise<{ path: string; blobs: string | null }> {
+export async function ompTranscriptPath(paneId: string, cwd: string): Promise<{ path: string; blobs: string | null }> {
   const info = await herdrRpc<{ agent: { agent_session?: { kind?: unknown; value?: unknown } } }>("agent.get", { target: paneId });
   const session = info.agent.agent_session;
   const path = session?.kind === "path" && typeof session.value === "string" ? session.value : null;

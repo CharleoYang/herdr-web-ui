@@ -1,6 +1,20 @@
 import type { CardText, ConversationTurn, InteractivePrompt } from "../../shared/protocol.ts";
-import { askedQuestions } from "./askQuestions.ts";
+import { askedQuestions } from "../../shared/askQuestions.ts";
+import { parseInline, shownText } from "../../shared/markdown.ts";
 import { t as inCurrentLanguage, type Translate } from "./i18n.ts";
+
+/**
+ * An option's name as its card shows it, the one reading the card's rendering and a typed answer share
+ * (#2220): an omp card in Markdown shows its label whole (InlineMarkdown), and `words` are the
+ * characters that shows (shownText, which the server held to omp's screen); another card reads a
+ * trailing "(Recommended)" off as the Recommended tag (Claude draws its own pick as "Redis (Recommended)").
+ * A Markdown link to `recommended` is an omp option's words, never that tag.
+ */
+export function optionName(prompt: InteractivePrompt, label: string): { text: string; recommended: boolean; words: string } {
+  if (prompt.text_format === "markdown") return { text: label, recommended: false, words: shownText(parseInline(label, false)) ?? label };
+  const text = label.replace(/\s*\(recommended\)$/i, "");
+  return { text, recommended: text !== label, words: text };
+}
 
 /** Card text the bridge wrote itself (shared/card-text.ts), in the user's language: its key translated, its values filled in. */
 export function cardText(card: CardText, t: Translate = inCurrentLanguage): string {
@@ -35,6 +49,26 @@ export function screenWordsToShow(prompt: InteractivePrompt, turns: readonly Con
   const recorded = turn?.role === "assistant" && turn.parts.some((part) =>
     part.kind === "tool" && part.name === "AskUserQuestion" && part.state === "pending" && asksThis(part.input));
   return recorded ? null : prompt.screen_words;
+}
+
+/**
+ * The card a poll keeps (ChatView). Another prompt, or none, replaces it. The same prompt (its id) keeps
+ * its object while nothing it shows changed, so the card is not drawn again, and takes what changed
+ * without being replaced, so the card keeps its edits: its navigation (steps, step back, own_text), the
+ * words read off the screen over it (screen_words, #2088), and how its words are drawn, an omp card's
+ * own Markdown arriving after its first read or withdrawn.
+ */
+export function polledPrompt(current: InteractivePrompt | null, next: InteractivePrompt | null): InteractivePrompt | null {
+  if (current === null || next === null || current.id !== next.id) return next;
+  const shown = (prompt: InteractivePrompt) => JSON.stringify([prompt.steps, prompt.can_step_back, prompt.own_text, prompt.question, prompt.options, prompt.text_format ?? null, prompt.screen_words ?? null]);
+  if (shown(current) === shown(next)) return current;
+  const { text_format: _format, screen_words: _words, ...kept } = current;
+  // own_text names steps by index: it goes with the steps it was read with
+  return {
+    ...kept, steps: next.steps, can_step_back: next.can_step_back, own_text: next.own_text,
+    question: next.question, options: next.options, ...(next.text_format ? { text_format: next.text_format } : {}),
+    ...(next.screen_words !== undefined ? { screen_words: next.screen_words } : {}),
+  };
 }
 
 /** At most `limit` UTF-16 units of `text`, never ending on half of a character (a lone high surrogate). */

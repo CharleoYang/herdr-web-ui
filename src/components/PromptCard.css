@@ -265,6 +265,21 @@
   margin: 0;
 }
 
+/* omp's own Markdown (text_format) keeps the card's question size, and an option's inline code reads as the chat's */
+.markdown.prompt-card-question {
+  font-size: var(--fs-md);
+  line-height: var(--lh-base);
+}
+
+.prompt-card-option code {
+  padding: var(--hairline) var(--space-1);
+  border-radius: var(--radius-sm);
+  background: var(--bg-elevated);
+  color: var(--text-strong);
+  font-family: var(--font-mono);
+  font-size: 0.87em;
+}
+
 /* a question in Codex's queue: the agent is not waiting on it, so the card says who answers what */
 .prompt-card-hint {
   color: var(--text-dim);

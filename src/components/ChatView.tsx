@@ -41,7 +41,7 @@ import { PAGE_OVERLAP_ROWS, pageScrollDistance } from "../lib/pageScroll.ts";
 import { followGlides } from "../lib/followScroll.ts";
 import { useMediaQuery } from "../lib/useMediaQuery.ts";
 import { statusEdgeRead } from "../lib/status.ts";
-import { askedQuestions } from "../lib/askQuestions.ts";
+import { askedQuestions } from "../../shared/askQuestions.ts";
 import { ConversationRefresh } from "../lib/conversationRefresh.ts";
 import { teammateMessageParts, type TeammateMessage } from "../lib/teammateMessage.ts";
 import { usePageVisible } from "../lib/visibility.ts";
@@ -92,7 +92,7 @@ const ImageViewerContext = createContext<(images: GalleryImage[], index: number)
 /** The pane's folder a tool card's file labels read from (toolPathRoot), or null: labels as written. */
 const ToolPathRootContext = createContext<string | null>(null);
 import type { TypedAnswer } from "../lib/promptAnswer.ts";
-import { screenWordsToShow } from "../lib/promptText.ts";
+import { polledPrompt, screenWordsToShow } from "../lib/promptText.ts";
 import type { AgentStatus, CommandOutcome, ConversationMetadata, ConversationPart, ConversationResponse, ConversationTurn, InteractivePrompt, OmoTaskResult, SlashCommand } from "../../shared/protocol.ts";
 import { chatIsBlank, type ChatRead } from "../lib/greeting.ts";
 import { TurnTime } from "./TurnTime.tsx";
@@ -1682,12 +1682,7 @@ export const ChatView = memo(function ChatView({ paneId, presentationKey, finish
         if (!cancelled) {
           failedPromptReads.current = 0;
           setPromptStale(false);
-          setPrompt((current) => {
-            if (current === null || next.prompt === null || current.id !== next.prompt.id) return next.prompt;
-            if (JSON.stringify([current.steps, current.can_step_back, current.own_text, current.screen_words]) === JSON.stringify([next.prompt.steps, next.prompt.can_step_back, next.prompt.own_text, next.prompt.screen_words])) return current;
-            // own_text names steps by index: it goes with the steps it was read with
-            return { ...current, steps: next.prompt.steps, can_step_back: next.prompt.can_step_back, own_text: next.prompt.own_text, screen_words: next.prompt.screen_words };
-          });
+          setPrompt((current) => polledPrompt(current, next.prompt));
           // unchanged outcomes keep their objects: the turns carrying them are not re-rendered
           setOutcomes((current) => JSON.stringify(current) === JSON.stringify(next.outcomes) ? current : next.outcomes);
           onOutcomesRef.current?.(paneId, next.outcomes.map((outcome) => outcome.id));

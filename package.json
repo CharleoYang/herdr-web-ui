@@ -22,6 +22,7 @@
     "test:ui": "bun run build && bun scripts/ui-regression.ts && bun scripts/ui-contexts-regression.ts && bun scripts/sticky-modifiers-regression.ts",
     "generate:types": "bun run scripts/generate-protocol-types.ts",
     "generate:themes": "bun run scripts/generate-themes.ts",
+    "generate:case-folding": "bun run scripts/generate-case-folding.ts",
     "build:remote": "bun run scripts/build-remote-bundle.ts",
     "build:site": "bun scripts/build-site.ts",
     "test:ssh": "bun run scripts/ssh-integration.ts"

@@ -680,6 +680,9 @@ export interface InteractivePrompt {
   body: string | null;
   options: InteractivePromptOption[];
   multi_select: boolean;
+  /** `markdown`: the question and the options' labels and descriptions are the agent's own Markdown
+   * (omp's open ask call, once the screen's menu proves it is that call). Absent: plain text, as drawn */
+  text_format?: "markdown";
   /** Native OpenCode question explicitly marked required: false; an empty answer skips it. */
   optional?: true;
   /** A multi-select whose typed answer goes with its checks in one answer (pi-ask's ask_user; OpenCode's native form says so by its agent). */

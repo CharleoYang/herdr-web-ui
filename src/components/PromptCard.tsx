@@ -7,11 +7,12 @@ import { ApiError } from "../lib/api.ts";
 import { useMachineApi } from "../lib/machineContext.tsx";
 import type { InteractivePrompt, PromptAnswer } from "../../shared/protocol.ts";
 import { blocksStepNavigation, focusFollowsAnswer, pressOrigin, sendsChecksWithText, type TypedAnswer } from "../lib/promptAnswer.ts";
-import { promptWords } from "../lib/promptText.ts";
+import { optionName, promptWords } from "../lib/promptText.ts";
 import { dismissKeyboardOn } from "../lib/keyboard.ts";
 import { useT } from "../lib/i18n.ts";
 import { userErrorMessage, type UserError } from "../lib/userError.ts";
 import { OpenFileContext } from "../lib/filePaths.ts";
+import { InlineMarkdown, Markdown } from "./Markdown.tsx";
 
 /**
  * One card is one occurrence of a prompt on one pane: its owner mounts a new card (a `key`) for
@@ -138,14 +139,12 @@ export function PromptCard({ paneId, prompt, onPromptChanged, onAnswered, typedA
   };
 
   const customLabelId = useId();
-  // Claude renders the menu's own pick as "Redis (Recommended)": a tag reads better than the suffix
-  const labelOf = (label: string): { text: string; recommended: boolean } => {
-    const text = label.replace(/\s*\(recommended\)$/i, "");
-    return { text, recommended: text !== label };
-  };
+  // Claude renders the menu's own pick as "Redis (Recommended)": a tag reads better than the suffix (optionName)
+  const labelOf = (label: string): { text: string; recommended: boolean } => optionName(prompt, label);
   const hasChoices = prompt.options.some((_, index) => index !== prompt.custom_option_index);
   // the bridge's own words in the user's language, the agent's as written
   const words = promptWords(prompt, t);
+  const markdown = prompt.text_format === "markdown";
   const openFile = useContext(OpenFileContext);
   const planFile = prompt.plan_file;
   const navigationBlocked = blocksStepNavigation(prompt, selected, custom);
@@ -232,7 +231,10 @@ export function PromptCard({ paneId, prompt, onPromptChanged, onAnswered, typedA
         </div>
       )}
       {/* a Claude approval's heading is its question too: said once */}
-      {prompt.question !== prompt.title && <p className="prompt-card-question">{words.question}</p>}
+      {/* omp's own Markdown (text_format): its links open from the question, never from an option, which answers when clicked */}
+      {prompt.question !== prompt.title && (markdown
+        ? <Markdown className="prompt-card-question">{words.question}</Markdown>
+        : <p className="prompt-card-question">{words.question}</p>)}
       {prompt.queued && (
         <p className="prompt-card-hint">
           {prompt.queued === "open"
@@ -269,8 +271,8 @@ export function PromptCard({ paneId, prompt, onPromptChanged, onAnswered, typedA
             const description = words.description(index);
             const content = (
               <span className="prompt-card-option-text">
-                <span className="prompt-card-option-label">{text}{recommended && <> <span className="prompt-card-tag">{t("Recommended")}</span></>}</span>
-                {description !== null && <span className="prompt-card-option-description">{description}</span>}
+                <span className="prompt-card-option-label">{markdown ? <InlineMarkdown>{text}</InlineMarkdown> : text}{recommended && <> <span className="prompt-card-tag">{t("Recommended")}</span></>}</span>
+                {description !== null && <span className="prompt-card-option-description">{markdown ? <InlineMarkdown>{description}</InlineMarkdown> : description}</span>}
               </span>
             );
             // the key the user can type, drawn as a keycap; the option's name keeps the menu's "1."

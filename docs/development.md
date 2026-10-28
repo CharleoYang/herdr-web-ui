@@ -115,6 +115,9 @@ Theme colors are edited only in the theme blocks of `src/styles.css`. Never edit
 copies (`src/lib/themes.generated.ts`, the DESIGN.md region between the `GENERATED THEMES`
 markers, the `theme-color` tag in `index.html`, the colors in `public/manifest.webmanifest`); run
 `bun run generate:themes` after a color change.
+The case folding a typed answer compares option names with (`src/lib/caseFolding.generated.ts`) is
+generated from Unicode's CaseFolding.txt for the version pinned in `scripts/generate-case-folding.ts`;
+never edit it, run `bun run generate:case-folding` after raising that version.
 Admission is serialized briefly on port 41745. After taking a candidate slot, the run checks all
 eight slots again for its checkout and counts every active holder against its requested limit,
 including holders above its candidate range. A busy admission port refuses rather than waits.

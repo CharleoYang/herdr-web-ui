@@ -404,7 +404,7 @@
   border-radius: var(--radius-lg);
 }
 
-/* a README's centered logo and badges (lib/markdownHtml.ts) */
+/* a README's centered logo and badges (shared/markdownHtml.ts) */
 .markdown .markdown-center {
   text-align: center;
 }

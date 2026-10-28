@@ -2305,6 +2305,12 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   and focus fill a row `--bg-hover`; a checked or typed pick gets `--accent-tint` + an `--accent`
   border and keycap. A `(Recommended)` suffix, the agent's own mark, renders as a tag. On a
   coarse pointer a row is `--touch-target` tall.
+- An omp Ask card whose text is the agent's own Markdown (`text_format: "markdown"`, #1644) draws
+  its question as the chat draws an agent's message (`.markdown`, kept at the question's
+  `--fs-md`), and its labels and descriptions as inline Markdown: emphasis and code (the chat's
+  code chip), never a link or a picture, since a row answers when pressed. Links open from the
+  question only. As in the Claude and Codex apps, which render a question's Markdown in their
+  own question cards, the words are the agent's and the card only styles them.
 - While a card that takes typed answers is open the message box's placeholder says how:
   `Type 1–3 to choose…`, or `Type 1–3 or your own reply…` when the card has a custom answer.
   Enter in an empty box answers nothing. A typed pick of an approval, plan or menu waits for
