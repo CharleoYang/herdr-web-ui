@@ -552,7 +552,8 @@ after changing the staged session. Files, images, push and remote PCs are not pa
    `bun scripts/release-guards.ts --worker-deployed`.
 2. Merge it after CI passes.
 3. If it raised `REMOTE_BUNDLE_VERSION` to N, push the tag `remote-vN` on the merged commit and wait
-   for the **Remote PC bundles** workflow to publish it ([remote PCs](remote-pcs.md)). Merge nothing
+   for the **Remote PC bundles** workflow to publish it ([remote PCs](remote-pcs.md)); the Release
+   run refuses until its manifest and archives can be downloaded, not only tagged. Merge nothing
    that touches `server/`, `shared/`, `bun.lock` or `patches/` until the Release run is done: the
    Release run would then ask for a follow-up PR that raises the number again and a new tag.
 4. Run **Actions → Release → Run workflow**, select `main`, and enter `X.Y.Z` without `v`.
