@@ -120,7 +120,7 @@ export function moveInOrder(shown: readonly string[], saved: readonly string[], 
   return [...next, ...saved.filter((known) => !shown.includes(known))];
 }
 
-export function useUsage(enabled: boolean) {
+export function useUsage(enabled: boolean, localOnly = false) {
   const [report, setReport] = useState<UsageReport | null>(null);
   const [loading, setLoading] = useState(false);
   const visible = usePageVisible();
@@ -130,18 +130,18 @@ export function useUsage(enabled: boolean) {
     const current = ++generation.current;
     setLoading(true);
     try {
-      const next = await fetchUsage(refresh);
+      const next = await fetchUsage(refresh, localOnly);
       if (current === generation.current) setReport((previous) => JSON.stringify(previous) === JSON.stringify(next) ? previous : next);
     } catch { /* offline or restarting: the last report stays */ }
     finally { if (current === generation.current) setLoading(false); }
-  }, []);
+  }, [localOnly]);
 
   useEffect(() => {
     if (!enabled) { generation.current++; setReport(null); setLoading(false); return; }
     if (!visible) return;
     void load(false);
     const timer = setInterval(() => void load(false), POLL_MS);
-    return () => clearInterval(timer);
+    return () => { generation.current++; clearInterval(timer); };
   }, [enabled, visible, load]);
 
   useEffect(() => {

@@ -111,8 +111,8 @@ export function fetchRemoteAccess(): Promise<RemoteAccess> {
 }
 
 /** The sidebar's plan meters; `refresh` asks the providers again instead of the server's recent answer. */
-export function fetchUsage(refresh = false): Promise<UsageReport> {
-  return getJson<UsageReport>(refresh ? "/api/usage?refresh=1" : "/api/usage");
+export function fetchUsage(refresh = false, localOnly = false): Promise<UsageReport> {
+  return getJson<UsageReport>(localOnly ? "/api/usage?scope=claude-local" : refresh ? "/api/usage?refresh=1" : "/api/usage");
 }
 
 /** Local server's CLIProxyAPI controls; secrets are only ever sent, never read back. */

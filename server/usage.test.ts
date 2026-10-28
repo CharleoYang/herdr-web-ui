@@ -131,8 +131,9 @@ describe("providers", () => {
 
   it("reads Claude's windows from the status line Claude's own payload keeps, without a request", async () => {
     keychain.set("Claude Code-credentials|me", { status: "found", value: JSON.stringify({ claudeAiOauth: { accessToken: "k", expiresAt: NOW + HOUR, subscriptionType: "max" } }) });
+    write(join(home, ".claude.json"), { oauthAccount: { accountUuid: "uuid-1" } });
     const path = join(home, ".herdr", "statusline-last.json");
-    write(path, { session_id: "s", model: { display_name: "Opus 5.5" }, rate_limits: {
+    write(path, { _herdr: { account: { id: "uuid-1" } }, session_id: "s", model: { display_name: "Opus 5.5" }, rate_limits: {
       five_hour: { used_percentage: 17, resets_at: (NOW + 2 * HOUR) / 1000 },
       seven_day: { used_percentage: 64, resets_at: (NOW + 48 * HOUR) / 1000 },
     } });
@@ -146,6 +147,84 @@ describe("providers", () => {
       { kind: "session", scope: null, used_percent: 17, resets_at: new Date(NOW + 2 * HOUR).toISOString(), starts_at: new Date(NOW + 2 * HOUR - 5 * HOUR).toISOString() },
       { kind: "week", scope: null, used_percent: 64, resets_at: new Date(NOW + 48 * HOUR).toISOString(), starts_at: new Date(NOW + 48 * HOUR - 7 * 24 * HOUR).toISOString() },
     ]);
+  });
+
+  it("uses only the captured account's local limits, falling back for other or unknown accounts", async () => {
+    write(join(home, ".claude", ".credentials.json"), { claudeAiOauth: { accessToken: "personal", expiresAt: NOW + HOUR } });
+    write(join(home, ".claude.json"), { oauthAccount: { accountUuid: "personal" } });
+    write(join(home, ".claude-work", ".credentials.json"), { claudeAiOauth: { accessToken: "work", expiresAt: NOW + HOUR } });
+    write(join(home, ".claude-work", ".claude.json"), { oauthAccount: { accountUuid: "work" } });
+    const path = join(home, ".herdr", "statusline-last.json");
+    write(path, { _herdr: { account: { id: "work" } }, rate_limits: { five_hour: { used_percentage: 17 } } });
+    utimesSync(path, new Date(NOW), new Date(NOW));
+    replies.set("https://api.anthropic.com/api/oauth/usage", { body: { five_hour: { utilization: 42 } } });
+    const report = await new UsageService(context(), only("claude")).report();
+    expect(report.providers.map((usage) => [usage.key, usage.windows[0]?.used_percent])).toEqual([["claude:personal", 42], ["claude:work", 17]]);
+    expect(requests.map((request) => (request.init.headers as Record<string, string>)["authorization"])).toEqual(["Bearer personal"]);
+    requests.length = 0;
+    write(path, { rate_limits: { five_hour: { used_percentage: 99 } } });
+    utimesSync(path, new Date(NOW), new Date(NOW));
+    expect((await new UsageService(context(), only("claude")).report()).providers.map((usage) => usage.windows[0]?.used_percent)).toEqual([42, 42]);
+    expect(requests).toHaveLength(2);
+  });
+
+  it("falls back to the Claude endpoint when every captured usage window has reset", async () => {
+    write(join(home, ".claude", ".credentials.json"), { claudeAiOauth: { accessToken: "k", expiresAt: NOW + HOUR } });
+    write(join(home, ".claude.json"), { oauthAccount: { accountUuid: "a" } });
+    const path = join(home, ".herdr", "statusline-last.json");
+    write(path, { _herdr: { account: { id: "a" } }, rate_limits: { five_hour: { used_percentage: 99, resets_at: NOW / 1000 } } });
+    utimesSync(path, new Date(NOW - 60_000), new Date(NOW - 60_000));
+    replies.set("https://api.anthropic.com/api/oauth/usage", { body: { five_hour: { utilization: 1 } } });
+    const [usage] = (await new UsageService(context(), only("claude")).report()).providers;
+    expect(usage?.windows[0]?.used_percent).toBe(1);
+    expect(requests).toHaveLength(1);
+  });
+
+  it("invalidates a cached local reading at its reset instead of waiting for the report TTL", async () => {
+    write(join(home, ".claude", ".credentials.json"), { claudeAiOauth: { accessToken: "k", expiresAt: NOW + HOUR } });
+    write(join(home, ".claude.json"), { oauthAccount: { accountUuid: "a" } });
+    const path = join(home, ".herdr", "statusline-last.json");
+    write(path, { _herdr: { account: { id: "a" } }, rate_limits: { five_hour: { used_percentage: 99, resets_at: (NOW + 60_000) / 1000 } } });
+    utimesSync(path, new Date(NOW), new Date(NOW));
+    replies.set("https://api.anthropic.com/api/oauth/usage", { body: { five_hour: { utilization: 1 } } });
+    const service = new UsageService(context(), only("claude"));
+    expect((await service.report()).providers[0]?.windows[0]?.used_percent).toBe(99);
+    expect(requests).toHaveLength(0);
+    now += 60_000;
+    expect((await service.report()).providers[0]?.windows[0]?.used_percent).toBe(1);
+    expect(requests).toHaveLength(1);
+  });
+
+  it("accepts matched local Claude limits with an expired token but never sends that token", async () => {
+    write(join(home, ".claude", ".credentials.json"), { claudeAiOauth: { accessToken: "expired", expiresAt: NOW - HOUR } });
+    write(join(home, ".claude.json"), { oauthAccount: { accountUuid: "a" } });
+    const path = join(home, ".herdr", "statusline-last.json");
+    write(path, { _herdr: { account: { id: "a" } }, rate_limits: { five_hour: { used_percentage: 17 } } });
+    utimesSync(path, new Date(NOW), new Date(NOW));
+    const [usage] = (await new UsageService(context(), only("claude")).report()).providers;
+    expect(usage?.problem).toBeNull();
+    expect(usage?.windows[0]?.used_percent).toBe(17);
+    rmSync(path);
+    const [missing] = (await new UsageService(context(), only("claude")).report()).providers;
+    expect(missing?.problem).toBe("expired");
+    expect(requests).toEqual([]);
+  });
+
+  it("keeps the local-only HTTP report off every credential, command and endpoint path", async () => {
+    let touches = 0;
+    const fail = () => { touches++; throw new Error("local-only report touched a provider"); };
+    const provider: UsageProvider = { id: "codex", signIns: fail, read: fail };
+    const service = new UsageService({ ...context(), fetch: fail, keychain: fail, run: fail }, [provider], fail);
+    const url = new URL("http://localhost/api/usage?scope=claude-local&refresh=1");
+    const report = async () => (await handleUsageRequest(new Request(url), url, service)).json() as Promise<UsageReport>;
+    expect(await report()).toEqual({ providers: [] });
+    const path = join(home, ".herdr", "statusline-last.json");
+    write(path, { _herdr: { account: { id: "a", label: "a@example.com" } }, rate_limits: { five_hour: { used_percentage: 17, resets_at: (NOW + HOUR) / 1000 } } });
+    utimesSync(path, new Date(NOW), new Date(NOW));
+    expect((await report()).providers[0]).toMatchObject({ id: "claude", key: "claude:a", account: "a@example.com", windows: [{ used_percent: 17 }] });
+    now += HOUR;
+    expect(await report()).toEqual({ providers: [] });
+    expect(touches).toBe(0);
   });
 
   it("reads Claude's other per-model weekly limits from `limits`, after the flat fields", async () => {

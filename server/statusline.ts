@@ -17,6 +17,8 @@ export interface StatuslinePayload {
   /** when the file was last written: the status line renders on activity, so an idle pane's is old */
   readAt: number;
   sessionId: string | null;
+  /** Captured from the rendering CLI's config; absent in older or unidentifiable captures. */
+  account: { id: string; label: string | null } | null;
   model: string | null;
   /** percent used, or null when the payload names none */
   fiveHour: StatuslineWindow | null;
@@ -59,9 +61,12 @@ export function parseStatusline(payload: unknown, readAt: number): StatuslinePay
   const contextWindow = record(body["context_window"]);
   const contextUsed = percent(contextWindow["used_percentage"]);
   const contextSize = typeof contextWindow["context_window_size"] === "number" ? contextWindow["context_window_size"] : null;
+  const account = record(record(body["_herdr"])["account"]);
+  const accountId = text(account["id"]);
   // a payload with nothing this reader shows is not a reading (an older Claude Code, a stub)
   if (fiveHour === null && sevenDay === null && contextUsed === null) return null;
   return {
+    account: accountId === null ? null : { id: accountId, label: text(account["label"]) },
     readAt,
     sessionId: text(body["session_id"]),
     model: text(record(body["model"])["display_name"]) ?? text(record(body["model"])["id"]),
@@ -71,13 +76,17 @@ export function parseStatusline(payload: unknown, readAt: number): StatuslinePay
   };
 }
 
-/** The newest payload under `home`, or null: absent, unreadable, or older than STALE_MS. */
+/** The newest payload under `home`, with reset windows removed even while the file is fresh. */
 export function readStatusline(home: string, now: number = Date.now()): StatuslinePayload | null {
   const path = statuslinePath(home);
   try {
     const stat = statSync(path);
     if (now - stat.mtimeMs > STALE_MS) return null;
-    return parseStatusline(JSON.parse(readFileSync(path, "utf8")), stat.mtimeMs);
+    const payload = parseStatusline(JSON.parse(readFileSync(path, "utf8")), stat.mtimeMs);
+    if (payload === null) return null;
+    if (payload.fiveHour && payload.fiveHour.resetsAt !== null && Date.parse(payload.fiveHour.resetsAt) <= now) payload.fiveHour = null;
+    if (payload.sevenDay && payload.sevenDay.resetsAt !== null && Date.parse(payload.sevenDay.resetsAt) <= now) payload.sevenDay = null;
+    return payload;
   } catch {
     return null;
   }

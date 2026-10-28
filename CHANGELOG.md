@@ -7,6 +7,16 @@ between releases do not reach them. Remote-PC runtime bundles are versioned sepa
 
 ## [Unreleased]
 
+### Fixed
+- Claude status-line capture preserves the previous command's options and restores an absent
+  setting without adding `null`. The installer resolves `~/` commands under the user's home.
+  Captures are owner-only and snapshot the rendering CLI's account; local limits are used only
+  for that account and only until their reset, including when its access token has expired.
+  With usage reporting off, the Claude composer chip reads only the local file, without
+  discovering credentials or falling back to provider endpoints. omp context is read only from
+  a stable terminal viewport at the bottom.
+  ([#2269](https://github.com/devswha/ovis/pull/2269))
+
 ## [0.4.19] - 2026-10-28
 
 ### Added

@@ -51,14 +51,27 @@ describe("readStatusline", () => {
 
   it("reads the file the tee wrote", () => {
     write(payload);
-    expect(readStatusline(home)?.fiveHour?.usedPercent).toBe(17);
+    expect(readStatusline(home, payload.rate_limits.five_hour.resets_at * 1000 - 60_000)?.fiveHour?.usedPercent).toBe(17);
     rmSync(path);
     expect(readStatusline(home)).toBeNull();
   });
 
+  it("drops windows at their reset while retaining unexpired windows and context", () => {
+    write(payload);
+    const now = payload.rate_limits.five_hour.resets_at * 1000;
+    utimesSync(path, new Date(now - 60_000), new Date(now - 60_000));
+    const reading = readStatusline(home, now)!;
+    expect(reading.fiveHour).toBeNull();
+    expect(reading.sevenDay?.usedPercent).toBe(64);
+    expect(reading.context?.usedPercent).toBe(32);
+    write({ rate_limits: { five_hour: { used_percentage: 17, resets_at: now / 1000 - 1 } } });
+    utimesSync(path, new Date(now), new Date(now));
+    expect(readStatusline(home, now)?.fiveHour).toBeNull();
+  });
+
   it("stops reading a payload older than a five-hour window", () => {
     write(payload);
-    const now = Date.now();
+    const now = payload.rate_limits.five_hour.resets_at * 1000 - 60_000;
     utimesSync(path, new Date(now - STALE_MS - 60_000), new Date(now - STALE_MS - 60_000));
     expect(readStatusline(home, now)).toBeNull();
     utimesSync(path, new Date(now - 60_000), new Date(now - 60_000));

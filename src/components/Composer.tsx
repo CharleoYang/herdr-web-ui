@@ -267,11 +267,10 @@ export function Composer({
   const { fetchPaneFiles } = useMachineApi();
   const { settings, resolvedLanguage } = useSettings();
   const mobile = useMediaQuery("(max-width: 640px), (pointer: coarse)");
-  // Claude's windows come off its own status line, no request and no token (server/statusline.ts), so
-  // they show beside the model without the usage hub being switched on; a provider read over the
-  // network still waits for `showUsage`
+  // With usage reporting disabled, Claude's chip reads only the local capture: no sign-in discovery
+  // and no endpoint fallback. The usage hub and other providers remain behind showUsage.
   const usageEnabled = !mobile && machineId === "local" && providerForAgent(agent) !== null && (settings.showUsage || agent === "claude");
-  const { report: usageReport } = useUsage(usageEnabled);
+  const { report: usageReport } = useUsage(usageEnabled, !settings.showUsage);
   const usage = usageEnabled && usageReport !== null ? composerUsage(usageReport.providers, agent, settings.usageOrder, settings.usageHidden) : undefined;
   const usageWindows = usage === undefined ? [] : statusWindows(usage);
   const usageLimit = usageWindows[0];

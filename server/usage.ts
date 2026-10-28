@@ -92,6 +92,8 @@ export interface UsageProvider {
   id: UsageProviderId;
   /** every sign-in of this provider on this PC; none when not signed in here */
   signIns(ctx: UsageContext): Promise<Found[]>;
+  /** A token-free reading matched to this sign-in; checked before endpoint expiry/backoff gates. */
+  readLocal?(ctx: UsageContext, signIn: SignIn): Reading | null;
   /** null: signed in, but to an account without this plan */
   read(ctx: UsageContext, signIn: SignIn): Promise<Reading | null>;
 }
@@ -323,12 +325,13 @@ const claude: UsageProvider = {
     }));
     return found.flat();
   },
-  async read(ctx, signIn) {
+  readLocal(ctx, signIn) {
     const local = readStatusline(ctx.home, ctx.now());
-    if (local !== null) {
-      const windows = claudeStatuslineWindows(local);
-      if (windows.length > 0) return { plan: signIn.plan ?? null, windows };
-    }
+    if (!local?.account || local.account.id !== signIn.account?.id) return null;
+    const windows = claudeStatuslineWindows(local);
+    return windows.length > 0 ? { plan: signIn.plan ?? null, windows } : null;
+  },
+  async read(ctx, signIn) {
     const body = await requestJson(ctx, "https://api.anthropic.com/api/oauth/usage", {
       headers: { authorization: `Bearer ${signIn.token}`, accept: "application/json", "anthropic-beta": "oauth-2025-04-20", "user-agent": USER_AGENT },
     });
@@ -969,6 +972,17 @@ export class UsageService {
   constructor(private readonly ctx: UsageContext = systemUsageContext(), private readonly providers: readonly UsageProvider[] = USAGE_PROVIDERS,
     private readonly additional: (refresh: boolean) => Promise<readonly ProviderUsage[]> = async () => []) {}
 
+  /** A disk-only report: never discovers credentials, invokes providers, or falls back to HTTP. */
+  localReport(): UsageReport {
+    const local = readStatusline(this.ctx.home, this.ctx.now());
+    if (!local?.account) return { providers: [] };
+    const windows = claudeStatuslineWindows(local);
+    return { providers: windows.length === 0 ? [] : [{
+      id: "claude", key: `claude:${local.account.id}`, account: local.account.label,
+      plan: null, windows, problem: null, checked_at: new Date(local.readAt).toISOString(),
+    }] };
+  }
+
   /**
    * `refresh` asks again sooner than FRESH_MS. Concurrent callers share one pass; a refresh that
    * arrives during a plain pass runs after it, so no provider it could force is answered from cache.
@@ -1045,6 +1059,12 @@ export class UsageService {
     }, wait);
     if ("locked" in found) return keep("locked", null, FRESH_MS);
     const signIn: SignIn = found;
+    const local = provider.readLocal?.(this.ctx, signIn);
+    if (local) {
+      const resets = local.windows.flatMap((window) => window.resets_at === null ? [] : [Date.parse(window.resets_at)]);
+      return settle({ id: provider.id, ...identity(local.account), plan: local.plan ?? signIn.plan ?? null,
+        windows: local.windows, problem: null, checked_at: new Date(now).toISOString() }, Math.min(FRESH_MS, ...resets.map((reset) => reset - now)));
+    }
     if (signIn.expiresAt !== null && signIn.expiresAt <= now) return keep("expired", signIn.plan ?? null, RETRY_MS);
     // a 429 holds for the account, not the place: a sign-in moved or copied elsewhere waits too
     const backoff = found.account ? `${provider.id}:${found.account.id}` : `${provider.id}#${createHash("sha256").update(signIn.token).digest("hex")}`;
@@ -1072,5 +1092,6 @@ export class UsageService {
 
 export async function handleUsageRequest(request: Request, url: URL, service: UsageService): Promise<Response> {
   if (request.method !== "GET") return jsonResponse({ error: { code: "method_not_allowed", message: "Use GET /api/usage" } }, 405, { allow: "GET" });
-  return jsonResponse(await service.report(url.searchParams.get("refresh") === "1"), 200, { "cache-control": "no-store" });
+  const report = url.searchParams.get("scope") === "claude-local" ? service.localReport() : await service.report(url.searchParams.get("refresh") === "1");
+  return jsonResponse(report, 200, { "cache-control": "no-store" });
 }
