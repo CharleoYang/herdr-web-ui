@@ -208,8 +208,10 @@ export async function checkIpadIme(browser: Browser, origin: string, pane: strin
       await fresh("ㄱ"); await replace("ㅡ", "그");
       const sizes = await page.evaluate(() => {
         const row = [...document.querySelectorAll<HTMLElement>(".xterm-rows span")].find((span) => span.textContent?.includes("한"))!;
+        // the fit is drawn by a span inside the row's (terminalGlyphs.ts), which carries any enlarged size
+        const glyph = row.querySelector<HTMLElement>(".herdr-box-glyph") ?? row;
         const view = document.querySelector<HTMLElement>(".composition-view")!;
-        return { row: getComputedStyle(row).fontSize, view: getComputedStyle(view).fontSize, pending: view.classList.contains("active") ? view.textContent : null };
+        return { row: getComputedStyle(glyph).fontSize, view: getComputedStyle(view).fontSize, pending: view.classList.contains("active") ? view.textContent : null };
       });
       assert.equal(sizes.pending, "그", "a syllable is pending");
       assert(Math.abs(Number.parseFloat(sizes.view) - Number.parseFloat(sizes.row)) < 0.01,

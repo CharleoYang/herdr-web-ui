@@ -1067,7 +1067,7 @@ Enter to select · ↑/↓ to navigate · Esc to cancel
     expect(outcome(sent, { transcript: compaction("auto", at + 10) }).state).toBe("accepted");
   });
   it("keeps omp's /handoff interaction-required on its card, and a cancel from it never resolves the send", async () => {
-    const pane = { agent: "omp", status: "working", screen: fixture("omp-handoff-18.8.7-generating-narrow.txt") };
+    const pane = { agent: "omp", status: "working", screen: fixture("omp-handoff-18.8.7-generating-narrow.txt"), pid: 4242, argv: ["omp"] };
     await withFakeHerdr(pane, async (paneId, keys) => {
       const current = { ...send("/handoff", "omp", [handoffRow]), at: Date.now() - 1, id: "handoff-send", identity: JSON.stringify([undefined, undefined]), store: null };
       noteSubmitted(paneId, current.text, current);

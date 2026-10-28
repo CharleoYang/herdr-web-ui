@@ -17,7 +17,7 @@
  * pane after, so another session or process of the same kind gets none.
  * First messages live in memory: a restart of the bridge loses those not sent yet.
  */
-import { closeMention, type createSubmitText, freeClaudeBox, freeHermesInput, InputDraftError, modelSwitchText, pendingFault, pendingIdentity, pendingText, submitFraming } from "./composer.ts";
+import { closeBackslash, closeMention, type createSubmitText, freeClaudeBox, freeHermesInput, InputDraftError, modelSwitchText, pendingFault, pendingIdentity, pendingText, submitFraming } from "./composer.ts";
 import { type Client, connectionOf, send } from "./connections.ts";
 import { ATTACH_HELD_MESSAGE } from "./terminal-process.ts";
 import type { AttachmentView, TerminalSighting } from "./terminals.ts";
@@ -414,8 +414,15 @@ export function createPendingDelivery({ options, clients, attachments, sight, se
   }
   async function pendingContext(owner: Client, paneId: string, lease: PendingLease, identity?: PendingIdentity, pasted = false): Promise<{ pane: HerdrPane; identity: PendingIdentity; working: boolean; screen: string; processes: ProcessInfo | undefined; held: { pid: number; started: number | null } | null }> {
     authorizePending(owner, paneId, lease);
-    const { pane, identity: current, processes, held: holder } = await currentIdentity(paneId, identity?.processPid ?? null);
-    if (identity && !samePendingIdentity(identity, current)) {
+    let { pane, identity: current, processes, held: holder } = await currentIdentity(paneId, identity?.processPid ?? null);
+    // a Claude session known before and unknown now (its PID record or its job's state cannot be read) may be
+    // another one: nothing is typed for it (#2125). It is read once more first, as a record being rewritten
+    // fails only for a moment. Once this delivery's own paste is in, such a read does not leave the message
+    // uncertain; another session read there still does. A session learned only now is a match
+    const unknown = (): boolean => !pasted && identity?.claudeSession != null && current.claudeSession == null;
+    if (unknown()) ({ pane, identity: current, processes, held: holder } = await currentIdentity(paneId, identity?.processPid ?? null));
+    const lost = unknown();
+    if (identity && (!samePendingIdentity(identity, current) || lost)) {
       throw new HerdrError(TARGET_CHANGED.code, TARGET_CHANGED.message);
     }
     if (identity) {
@@ -472,7 +479,7 @@ export function createPendingDelivery({ options, clients, attachments, sight, se
       if (typed < TYPED_SETTLE_MS) await Bun.sleep(TYPED_SETTLE_MS - typed);
       mark = pending.mark(paneId);
       const context = await pendingContext(owner, paneId, lease, identity);
-      const sent = modelSwitchText(context.identity.agent, text);
+      const sent = closeBackslash(context.identity.agent, modelSwitchText(context.identity.agent, text));
       piReservation = reservePiReceipt(owner, context.identity);
       const receiptText = piReceiptText(context.identity, text);
       if (automatic && (context.working || queueHeld(paneId))) {

@@ -690,6 +690,23 @@ async function piAskRefusesKeys(paneId: string, signal?: AbortSignal): Promise<b
 
 /** A pi-ask form opened under a key-driven answer: nothing more is sent. */
 class PiAskFormOpen extends Error {}
+
+/**
+ * Whether omp itself holds the pane's input: one of its own processes is in the pane's foreground (herdr's
+ * `pane.process_info`). herdr keeps naming the pane omp while omp is stopped behind its shell (job control,
+ * live-verified with herdr 0.9.5: the foreground is then the shell alone), and the screen can still show omp's
+ * last dialog: a key answered there would go to the shell. Unknown (herdr did not answer) is not omp's. Windows
+ * has no job control and no foreground process group (process_info names only the shell there,
+ * windows-processes.ts), so nothing can stand in front of a running omp: its panes are read as before.
+ */
+async function ompOwnsInput(paneId: string): Promise<boolean> {
+  if (process.platform === "win32") return true;
+  const info = await paneProcessInfo(paneId).catch(() => undefined);
+  return agentProcesses(info?.foreground_processes ?? [], "omp").length > 0;
+}
+
+/** The shell (or anything but omp) took the pane's input under a key-driven omp answer: nothing more is sent. */
+class OmpNotInFront extends Error {}
 const ompAskReader = new OmoAskReader(ompAsksAfter);
 
 /** An omp Ask card in the agent's own Markdown when its session's open ask call is the menu on screen (omp-ask.ts); else the card as drawn. */
@@ -927,6 +944,10 @@ async function readKnownPrompt(
   let prompt = piNative ? publicPrompt(piNative)
     : parseInteractivePrompt(agent, screen, omoAsks[0] ?? null, omoTrusted, omoAsks, agent === "claude" ? heldCandidate(paneId) : null, pane.agent_status === "working");
   if (markdown && prompt && agent === "omp" && pane.cwd) prompt = await withOmpMarkdown(paneId, pane.cwd, prompt);
+  // every omp card answers by keys, and so would a fallback card: offered only while omp holds the input
+  if (agent === "omp" && (prompt !== null || pane.agent_status === "blocked") && !(await ompOwnsInput(paneId))) {
+    return { prompt: null, screen, suppressFallback: true };
+  }
   if (prompt && await claudeHeldIsGrey(paneId, prompt)) return { prompt: null, screen };
   // pi-ask's form with no card: pi-ask takes no typed keys (its docs/remote-events.md), so no card
   // that answers by keys is offered, pi's own dialogs included (the answer would refuse them too):
@@ -1485,6 +1506,9 @@ export async function handlePromptRequest(request: Request, url: URL, options: P
         const sendStep = async (step: AnswerStep, move: boolean, more: boolean): Promise<void> => {
           // right before each key: a pi-ask form that opened since the read takes none of them
           if (agent === "pi" && await piAskRefusesKeys(body.pane_id, deadline)) throw new PiAskFormOpen();
+          // and an omp stopped behind its shell since the read takes none either: the shell would. A stop between
+          // this look and herdr writing the key is not seen: herdr's send_keys takes no condition on the foreground
+          if (agent === "omp" && !(await ompOwnsInput(body.pane_id))) throw new OmpNotInFront();
           const first = !move && !committed;
           if (!move) committed = true;
           try {
@@ -1582,7 +1606,7 @@ export async function handlePromptRequest(request: Request, url: URL, options: P
           && body.option_index !== parsed.rejectWithEscapeIndex) noteCommandEvidence(body.pane_id, sent.id, { kind: "dialog", at: Date.now() });
       } catch (error) {
         if (error instanceof InvalidAnswer) return badRequest("invalid_answer", error.message);
-        if (error instanceof PiAskFormOpen) return promptChanged();
+        if (error instanceof PiAskFormOpen || error instanceof OmpNotInFront) return promptChanged();
         throw error;
       } finally {
         answersUnderWay.delete(body.pane_id);

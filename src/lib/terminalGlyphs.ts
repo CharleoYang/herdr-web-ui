@@ -13,8 +13,11 @@
  *   Menlo's 1.2em of two cells grew as tall as the row, so Korean lines nearly touched;
  * - the glyph is centered in its cells: padding moves the text right by half the spacing
  *   left over, a negative margin takes it back after the span so the next span keeps its
- *   column, and a clip trims the trailing half so a background or block cursor stays on its
- *   own cells.
+ *   column, and a clip trims the trailing half so an underline stays on its own cells.
+ *   All of that goes on a span inside xterm's, which keeps the cells' background and block
+ *   cursor: a stretched or clipped box ends inside a device pixel, and a background painted
+ *   there left a line of the pane between it and the next cell's (a light seam after every
+ *   Korean word in a dark block).
  * A glyph wider than its cells is left to run over, as in a native terminal.
  *
  * The renderer also hands the browser each cell's text as written, and two kinds of text
@@ -467,15 +470,20 @@ export function adjustTerminalGlyphs(term: Terminal): () => void {
         if (spacing !== xtermSpacing) span.style.letterSpacing = `${spacing}px`;
         continue;
       }
-      // the span's own lengths, before the stretch: each glyph and its spacing then take their
-      // cells, and the margin brings the next span back to the column after them
+      // the glyphs' own lengths, before the stretch: each glyph and its spacing then take their
+      // cells, and the margin brings xterm's span to the column after them, so it ends there
       const spaced = fit.spacing / fit.stretch;
       const half = spaced / 2;
       const slot = glyphWidth + spacing;
       const margin = fit.stretch === 1 ? -half : graphemes(shown) * slot * (1 - 1 / fit.stretch) - half;
       const stretch = fit.stretch !== 1 ? `transform:scaleX(${fit.stretch});transform-origin:0 0;` : "";
-      // appended in one write: later declarations win over xterm's letter-spacing
-      span.style.cssText += `;${fit.scale !== 1 ? `font-size:${fontSize * fit.scale}px;` : ""}${stretch}letter-spacing:${spaced}px;padding-left:${half}px;margin-right:${margin}px;clip-path:inset(0 ${half}px 0 0)`;
+      // an inline-block (xterm's rule for a row's spans) takes no underline or strikethrough from the span around it: it asks for them
+      const glyphs = document.createElement("span");
+      glyphs.className = BOX_CLASS;
+      glyphs.style.cssText = `${fit.scale !== 1 ? `font-size:${fontSize * fit.scale}px;` : ""}${stretch}letter-spacing:${spaced}px;padding-left:${half}px;margin-right:${margin}px;clip-path:inset(0 ${half}px 0 0);text-decoration:inherit;font-weight:inherit`;
+      glyphs.textContent = shown;
+      span.style.letterSpacing = "0px";
+      span.replaceChildren(glyphs);
     }
   };
 

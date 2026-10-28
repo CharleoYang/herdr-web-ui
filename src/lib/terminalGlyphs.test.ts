@@ -332,7 +332,13 @@ describe("adjustTerminalGlyphs fitting wide glyphs", () => {
   it("draws a Hangul run at the font's own height, widened to its cells, and keeps the next column", () => {
     page = glyphPage([face('"Symbols Nerd Font Mono"', ICON_RANGE)], []);
     // xterm gives each 13px syllable the rest of its two 7.8px cells
-    const run = page.draw("한글입", "", `${2 * 7.8 - 13}px`);
+    const cells = page.draw("한글입", "", `${2 * 7.8 - 13}px`);
+    // xterm's span keeps the cells' background on a box neither stretched nor clipped, the glyphs inside it are fitted
+    expect(declared(cells, "transform")).toBeUndefined();
+    expect(declared(cells, "clip-path")).toBeUndefined();
+    expect(cells.style["letterSpacing"]).toBe("0px");
+    const run = cells.children[0]!;
+    expect(run.textContent).toBe("한글입");
     expect(declared(run, "font-size")).toBeUndefined();
     const stretch = Number(declared(run, "transform")?.match(/^scaleX\(([\d.]+)\)$/)?.[1]);
     expect(13 * stretch).toBeCloseTo(0.9 * 2 * 7.8, 5);
@@ -348,7 +354,7 @@ describe("adjustTerminalGlyphs fitting wide glyphs", () => {
   it("counts a syllable with a mark that does not compose as one character, so the next column stays", () => {
     page = glyphPage([face('"Symbols Nerd Font Mono"', ICON_RANGE)], []);
     // NFC keeps U+0301 after the syllable: two characters in four cells
-    const run = page.draw("한\u0301글", "", `${2 * 7.8 - 13}px`);
+    const run = page.draw("한\u0301글", "", `${2 * 7.8 - 13}px`).children[0]!;
     expect(graphemes(run.textContent)).toBe(2);
     const px = (property: string): number => Number.parseFloat(declared(run, property)!);
     expect(px("padding-left") + 2 * (13 + px("letter-spacing")) + px("margin-right")).toBeCloseTo(4 * 7.8, 5);

@@ -4005,6 +4005,8 @@ describe("an answer and the menu it was made for", () => {
     nextSnapshotDelay?: number;
     root: string;
     omo?: { pid: number; path: string; live: boolean };
+    /** an omp pane's omp is stopped behind its shell: herdr still names the pane omp, its foreground is the shell */
+    ompStopped?: boolean;
   }
 
   async function withPane(agent: string, status: string, screen: string, run: (pane: Pane) => Promise<void>): Promise<void> {
@@ -4032,7 +4034,8 @@ describe("an answer and the menu it was made for", () => {
           if (once) return void setTimeout(() => answer({ read: { text: once.text } }), once.delay);
           return void setTimeout(() => answer({ read: { text: request.params.source === "visible" && pane.visibleScreen !== undefined ? pane.visibleScreen : request.params.format === "ansi" ? pane.viewport ?? pane.screen : pane.screen } }), pane.readDelay ?? 0);
         }
-        if (request.method === "pane.process_info") return answer({ process_info: { foreground_processes: pane.omo?.live ? [{ pid: pane.omo.pid, argv: ["omo"] }] : [] } });
+        if (request.method === "pane.process_info") return answer({ process_info: { foreground_processes: pane.omo?.live ? [{ pid: pane.omo.pid, argv: ["omo"] }]
+          : pane.agent === "omp" ? [pane.ompStopped ? { pid: 4100, argv: ["/bin/bash"] } : { pid: 4242, argv: ["omp"] }] : [] } });
         if (request.method === "agent.get" && pane.agentUnanswered) return;
         if (request.method === "agent.get") return answer({ agent: pane.rollout ? { agent_session: { kind: "path", value: pane.rollout } } : {} });
         if (request.method !== "pane.send_keys" && request.method !== "pane.send_text") throw new Error(`unexpected fixture RPC: ${request.method}`);
@@ -5108,6 +5111,24 @@ Enter to select · ↑/↓ to navigate · Esc to cancel
         expect(pane.sent).toEqual(keys);
       });
     }
+  });
+
+  test("sends no more of omp's answer once omp is stopped behind its shell under it", async () => {
+    // the custom answer's Enter opens omp's editor, and the text and its Enter go unseen: only the check before each key holds them
+    await withPane("omp", "blocked", OMP(TARGETS, 2), async (pane) => {
+      const prompt = (await card())!;
+      pane.onSent = () => { pane.ompStopped = true; };
+      expect(await answer(prompt.id, { custom_text: "an x86 box" })).toEqual({ status: 409, code: "prompt_changed" });
+      expect(pane.sent).toEqual(["enter"]);
+    });
+    // and none of it, nor any card, while it is stopped behind its shell over the dialog it left
+    await withPane("omp", "blocked", OMP(TARGETS, 2), async (pane) => {
+      const prompt = (await card())!;
+      pane.ompStopped = true;
+      expect(await card()).toBeNull();
+      expect(await answer(prompt.id, { option_index: 0 })).toEqual({ status: 409, code: "prompt_changed" });
+      expect(pane.sent).toEqual([]);
+    });
   });
 
   test("leaves Codex's queue alone while the question just answered is still on the screen", async () => {
