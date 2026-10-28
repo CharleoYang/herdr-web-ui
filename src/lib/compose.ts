@@ -79,13 +79,18 @@ export function pendingActionUncertain(code: string, state: string): boolean {
  * `plain`: the note stands without its Send anyway (a screen a terminal peek left open), so a quick
  * reply, which offers none, shows it as it is.
  */
-export type DraftRefusal = { note: string; draft: string } | { note: string; anyway: true; plain?: boolean };
+export type DraftRefusal = { note: string; draft: string } | { note: string; anyway: true; plain?: boolean }
+  /** not a refusal: what the app cannot tell apart, said without an alert (Composer's `info` note) */
+  | { info: string };
 
 /**
  * submitNote, or a DraftRefusal when the server named a draft it can clear (SubmitResult's `draft`)
  * or showed a box it could not tell empty (`box`; empty when it could not read one whole).
  */
 export function submitRefusal(code: string, message: string, draft?: string, box?: string, agent?: string | null): string | DraftRefusal {
+  // a cleared draft with no Enter receipt: the agent may already hold the message as its next turn,
+  // and the reader is told to look, not that it failed
+  if (code === "submit_partial") return { info: t("Not confirmed: it may already be queued in the terminal. Your message stayed here. Check the terminal before sending again.") };
   if (code === "input_draft" && draft) return { note: t("Not sent: Claude Code's input box in the terminal already holds “{draft}”.", { draft }), draft };
   if (code === "input_draft" && box) return { note: t("Not sent: Claude Code's input box in the terminal may not be empty. It shows “{box}”.", { box }), anyway: true };
   return submitNote(code, message, agent);

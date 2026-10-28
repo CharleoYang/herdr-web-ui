@@ -185,6 +185,8 @@ describe("composerMessage and submitNote", () => {
     // bash mode, a clipped box or an older bridge name none: the note alone
     expect(submitRefusal("input_draft", "x")).toBe(submitNote("input_draft", "x"));
     expect(submitRefusal("agent_blocked", "x", "ㅔ")).toBe(submitNote("agent_blocked", "x"));
+    // a cleared draft with no receipt is information: it may already be the agent's next turn
+    expect(submitRefusal("submit_partial", "x")).toEqual({ info: "Not confirmed: it may already be queued in the terminal. Your message stayed here. Check the terminal before sending again." });
   });
 
   it("offers to send anyway only when the server showed the box and named no draft", () => {
