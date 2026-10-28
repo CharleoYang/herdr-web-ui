@@ -47,7 +47,7 @@ import { CODEX_IMAGE_REF, CODEX_TOOL_IMAGE_REF, codexOutputPicture, codexTranscr
 import { AmbiguousClaudeStore, claudeAttachSession, claudeProcessSession, claudeTranscriptFile, defaultClaudeConfigDir, forgetClaudeSessionFile, forgetClaudeSessions, isClaudeProcess, processClaudeConfigDir } from "./claude-store.ts";
 import { forgetGjcPane, forgetGjcState, gjcPidUnderShell, gjcTranscriptForPane, isGjcProcess, storeRelative } from "./gjc-runtime.ts";
 import { isOmoProcess, omoProcessIdentity, omoSessionForPane, processEnviron } from "./omo.ts";
-import { processStartedAtAsync } from "./process-start.ts";
+import { processAlive, processStartedAtAsync } from "./process-start.ts";
 import { ompBlobStore, ompPaneRoute, ompRouteOwns, ompRouteStore, ompRouteTranscript } from "./omp.ts";
 import { forgetOpencodeRead, forgetOpencodeState, OPENCODE_IMAGE_REF, opencodeConversation, opencodeDatabasePath, opencodeImage, opencodeReadKey, opencodeSessionId, opencodeToolOutput } from "./opencode.ts";
 import { piTranscriptPath, unwrittenSession } from "./pi.ts";
@@ -64,7 +64,7 @@ import { forgetAllPiIndexes, forgetPiIndex, piAbandonedTurns, piBranchRecords, p
 import { copilotOffsetOutput, copilotOutput, copilotRootRecord, parseCopilotTranscript } from "./copilot.ts";
 import { copilotExplicitResume, copilotHandoffSession, copilotProcessSession, copilotTranscriptFile, copilotUnwrittenSession, openCopilotFile } from "./copilot-store.ts";
 import { parseConversationMetadata } from "./conversation-metadata.ts";
-import { answerVersion, ConversationNotStarted, ConversationUnavailable, type ConversationPage, HistoryChanged, type RecognizedConversation, type StreamSource, TRANSCRIPT_WINDOW_BYTES } from "./conversation-shared.ts";
+import { answerVersion, ConversationNotStarted, ConversationReadPending, ConversationUnavailable, type ConversationPage, HistoryChanged, type RecognizedConversation, type StreamSource, TRANSCRIPT_WINDOW_BYTES } from "./conversation-shared.ts";
 import { forgetHermesTranscriptState, hermesConversationPage, hermesToolOutput, hermesTranscriptForPane } from "./hermes.ts";
 
 import { createOmpTranscriptParser, isContextClear, MAX_TURNS, omoTaskResults, parseOmpTranscript, PI_IMAGE_REF, PI_PROMPT_IMAGE_REF, piImageBlock, piMessage, piNotice, piPromptImages, piResults, type TranscriptParser } from "./transcript-records.ts";
@@ -80,7 +80,7 @@ import { devinSessionForPane, isDevinProcess } from "./devin-session.ts";
 export { isOmoProcess } from "./omo.ts";
 export { devinSessionForPane, isDevinProcess } from "./devin-session.ts";
 export { createClaudeTranscriptParser, parseClaudeTranscript, unwrapPastes } from "./claude-transcript.ts";
-export { TRANSCRIPT_WINDOW_BYTES, ConversationUnavailable, ConversationNotStarted, HistoryChanged, answerVersion, type RecognizedConversation, type ConversationPage } from "./conversation-shared.ts";
+export { TRANSCRIPT_WINDOW_BYTES, ConversationReadPending, ConversationUnavailable, ConversationNotStarted, HistoryChanged, answerVersion, type RecognizedConversation, type ConversationPage } from "./conversation-shared.ts";
 
 const PI_PAGE_CACHE_BYTES = 4 * 1024 * 1024;
 
@@ -1121,17 +1121,23 @@ async function ompTranscriptPath(paneId: string, cwd: string): Promise<{ path: s
 }
 
 /** A process-owned lifecycle registration, or a trusted report plus a unique held marker. */
-async function copilotTranscriptPath(pane: HerdrPane, panes: readonly HerdrPane[], previousClaims?: ReadonlySet<string>): Promise<{ path: string; binding: string; peerClaims: ReadonlySet<string> }> {
+async function copilotTranscriptPath(pane: HerdrPane, panes: readonly HerdrPane[], previousClaims?: ReadonlySet<string>, peerInfo?: Map<string, Awaited<ReturnType<typeof paneProcessInfo>> | null>): Promise<{ path: string; binding: string; peerClaims: ReadonlySet<string> }> {
   const report = pane.agent_session;
   // A request shares its peer snapshot across the read; the pane's own process
   // and lifecycle evidence are still validated afresh before returning history.
+  // With `peerInfo`, peers' processes come from (and fill) that cache, while their
+  // lifecycle logs are read again here, after this pane's own binding.
   let peerClaims: Promise<ReadonlySet<string>> | undefined = previousClaims === undefined ? undefined : Promise.resolve(previousClaims);
   const gatherPeerClaims = async (): Promise<Set<string>> => {
     const claims = new Set<string>();
     for (const peer of panes) {
       if (peer.pane_id === pane.pane_id || peer.agent !== "copilot") continue;
-      const info = await paneProcessInfo(peer.pane_id).catch(() => null);
+      const cached = peerInfo?.has(peer.pane_id) === true;
+      const info = cached ? peerInfo!.get(peer.pane_id) : await paneProcessInfo(peer.pane_id).catch(() => null);
+      peerInfo?.set(peer.pane_id, info ?? null);
       const processes = agentProcesses(info?.foreground_processes ?? [], "copilot");
+      // A cached peer process that has exited may have been replaced by one we never asked about.
+      if (cached && processes.some((entry) => typeof entry.pid === "number" && !processAlive(entry.pid))) throw new ConversationUnavailable("no_session_path");
       if (processes.length === 1 && typeof processes[0]?.pid === "number") {
         const live = copilotProcessSession(processEnviron(processes[0].pid), processes[0].argv ?? [], processes[0].pid);
         if (live?.logged) {
@@ -1468,7 +1474,37 @@ export async function paneConversation(paneId: string, codexHome?: string, page:
   rememberPaneRead(paneId, resolved.path);
   const history = resolved.source === "copilot-transcript" ? copilotHistoryIdentity(resolved.path) : null;
   const prefix = history !== null && resolved.source === "copilot-transcript" ? copilotPrefix(paneId, `${resolved.binding}\0${history}`) : null;
-  const answer = transcriptPage(resolved.source, resolved.path, prefix === null ? page : copilotPage(page, prefix), resolved.codexHome ?? codexHome, resolved.piAgentDir);
+  let answer: RecognizedConversation;
+  try {
+    answer = transcriptPage(resolved.source, resolved.path, prefix === null ? page : copilotPage(page, prefix), resolved.codexHome ?? codexHome, resolved.piAgentDir);
+  } catch (error) {
+    if (resolved.source !== "copilot-transcript" || prefix === null || !(error instanceof ConversationUnavailable) || error.message !== "transcript_missing") throw error;
+    const paged = page.before !== undefined || page.since !== undefined || page.from !== undefined;
+    // Unpaged refreshes otherwise carry no proof of which history is on screen: older
+    // clients without it keep their fail-closed fallback, with no recheck to wait on.
+    if (page.history_id === undefined && !paged) throw error;
+    // A read failure is not an empty conversation. Only a fresh, matching binding
+    // and file generation permit retaining the view; never reuse the request's earlier peer claims.
+    try {
+      const fresh = await sessionSnapshot();
+      const pane = fresh.panes.find((candidate) => candidate.pane_id === paneId);
+      if (pane === undefined) throw new ConversationUnavailable("no_session_id");
+      // Peer checks await herdr, and either side can switch meanwhile: once every
+      // process is known, read this pane's binding and the peers' claims again with no
+      // herdr call between those reads and the comparison.
+      const peerInfo = new Map<string, Awaited<ReturnType<typeof paneProcessInfo>> | null>();
+      await copilotTranscriptPath(pane, fresh.panes, undefined, peerInfo);
+      const current = await copilotTranscriptPath(pane, fresh.panes, undefined, peerInfo);
+      if (current.path !== resolved.path || current.binding !== resolved.binding || copilotHistoryIdentity(resolved.path) !== history) {
+        throw new ConversationUnavailable("no_session_path");
+      }
+    } catch (cause) {
+      if (cause instanceof ConversationUnavailable && paged) throw new HistoryChanged();
+      throw cause;
+    }
+    if (page.history_id !== undefined && !page.history_id.startsWith(prefix)) throw new HistoryChanged();
+    throw new ConversationReadPending();
+  }
   const status = snapshot.panes.find((pane) => pane.pane_id === paneId)?.agent_status;
   if (resolved.source === "grok-transcript" && answer.turns.length === 0 && page.before === undefined
     && (status === "working" || status === "blocked")) {
@@ -1732,7 +1768,7 @@ function transcriptPageRead(source: StreamSource, path: string, page: Conversati
     if (live === null && page.before === undefined && start > stream.floor) head = metadataHead(path, stream, source, start);
     cursor = formatCursor(stream, start);
   } catch (error) {
-    if (error instanceof HistoryChanged) throw error;
+    if (error instanceof HistoryChanged || error instanceof ConversationUnavailable) throw error;
     throw new ConversationUnavailable("transcript_missing");
   }
 
