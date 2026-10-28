@@ -7,6 +7,14 @@ between releases do not reach them. Remote-PC runtime bundles are versioned sepa
 
 ## [Unreleased]
 
+### Fixed
+- Informational send notices no longer offer Send anyway. A missing receipt keeps the composer
+  draft: an empty terminal input box alone does not prove delivery. Confirmed sends each retain
+  their own waiting line on the original pane, even across navigation; only a new matching user
+  turn settles each line. Unmarked shared prefixes no longer count as delivered messages, while
+  substantial explicitly ellipsized copies still match.
+  ([#2270](https://github.com/devswha/ovis/pull/2270))
+
 ## [0.4.19] - 2026-10-28
 
 ### Added

@@ -25,7 +25,6 @@ export function editorBoxText(screen: string): string | null {
   // a dialog or a panel in the editor's place keeps the rules but fills the rows with its own
   // content: more than a handful of rows is not a one-line editor
   if (inside.length > 12) return null;
-  // each row trimmed: the editor's own left padding is not part of what was typed, and the one
-  // reader of this text (lib/sendUncertain.ts) compares words, not spaces
+  // The editor's own left padding is not part of what was typed.
   return inside.map((line) => line.trim()).join("\n").trim();
 }
