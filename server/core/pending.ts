@@ -530,14 +530,19 @@ export function createPendingDelivery({ options, clients, attachments, sight, se
       }
       // fixed wait: the TUI takes the paste before its Enter, which arriving with it could read as a newline
       await Bun.sleep(options.submitDelayMs ?? SUBMIT_DELAY_MS);
-      const beforeEnter = await pendingContext(owner, paneId, lease, identity, true);
+      let beforeEnter = await pendingContext(owner, paneId, lease, identity, true);
       if (automatic && (beforeEnter.working || queueHeld(paneId))) throw new HerdrError("pending_wait", "The agent started another turn before this queued message could be committed");
       authorizePending(owner, paneId, lease);
-      const steering = !automatic && beforeEnter.working;
       // Capture Pi's exact active transcript position before Enter. Status is deliberately not
       // evidence: Pi can report idle/done while its TUI is staging an automatic-compaction input.
+      const beforeCapturePid = beforeEnter.identity.processPid;
       const piAnchor = await preparePiReceipt(paneId, beforeEnter.identity).catch(() => null);
-      if (piAnchor !== undefined) await stillInFront(paneId, beforeEnter.identity.processPid);
+      if (piAnchor !== undefined) {
+        beforeEnter = await pendingContext(owner, paneId, lease, identity, true);
+        if (automatic && (beforeEnter.working || queueHeld(paneId))) throw new HerdrError("pending_wait", "The agent started another turn before this queued message could be committed");
+        await stillInFront(paneId, beforeCapturePid);
+      }
+      const steering = !automatic && beforeEnter.working;
       committing(steering);
       // Claude Code queues what Enter commits during a turn; Ctrl+Enter sends it now (#737). herdr
       // encodes the key as the pane asked, and as a plain CR for a program that asked for nothing.
