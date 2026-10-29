@@ -1521,14 +1521,3 @@
     backdrop-filter: var(--glass-blur);
   }
 }
-
-/* what the app cannot tell apart: said, not alerted. The terminal may already hold the message as
-   the agent's next turn, so the line carries no warning colour and no alert role. */
-.composer-note-info {
-  color: var(--text-dim);
-}
-
-.composer-note-info .composer-note-icon {
-  color: var(--text-dim);
-}
-

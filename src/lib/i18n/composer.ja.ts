@@ -83,8 +83,6 @@ export const COMPOSER_JA: Record<string, string> = {
   "Not sent: it waited too long behind an earlier message, and nothing was typed. Send it again.": "未送信: 前のメッセージの後で長く待ちすぎたため、何も入力されませんでした。もう一度送信してください。",
   "Not sent: the connection dropped before this message left. Send it again.": "未送信: メッセージが送られる前に接続が切れました。もう一度送信してください。",
   "Not sent: this PC has not said yet what it supports. Send it again.": "未送信: この PC が対応する機能をまだ知らせていません。もう一度送信してください。",
-  "Not confirmed: it may already be queued in the terminal. Your message stayed here. Check the terminal before sending again.": "未確認: すでにターミナルで待機している可能性があります。メッセージはここに残しています。再送信の前にターミナルを確認してください。",
-  "Not confirmed: it may already have reached the agent. Check the terminal before sending again.": "未確認: すでにエージェントに届いている可能性があります。再送信の前にターミナルを確認してください。",
   "Not confirmed: the pane did not confirm this message. Check the terminal before sending it again.": "未確認: ペインがこのメッセージを確認しませんでした。再送信する前にターミナルを確認してください。",
   "Not sent: {message}": "未送信: {message}",
   "Not confirmed: the terminal draft was cleared or may have changed. Your message stayed here. Check the terminal before sending again.": "未確認: ターミナルの下書きが消去されたか、変更された可能性があります。メッセージはここに残っています。再送信する前にターミナルを確認してください。",

@@ -185,13 +185,6 @@ describe("composerMessage and submitNote", () => {
     // bash mode, a clipped box or an older bridge name none: the note alone
     expect(submitRefusal("input_draft", "x")).toBe(submitNote("input_draft", "x"));
     expect(submitRefusal("agent_blocked", "x", "ㅔ")).toBe(submitNote("agent_blocked", "x"));
-    // Claude's cleared draft with no receipt is information: it may already be the agent's next turn
-    for (const agent of ["claude", null, undefined]) {
-      const note = submitRefusal("submit_partial", "x", undefined, undefined, agent);
-      expect(typeof note === "object" && "info" in note).toBe(true);
-    }
-    // OpenCode's submit_partial means part of the message was typed and nothing was sent: an alert
-    expect(submitRefusal("submit_partial", "x", undefined, undefined, "opencode")).toBe(submitNote("submit_partial", "x", "opencode"));
   });
 
   it("offers to send anyway only when the server showed the box and named no draft", () => {
