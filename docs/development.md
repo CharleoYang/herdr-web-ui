@@ -103,14 +103,16 @@ timing, so more runs side by side make them fail each other: on a 32-core PC thr
 already lost Chromium screenshots in the browser lane, so raise it only to look for such failures. A run that finds every slot taken
 names the holders and exits, or, with `CHECK_WAIT_SECONDS` (0 to 7200), waits that long for one
 first, as CI's herdr-backed lanes do. A second run in the same checkout exits at once, even with
-slots free: runs in one checkout share `dist/` and the generated types. A checkout is its real
+slots free: runs in one checkout share `dist/` and the generated types. `fast` takes no slot
+and never waits, but it claims its checkout the same way, so it and any other mode refuse each
+other there. A checkout is its real
 path, plus `RUNNER_NAME` when that is set: the self-hosted runners of one PC share a loopback and
 all check out to the same path. The
 generated-types and generated-themes checks (`bun run generate:types --check`,
 `bun run generate:themes --check`) are read-only, but `test:unit` includes
 `scripts/generate-protocol-types.test.ts`, which rewrites the generated file while it runs. Fast
-checks and the browser lane also build into `dist/`; avoid overlapping runs that write to the same
-checkout. (`check run` runs only its named command unless `--build` is supplied.)
+checks and the browser lane also build into `dist/`. Nothing stops a `bun run build` or a single
+test command started by hand beside a run, so avoid those while a check runs in that checkout. (`check run` runs only its named command unless `--build` is supplied.)
 Theme colors are edited only in the theme blocks of `src/styles.css`. Never edit the generated
 copies (`src/lib/themes.generated.ts`, the DESIGN.md region between the `GENERATED THEMES`
 markers, the `theme-color` tag in `index.html`, the colors in `public/manifest.webmanifest`); run
@@ -134,7 +136,11 @@ processes. The queue is ordered largest file first, so long files start early. W
 (native Windows) the files run serially in one process.
 Explicit `CHECK_DIR` and `CHECK_REPORT` paths are claimed exclusively by canonical path, even for
 `fast`, before writing reports, logs or isolated state. Pid markers are released at exit after the
-final report and session cleanup; a dead owner's marker is reclaimed under serialized admission.
+final report and session cleanup. A marker names its run's pid and, on Linux and macOS, when that
+process started, so a pid given to another process after a crash or a reboot does not keep the claim.
+A dead owner's marker is taken over under a lock: on Linux an abstract socket, which the kernel lets
+go of however its holder ends; elsewhere a `.reclaim` file, which the next run clears when a run
+killed during a takeover leaves it. No marker needs deleting by hand.
 Lock refusal exits with the holder's identity before writing a report, so it cannot overwrite
 an active run's output or stop its sessions.
 
