@@ -2246,10 +2246,11 @@ export const ChatView = memo(function ChatView({ paneId, presentationKey, finish
   const retryRead = useCallback(() => { setFailures(0); conversationRefresh.refresh(); }, [conversationRefresh]);
   const footer = <>
       <p className={waitWords === null ? "visually-hidden" : "chat-inline-state"} role="status">{waitWords}</p>
-      {/* sent, and the agent has not started its turn for it yet: say so with the words themselves */}
-      {sentWaiting.map((send) => <p key={send.id} className="chat-inline-state chat-sent-waiting" role="status">
-        <span className="chat-sent-waiting-label">{t("Sent · waiting for the agent's next turn")}</span>
+      {/* sent, and the agent has not started its turn for it yet: the user's own words where their
+          turn will be, quieter, and what they wait for under them */}
+      {sentWaiting.map((send) => <p key={send.id} className="chat-sent-waiting" role="status">
         <span className="chat-sent-waiting-text">{send.text.length > 160 ? `${send.text.slice(0, 160)}…` : send.text}</span>
+        <span className="chat-sent-waiting-label">{t("Sent · waiting for the agent's next turn")}</span>
       </p>)}
       {error !== null && !waiting && (errorStatus === 401
         ? <p className="chat-inline-state chat-inline-error" role="alert">{t("locked — the token gate is asking again")}</p>
