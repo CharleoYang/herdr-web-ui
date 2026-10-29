@@ -9,7 +9,7 @@ import { CHAT_WIDTHS, DICTATION_LANGUAGES, DIFF_STYLES, MARKDOWN_WIDTHS, VOICE_B
   QUICK_REPLIES_MAX, QUICK_REPLY_MAX_CHARS, USAGE_KEYS_MAX, TERMINAL_FONT_MIN, TERMINAL_FONT_MAX,
   TERMINAL_WHEEL_SPEED_MIN, TERMINAL_WHEEL_SPEED_MAX, CHAT_FONT_MIN, CHAT_FONT_MAX,
   type Settings as CurrentSettings, type ChatWidth, type DictationLanguage, type VoiceButton } from "./settings.ts";
-type Settings = Omit<CurrentSettings, "darkTheme" | "lightTheme" | "fileOpen" | "webLinks" | "claudeLaunchMode" | "codexLaunchMode" | "followHerdrFocus" | "composerNewTabButton" | "uiFontFamily" | "terminalMirrorWrap" | "sidebarFilter">;
+type Settings = Omit<CurrentSettings, "darkTheme" | "lightTheme" | "fileOpen" | "webLinks" | "claudeLaunchMode" | "codexLaunchMode" | "followHerdrFocus" | "composerNewTabButton" | "uiFontFamily" | "terminalMirrorWrap" | "sidebarFilter" | "historyPrompts">;
 type Palette = "amber" | "charcoal" | "catppuccin";
 const PALETTES: readonly Palette[] = ["amber", "charcoal", "catppuccin"];
 const STORAGE_KEY = "ovis:settings";
@@ -33,7 +33,6 @@ export const DEFAULT_SETTINGS: Settings = {
   paneClipboard: true,
   releasePaneAway: false,
   chatFontSize: null,
-  historyPrompts: 10,
   chatFontFamily: "",
   uiFontSize: null,
   chatWidth: "default",
@@ -113,7 +112,6 @@ export function sanitizeSettings(raw: unknown): Settings {
     paneClipboard: typeof record["paneClipboard"] === "boolean" ? record["paneClipboard"] : DEFAULT_SETTINGS.paneClipboard,
     releasePaneAway: typeof record["releasePaneAway"] === "boolean" ? record["releasePaneAway"] : DEFAULT_SETTINGS.releasePaneAway,
     chatFontFamily: sanitizeFontFamily(record["chatFontFamily"]),
-    historyPrompts: 10,
     chatWidth: CHAT_WIDTHS.includes(record["chatWidth"] as ChatWidth) ? record["chatWidth"] as ChatWidth : DEFAULT_SETTINGS.chatWidth,
     enterSends: typeof record["enterSends"] === "boolean" ? record["enterSends"] : DEFAULT_SETTINGS.enterSends,
     autoSendQueued: typeof record["autoSendQueued"] === "boolean" ? record["autoSendQueued"] : DEFAULT_SETTINGS.autoSendQueued,

@@ -596,12 +596,24 @@ function readSidebarFilter(): boolean {
   }
 }
 
+/** Settings → Chat → History page size, kept in a key of its own for the same reason: an old tab's save drops a field it does not know. */
+export const HISTORY_PROMPTS_STORAGE_KEY = "ovis:history-prompts";
+
+function readHistoryPrompts(): number {
+  try {
+    const raw = window.localStorage.getItem(HISTORY_PROMPTS_STORAGE_KEY);
+    return sanitizeSettings({ historyPrompts: raw === null ? null : JSON.parse(raw) }).historyPrompts;
+  } catch {
+    return DEFAULT_SETTINGS.historyPrompts;
+  }
+}
+
 export function loadSettings(): Settings {
   // read as the page's boot script reads them (themeBoot.ts), so React starts on the row the first frame showed
   const stored = readStoredAppearance(() => window.localStorage);
   const settings = stored.main === null ? DEFAULT_SETTINGS : sanitizeSettings(stored.main.value);
   const merged = stored.themes === null ? settings : sanitizeSettings({ ...settings, ...stored.themes });
-  return { ...merged, uiFontFamily: readUiFontFamily(), terminalMirrorWrap: readMirrorWrap(), sidebarFilter: readSidebarFilter() };
+  return { ...merged, uiFontFamily: readUiFontFamily(), terminalMirrorWrap: readMirrorWrap(), sidebarFilter: readSidebarFilter(), historyPrompts: readHistoryPrompts() };
 }
 
 export function saveSettings(settings: Settings): void {
@@ -611,10 +623,11 @@ export function saveSettings(settings: Settings): void {
       darkTheme: mirrored.darkTheme, lightTheme: mirrored.lightTheme,
       mirror: { palette: mirrored.palette, paletteDark: mirrored.paletteDark, paletteLight: mirrored.paletteLight },
     }));
-    const { uiFontFamily, terminalMirrorWrap, sidebarFilter, ...main } = mirrored;
+    const { uiFontFamily, terminalMirrorWrap, sidebarFilter, historyPrompts, ...main } = mirrored;
     window.localStorage.setItem(UI_FONT_STORAGE_KEY, JSON.stringify(uiFontFamily));
     window.localStorage.setItem(MIRROR_WRAP_STORAGE_KEY, JSON.stringify(terminalMirrorWrap));
     window.localStorage.setItem(SIDEBAR_FILTER_STORAGE_KEY, JSON.stringify(sidebarFilter));
+    window.localStorage.setItem(HISTORY_PROMPTS_STORAGE_KEY, JSON.stringify(historyPrompts));
     window.localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(main));
   } catch {
     /* private mode: preferences last for the session */
