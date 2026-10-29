@@ -5,7 +5,7 @@ import { mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { UsageReport } from "../shared/protocol.ts";
-import { FRESH_MS, handleUsageRequest, MAX_READ_BYTES, MIN_REFRESH_MS, RETRY_MS, runCommand, USAGE_PROVIDERS, UsageHttpError, UsageService, type KeychainRead, type UsageContext, type UsageProvider } from "./usage.ts";
+import { FRESH_MS, handleStatuslineRequest, handleUsageRequest, MAX_READ_BYTES, MIN_REFRESH_MS, RETRY_MS, runCommand, USAGE_PROVIDERS, UsageHttpError, UsageService, type KeychainRead, type UsageContext, type UsageProvider } from "./usage.ts";
 import { installStatusline } from "./statusline-install.ts";
 
 const NOW = Date.parse("2026-09-29T12:00:00Z");
@@ -240,6 +240,46 @@ describe("providers", () => {
     installStatusline({ home });
     expect(await read()).not.toHaveProperty("statusline_offer");
     expect((await read())?.problem).toBe("expired");
+  });
+
+  it("offers the status line only for the sign-in whose config directory the switch changes", async () => {
+    write(join(home, ".claude-work", ".credentials.json"), { claudeAiOauth: { accessToken: "work", expiresAt: NOW + HOUR } });
+    replies.set("https://api.anthropic.com/api/oauth/usage", { status: 403, body: { error: { message: "Request not allowed" } } });
+    const [elsewhere] = (await new UsageService(context(), only("claude")).report()).providers;
+    expect(elsewhere).toMatchObject({ problem: "expired" });
+    expect(elsewhere).not.toHaveProperty("statusline_offer");
+    const configured = { ...context(), env: { ...context().env, CLAUDE_CONFIG_DIR: join(home, ".claude-work") } };
+    const [switched] = (await new UsageService(configured, only("claude")).report()).providers;
+    expect(switched).toMatchObject({ problem: "expired", statusline_offer: true });
+  });
+
+  it("answers a failed switch without quoting Claude's settings or a command saved in them", async () => {
+    mkdirSync(join(home, ".claude", "herdr-statusline"), { recursive: true });
+    const wrapper = join(home, ".claude", "herdr-statusline", "statusline-tee.sh");
+    write(join(home, ".claude", "settings.json"), { statusLine: { type: "command", command: `API_KEY=FAKE_SECRET_FOR_TEST sh ${wrapper}` } });
+    const service = new UsageService(context(), only("claude"));
+    const post = () => handleStatuslineRequest(new Request("http://x/api/usage/statusline", { method: "POST", body: JSON.stringify({ enabled: true }) }), service);
+    const refused = await post();
+    expect(refused.status).toBe(409);
+    expect(await refused.text()).not.toContain("FAKE_SECRET_FOR_TEST");
+    writeFileSync(join(home, ".claude", "settings.json"), "{ \"statusLine\": API_KEY=FAKE_SECRET_FOR_TEST");
+    const broken = await post();
+    expect(broken.status).toBe(500);
+    expect(await broken.text()).not.toContain("FAKE_SECRET_FOR_TEST");
+  });
+
+  it("never offers the status line where it cannot run", async () => {
+    write(join(home, ".claude", ".credentials.json"), { claudeAiOauth: { accessToken: "k", expiresAt: NOW + HOUR } });
+    replies.set("https://api.anthropic.com/api/oauth/usage", { status: 403, body: { error: { message: "Request not allowed" } } });
+    const platform = Object.getOwnPropertyDescriptor(process, "platform")!;
+    Object.defineProperty(process, "platform", { value: "win32" });
+    try {
+      const [usage] = (await new UsageService(context(), only("claude")).report()).providers;
+      expect(usage).toMatchObject({ problem: "expired" });
+      expect(usage).not.toHaveProperty("statusline_offer");
+    } finally {
+      Object.defineProperty(process, "platform", platform);
+    }
   });
 
   it("keeps a newer endpoint answer over an older capture when a later refresh is refused", async () => {

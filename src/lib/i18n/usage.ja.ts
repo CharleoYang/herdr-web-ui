@@ -87,4 +87,5 @@ export const USAGE_JA: Record<string, string> = {
   "For networks where Claude's usage API is refused. Wraps Claude Code's status line on this PC and keeps only the limits; turning it off puts Claude's settings back.": "Claude の使用量 API が拒否されるネットワーク向けです。この PC で Claude Code のステータスラインをラップして上限だけを保存し、オフにすると Claude の設定を元に戻します。",
   "Read from Claude's status line instead": "代わりに Claude のステータスラインから読む",
   "Could not change Claude's status line": "Claude のステータスラインを変更できませんでした",
+  "On. Claude's limits show once Claude Code next draws its status line.": "オンにしました。Claude Code が次にステータスラインを描くと上限が表示されます。",
 };

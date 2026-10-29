@@ -87,4 +87,5 @@ export const USAGE_ZH: Record<string, string> = {
   "For networks where Claude's usage API is refused. Wraps Claude Code's status line on this PC and keeps only the limits; turning it off puts Claude's settings back.": "适用于 Claude 用量 API 被拒绝的网络。在此电脑上包装 Claude Code 状态栏，只保存额度；关闭后会恢复 Claude 的设置。",
   "Read from Claude's status line instead": "改为从 Claude 状态栏读取",
   "Could not change Claude's status line": "无法更改 Claude 状态栏",
+  "On. Claude's limits show once Claude Code next draws its status line.": "已开启。Claude Code 下次绘制状态栏时会显示额度。",
 };

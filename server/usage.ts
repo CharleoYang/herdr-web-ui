@@ -21,9 +21,9 @@ import { createHash } from "node:crypto";
 import { closeSync, mkdtempSync, openSync, readdirSync, readSync, rmSync, writeFileSync, writeSync } from "node:fs";
 import { open, type FileHandle } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { readStatusline, type StatuslinePayload } from "./statusline.ts";
-import { installStatusline, removeStatusline, statuslineInstallState, type StatuslineInstallState } from "./statusline-install.ts";
+import { installStatusline, removeStatusline, StatuslineInstallError, statuslineInstallState, type StatuslineInstallState } from "./statusline-install.ts";
 import type { ProviderUsage, UsageProblem, UsageProviderId, UsageReport, UsageWindow } from "../shared/protocol.ts";
 import { jsonResponse } from "./http.ts";
 import { opencodeDatabasePath } from "./opencode.ts";
@@ -980,6 +980,12 @@ export class UsageService {
     return this.statusline();
   }
 
+/** Whether a Claude sign-in found at `source` (claudeHomes) lives in the config directory the switch changes. */
+  private switchesConfigOf(source: string): boolean {
+    const configured = this.ctx.env["CLAUDE_CONFIG_DIR"]?.trim();
+    return configured ? source !== "default" && resolve(source) === resolve(configured) : source === "default";
+  }
+
   private statuslineOptions() {
     return { home: this.ctx.home, configDir: this.ctx.env["CLAUDE_CONFIG_DIR"] };
   }
@@ -1101,7 +1107,12 @@ export class UsageService {
         const expired = keep("expired", signIn.plan ?? null, RETRY_MS);
         // a 403 for a token that has not expired is a refusal, not an expiry: the status line can stand in
         const refused = provider.id === "claude" && error.status === 403 && (signIn.expiresAt === null || signIn.expiresAt > now);
-        if (refused && expired.usage && !this.statusline().installed) expired.usage = { ...expired.usage, statusline_offer: true };
+        const statusline = this.statusline();
+        // offered only where it can be turned on (never on Windows, never once it is on), and only for the
+        // sign-in in the config directory the switch changes: another one's status line is not wrapped
+        if (refused && expired.usage && statusline.supported && !statusline.installed && this.switchesConfigOf(found.source)) {
+          expired.usage = { ...expired.usage, statusline_offer: true };
+        }
         return expired;
       }
       if (error instanceof UsageHttpError && error.status === 429) return keep("rate_limited", signIn.plan ?? null, wait);
@@ -1131,6 +1142,10 @@ export async function handleStatuslineRequest(request: Request, service: UsageSe
   try {
     return jsonResponse(service.setStatusline((body as { enabled: boolean }).enabled), 200, { "cache-control": "no-store" });
   } catch (error) {
-    return jsonResponse({ error: { code: "statusline_failed", message: error instanceof Error ? error.message : String(error) } }, 409);
+    // only the installer's own refusals are told: anything else (a settings.json that will not parse, a
+    // filesystem error) could quote the user's settings, and a saved command can carry a secret
+    if (error instanceof StatuslineInstallError) return jsonResponse({ error: { code: "statusline_failed", message: error.message } }, 409);
+    console.warn(`usage: Claude's status line could not be changed: ${error instanceof Error ? error.message : String(error)}`);
+    return jsonResponse({ error: { code: "statusline_failed", message: "Claude's status line could not be changed; the server's log says why" } }, 500);
   }
 }

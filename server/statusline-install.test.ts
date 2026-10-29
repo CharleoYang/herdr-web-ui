@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { installStatusline, removeStatusline, statuslineInstallState } from "./statusline-install.ts";
@@ -353,15 +353,60 @@ describe("status-line switch and capture", () => {
     expect(existsSync(own())).toBe(false);
   });
 
-  it("removes an install that failed after its record and before settings.json", () => {
+  it.skipIf(process.getuid?.() === 0)("removes an install that failed after its record and before settings.json", () => {
+    // settings.json is a dotfiles link whose directory cannot take the new file: the record is
+    // written, the settings write fails, as a crash between the two would leave it
+    const dotfiles = join(home, "dotfiles");
+    mkdirSync(dotfiles);
     const before = readFileSync(settings(), "utf8");
-    mkdirSync(own(), { mode: 0o700 });
-    chmodSync(join(home, ".claude"), 0o500);
-    try { expect(run([]).exitCode).toBe(1); } finally { chmodSync(join(home, ".claude"), 0o700); }
+    writeFileSync(join(dotfiles, "settings.json"), before);
+    rmSync(settings());
+    symlinkSync(join(dotfiles, "settings.json"), settings());
+    chmodSync(dotfiles, 0o500);
+    try { expect(run([]).exitCode).toBe(1); } finally { chmodSync(dotfiles, 0o700); }
     expect(existsSync(join(own(), "install.json"))).toBe(true);
     expect(readFileSync(settings(), "utf8")).toBe(before);
     install("--remove");
     expect(readFileSync(settings(), "utf8")).toBe(before);
+    expect(lstatSync(settings()).isSymbolicLink()).toBe(true);
     expect(existsSync(own())).toBe(false);
+  });
+
+  it("refuses a settings.json that links to a missing file, and leaves the link", () => {
+    rmSync(settings());
+    symlinkSync(join(home, "dotfiles", "settings.json"), settings());
+    expect(run([]).exitCode).toBe(1);
+    expect(lstatSync(settings()).isSymbolicLink()).toBe(true);
+    expect(existsSync(own())).toBe(false);
+  });
+
+  it("leaves a statusline-tee.sh it did not write when there is no install to undo", () => {
+    mkdirSync(own());
+    writeFileSync(tee(), "#!/bin/sh\necho mine\n");
+    install("--remove");
+    expect(readFileSync(tee(), "utf8")).toBe("#!/bin/sh\necho mine\n");
+  });
+
+  it("takes one change at a time across processes, and takes over a lock its holder left long ago", () => {
+    const lock = join(home, ".claude", ".herdr-statusline.lock");
+    const before = readFileSync(settings(), "utf8");
+    mkdirSync(lock);
+    const refused = run([]);
+    expect(refused.exitCode).toBe(1);
+    expect(refused.stderr).toContain("in progress");
+    expect(readFileSync(settings(), "utf8")).toBe(before);
+    const old = new Date(Date.now() - 10 * 60_000);
+    utimesSync(lock, old, old);
+    install();
+    expect(existsSync(lock)).toBe(false);
+    install("--remove");
+    expect(readFileSync(settings(), "utf8")).toBe(before);
+  });
+
+  it("without a record, removes only the capture helper it ships, never one of the user's by the same name", () => {
+    mkdirSync(own());
+    writeFileSync(join(own(), "statusline-capture.ts"), "console.log('mine');\n");
+    install("--remove");
+    expect(readFileSync(join(own(), "statusline-capture.ts"), "utf8")).toBe("console.log('mine');\n");
   });
 });

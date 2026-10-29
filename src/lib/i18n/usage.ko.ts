@@ -87,4 +87,5 @@ export const USAGE_KO: Record<string, string> = {
   "For networks where Claude's usage API is refused. Wraps Claude Code's status line on this PC and keeps only the limits; turning it off puts Claude's settings back.": "Claude 사용량 API가 거부되는 네트워크용입니다. 이 PC에서 Claude Code 상태 줄을 감싸 한도만 보관하고, 끄면 Claude 설정을 그대로 되돌립니다.",
   "Read from Claude's status line instead": "대신 Claude 상태 줄에서 읽기",
   "Could not change Claude's status line": "Claude 상태 줄을 바꾸지 못했어요",
+  "On. Claude's limits show once Claude Code next draws its status line.": "켜졌어요. Claude Code가 다음에 상태 줄을 그리면 한도가 표시돼요.",
 };

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { ProviderUsage, StatuslineState, UsageProviderId, UsageReport, UsageWindow } from "../../shared/protocol.ts";
-import { fetchStatusline, fetchUsage, setStatusline } from "./api.ts";
+import { ApiError, fetchStatusline, fetchUsage, setStatusline } from "./api.ts";
 import type { UsageCount, UsageGlance } from "./settings.ts";
 import { t } from "./i18n.ts";
 import { usePageVisible } from "./visibility.ts";
@@ -180,7 +180,8 @@ export function useStatuslineSwitch(watch: boolean) {
     try {
       setState(await setStatusline(enabled));
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : t("Could not change Claude's status line"));
+      // the server's own words (what was refused, and why), without the URL and status in front
+      setError(cause instanceof ApiError ? cause.detail : t("Could not change Claude's status line"));
     } finally {
       setBusy(false);
       window.dispatchEvent(new Event(STATUSLINE_CHANGED));

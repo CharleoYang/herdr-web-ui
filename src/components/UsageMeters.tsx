@@ -66,6 +66,8 @@ function Provider({ usage, now, count, watching }: { usage: ProviderUsage; now: 
         {t("Read from Claude's status line instead")}
       </button>}
       {statusline.error && <p className="usage-note is-problem" role="alert">{statusline.error}</p>}
+      {/* turned on here, the numbers come once Claude next draws its line: say so instead of leaving "expired" alone */}
+      {statusline.state?.installed && usage.problem === "expired" && <p className="usage-note" role="status">{t("On. Claude's limits show once Claude Code next draws its status line.")}</p>}
       {usage.windows.map((window, index) => {
         const reset = formatResetIn(window.resets_at, now);
         const value = meterPercent(window, count);
