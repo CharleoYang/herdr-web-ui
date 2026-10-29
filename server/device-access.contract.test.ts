@@ -872,6 +872,35 @@ it("the paths under a pane's folder and a plugin run's output are refused to a w
   }
 });
 
+it("a repository's checkouts are refused to a watching device on this PC, its alias and another PC's route, and answered for a driving one (#2250)", async () => {
+  const root = mkdtempSync(join(tmpdir(), "herdr-worktree-list-"));
+  const store = new DeviceStore(root);
+  const watch = store.pair(store.startPairing().code, "Watch", "watch")!;
+  store.match(watch.token);
+  const drive = store.pair(store.startPairing().code, "Drive", "drive")!;
+  store.match(drive.token);
+  const server = createServer({ port: 0, stateDir: root, token: "test-worktree-list", tailscaleOwner: null });
+  const base = `http://127.0.0.1:${server.port}`;
+  // every checkout of the workspace's repository: paths and branches, those not open in herdr too
+  const route = "worktree/list?workspace_id=ovis-test-absent";
+  try {
+    for (const prefix of ["api", "api/machines/local", "api/machines/pc1"]) {
+      const path = `${prefix}/${route}`;
+      const response = await fetch(`${base}/${path}`, { headers: { cookie: `ovis_device=${watch.token}` } });
+      expect([path, response.status, ((await response.json()) as { error: { code: string } }).error.code]).toEqual([path, 403, "read_only"]);
+    }
+    // a driving device reaches the route: this PC asks herdr, its alias too, and no such PC is connected
+    const driving = { cookie: `ovis_device=${drive.token}` };
+    for (const prefix of ["api", "api/machines/local"]) {
+      const response = await fetch(`${base}/${prefix}/${route}`, { headers: driving });
+      expect([prefix, response.status, ((await response.json()) as { error: { code: string } }).error.code]).toEqual([prefix, 404, "workspace_not_found"]);
+    }
+    expect((await fetch(`${base}/api/machines/pc1/${route}`, { headers: driving })).status).toBe(503);
+  } finally {
+    server.stop(); rmSync(root, { recursive: true, force: true });
+  }
+});
+
 it("revoking a paired device removes its persistent push subscription", async () => {
   const root = mkdtempSync(join(tmpdir(), "herdr-device-push-"));
   const server = createServer({ port: 0, stateDir: root, token: "test-push-owner", tailscaleOwner: null, machines: false, pushLoopbackHttp: true });

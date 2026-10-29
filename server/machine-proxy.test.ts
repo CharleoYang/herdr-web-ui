@@ -11,6 +11,7 @@ const PLAN_CARD = { id: "claude-plan:abc", agent: "claude", kind: "plan", title:
 const historyAsked: (string | null)[] = [];
 const commandsAsked: string[] = [];
 const filesAsked: string[] = [];
+const worktreesAsked: string[] = [];
 const faviconAsked: { search: string; authorization: string | null; cookie: string | null }[] = [];
 const diffAsked: { path: string; search: string; authorization: string | null; cookie: string | null; forwarded: string | null }[] = [];
 const remote = Bun.serve({
@@ -32,6 +33,10 @@ const remote = Bun.serve({
     if (path === "/api/pane/files" || path === "/api/plugin/action") {
       filesAsked.push(path);
       return Response.json(path === "/api/pane/files" ? { files: [".env.SECRET"] } : { log_id: "plugin-log-1", status: "failed", exit_code: 1, output: "SECRET", opened_pane_id: null });
+    }
+    if (path === "/api/worktree/list") {
+      worktreesAsked.push(path);
+      return Response.json({ source: { repo_key: "repo" }, worktrees: [{ path: "/work-wt/SECRET", branch: "SECRET", open_workspace_id: null }] });
     }
     if (path === "/api/fs/favicon") {
       faviconAsked.push({ search: new URL(request.url).search, authorization: request.headers.get("authorization"), cookie: request.headers.get("cookie") });
@@ -126,6 +131,17 @@ it("never asks a PC for the paths under a pane's folder or a plugin run's output
     expect([path, driven.status, JSON.stringify(await driven.json()).includes("SECRET")]).toEqual([path, 200, true]);
   }
   expect(filesAsked).toEqual(["/api/pane/files", "/api/plugin/action"]);
+});
+
+it("never asks a PC for a repository's checkouts for a watching device (#2250)", async () => {
+  const url = "http://127.0.0.1/api/machines/pc1/worktree/list?workspace_id=w1";
+  const watched = await handleMachineRequest(new Request(url), manager, undefined, undefined, true);
+  expect([watched.status, ((await watched.json()) as { error: { code: string } }).error.code]).toEqual([403, "read_only"]);
+  expect(worktreesAsked).toEqual([]);
+  // a driving device gets the PC's answer
+  const driven = await handleMachineRequest(new Request(url), manager);
+  expect([driven.status, JSON.stringify(await driven.json()).includes("SECRET")]).toEqual([200, true]);
+  expect(worktreesAsked).toEqual(["/api/worktree/list"]);
 });
 
 it("forwards conversation images and complete output, while rejecting arbitrary nested paths", async () => {
