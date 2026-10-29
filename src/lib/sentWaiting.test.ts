@@ -1,10 +1,25 @@
 import { describe, expect, it } from "bun:test";
 
-import { currentWaitingSends, forgetWaitingSends, rememberWaitingSend, settleWaitingSends, transcriptHolds, waitingBaseline, waitingKey, waitingText } from "./sentWaiting.ts";
+import { currentWaitingSends, expireWaitingSends, forgetWaitingSends, rememberWaitingSend, settleWaitingSends, WAITING_SEND_MS, waitingBaseline, waitingKey } from "./sentWaiting.ts";
 import type { ConversationTurn } from "../../shared/protocol.ts";
+import type { Machine } from "../../shared/machines.ts";
+import { paneLifetimes } from "./paneLifetime.ts";
 
 const user = (text: string, at = 2): ConversationTurn => ({ role: "user", ts: new Date(at).toISOString(), parts: [{ kind: "text", text }] });
 const assistant = (text: string): ConversationTurn => ({ ...user(text), role: "assistant" });
+
+// through the store, as ChatView settles it: a send the chat had shown no turns for
+let probes = 0;
+function transcriptHolds(send: { text: string; at: number }, turns: readonly ConversationTurn[]): boolean {
+  const key = waitingKey("local", `probe-${++probes}`);
+  try {
+    rememberWaitingSend(key, send.text, send.at);
+    settleWaitingSends(key, turns, send.at + 1);
+    return currentWaitingSends(key).length === 0;
+  } finally { forgetWaitingSends(key); }
+}
+const waitingText = (send: { text: string; at: number } | null, turns: readonly ConversationTurn[]): string | null =>
+  send === null || transcriptHolds(send, turns) ? null : send.text;
 
 describe("waitingText", () => {
   const send = { pane: "p1", text: "还有发消息提示：未确认。重新发送前请检查终端。", at: 1 };
@@ -73,10 +88,10 @@ describe("waitingText", () => {
     const pc = Date.parse("2026-10-29T10:00:00Z");
     try {
       const earlier = user("earlier", pc);
-      settleWaitingSends(key, [earlier]);
       // the phone's clock is a minute ahead of the PC that writes the transcript
-      rememberWaitingSend(key, "hello", pc + 60_000, waitingBaseline(key));
-      settleWaitingSends(key, [earlier, user("hello", pc + 800)]);
+      settleWaitingSends(key, [earlier], pc + 60_000 + 200);
+      rememberWaitingSend(key, "hello", pc + 60_000 + 500, waitingBaseline(key));
+      settleWaitingSends(key, [earlier, user("hello", pc + 800)], pc + 60_000 + 900);
       expect(currentWaitingSends(key)).toEqual([]);
     } finally { forgetWaitingSends(key); }
   });
@@ -86,10 +101,10 @@ describe("waitingText", () => {
     const pc = Date.parse("2026-10-29T10:00:00Z");
     try {
       const earlier = user("repeat", pc);
-      settleWaitingSends(key, [earlier]);
       // a browser clock a minute behind would take the old turn for the new one
-      rememberWaitingSend(key, "repeat", pc - 60_000, waitingBaseline(key));
-      settleWaitingSends(key, [earlier]);
+      settleWaitingSends(key, [earlier], pc - 60_000 + 200);
+      rememberWaitingSend(key, "repeat", pc - 60_000 + 500, waitingBaseline(key));
+      settleWaitingSends(key, [earlier], pc - 60_000 + 700);
       expect(currentWaitingSends(key).map((send) => send.text)).toEqual(["repeat"]);
       settleWaitingSends(key, [earlier, user("repeat", pc + 5_000)]);
       expect(currentWaitingSends(key)).toEqual([]);
@@ -143,5 +158,51 @@ describe("waitingText", () => {
     expect(transcriptHolds(send, [{ ...user(send.text), ts: null }])).toBe(false);
     expect(transcriptHolds(send, [{ ...user(send.text), ts: "invalid" }])).toBe(false);
     expect(transcriptHolds({ ...send, text: "Please review the complete implementation and report issues", at: 10 }, [user("Please review the complete implementation…", 9)])).toBe(false);
+  });
+
+  it("keeps a send waiting past an identical turn written before it that the chat had not shown yet", () => {
+    const key = waitingKey("local", "refresh-lag");
+    try {
+      // the chat last showed a turn at 1000, read at 1500; "repeat" was written at 2000 and sent again at 3000
+      settleWaitingSends(key, [user("earlier", 1000)], 1500);
+      rememberWaitingSend(key, "repeat", 3000, waitingBaseline(key));
+      settleWaitingSends(key, [user("earlier", 1000), user("repeat", 2000)], 3200);
+      expect(currentWaitingSends(key).map((send) => send.text)).toEqual(["repeat"]);
+      settleWaitingSends(key, [user("earlier", 1000), user("repeat", 2000), user("repeat", 3500)], 3600);
+      expect(currentWaitingSends(key)).toEqual([]);
+    } finally { forgetWaitingSends(key); }
+  });
+
+  it("waits for the text that was typed: paste markers the composer strips are not part of it", () => {
+    const key = waitingKey("local", "paste-markers");
+    try {
+      rememberWaitingSend(key, "\u001b[200~/cost\u001b[201~", 1);
+      expect(currentWaitingSends(key)).toEqual([]);
+      rememberWaitingSend(key, "hello\u001b[201~", 1);
+      settleWaitingSends(key, [user("hello", 2)]);
+      expect(currentWaitingSends(key)).toEqual([]);
+    } finally { forgetWaitingSends(key); }
+  });
+
+  it("stops saying a send is on its way once its turn has not come for a minute", () => {
+    const key = waitingKey("local", "expired");
+    try {
+      rememberWaitingSend(key, "interrupted in the terminal", 1_000);
+      expireWaitingSends(key, 1_000 + WAITING_SEND_MS - 1);
+      expect(currentWaitingSends(key)).toHaveLength(1);
+      expireWaitingSends(key, 1_000 + WAITING_SEND_MS);
+      expect(currentWaitingSends(key)).toEqual([]);
+    } finally { forgetWaitingSends(key); }
+  });
+
+  it("lets a replaced herdr's waiting sends go: the new herdr gives the same pane ids to other panes", () => {
+    const roster = (lifetime: string) => [{ id: "local", snapshot: { panes: [], herdr_lifetime: lifetime } } as unknown as Machine];
+    const key = waitingKey("local", "w1:p1");
+    try {
+      paneLifetimes.observe(roster("waiting-herdr-a"), (item) => item.pane_id);
+      rememberWaitingSend(key, "deploy it", Date.now());
+      paneLifetimes.observe(roster("waiting-herdr-b"), (item) => item.pane_id);
+      expect(currentWaitingSends(key)).toEqual([]);
+    } finally { forgetWaitingSends(key); }
   });
 });

@@ -144,11 +144,10 @@ it.each([
   }
 });
 
-it.each(["refusal", "rejection"] as const)("an already-empty box does not confirm a connection %s", async (kind) => {
-  const pane = `empty-input-${kind}`, key = waitingKey("local", pane);
+it.each(["refusal", "rejection"] as const)("a connection %s leaves no waiting line", async (kind) => {
+  const pane = `closed-${kind}`, key = waitingKey("local", pane);
   const error = new Error("herdr closed the connection before answering agent.prompt");
   const actions = sends(pane, { ok: false, code: "closed", message: error.message }, [], {
-    ...{ readDraft: async () => "❯" },
     setPromptRefresh: () => {},
     submitComposerMessage: () => kind === "rejection" ? Promise.reject(error) : Promise.resolve({ ok: false, code: "closed", message: error.message }),
   });
