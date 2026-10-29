@@ -3368,6 +3368,12 @@ The values are the ones in `src/styles.css`.
   so a running agent does not look frozen.
 - Under reduced motion the voice pill swaps its bars for one level bar updated at 4 Hz and drops
   the ring and the morph; the **Recording** label and the timer stay.
+- Until the app's script runs, `index.html` draws one loading status in `#root` (`.boot`, #2329): a
+  28px ring stepped round once per `--dur-spin` on the saved theme's surface, centred, no visible
+  words (a visually hidden "Loading Ovis", the ring `aria-hidden`), shown only after 400ms so a fast start does not flash it, and
+  still under reduced motion. React's first frame replaces it. It follows T3 Code's `index.html`
+  boot shell, which React also replaces; Ovis draws a spinner rather than a still logo, because
+  on a slow link a still picture is what looked frozen.
 
 ## 7. Depth & Surface
 
