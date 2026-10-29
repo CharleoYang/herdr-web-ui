@@ -36,6 +36,7 @@ import type { Telemetry } from "../telemetry.ts";
 import type { UsageLoginService } from "../usage-login.ts";
 import type { UsageService } from "../usage.ts";
 import { type Client, send } from "./connections.ts";
+import type { TelemetryIngress, TelemetrySurface } from "../../shared/telemetry.ts";
 
 /** a focus or reconnect re-reads the panes for the daily active message at most this often */
 const VISIT_READ_MS = 10 * 60_000;
@@ -85,6 +86,8 @@ export function createStatusHub<Owner, Lease>({ options, devices, preferences, c
     lookupTitle: async (paneId) => {
       return paneTitle(await paneGet(paneId));
     },
+    // each pane alert that reached a device, for the daily active message's usage
+    onAlertDelivered: () => options.telemetry?.tally("alerts_delivered"),
   });
   // a mute made while an alert waits calls it off, so an unmute cannot resurrect an old finish
   const stopMutes = preferences.subscribe(() => push.mutesChanged());
@@ -307,7 +310,7 @@ export function createStatusHub<Owner, Lease>({ options, devices, preferences, c
    * VISIT_READ_MS (in between they still count the day, with the kinds already known).
    */
   let visitReadAt = -Infinity;
-  function countVisit(snapshot?: ReturnType<typeof clientSnapshot>): void {
+  function countVisit(snapshot?: ReturnType<typeof clientSnapshot>, visit: { surface?: TelemetrySurface; ingress?: TelemetryIngress } = {}): void {
     const telemetry = options.telemetry;
     if (!telemetry?.counting()) return;
     let agents: Promise<(string | null)[]> | (string | null)[] = [];
@@ -315,7 +318,7 @@ export function createStatusHub<Owner, Lease>({ options, devices, preferences, c
       visitReadAt = Date.now();
       agents = (snapshot ?? clientSnapshot()).then((read) => read.panes.map((pane) => resolveAgent(pane).agent));
     }
-    void telemetry.active(agents)
+    void telemetry.active(agents, visit)
       .catch((error) => console.error(`telemetry: the visit was not counted (${error instanceof Error ? error.message : String(error)})`));
   }
   /** A pane's status frame: every one says whether the pane waits on its turn's background work. */
