@@ -1665,7 +1665,7 @@ export const ChatView = memo(function ChatView({ paneId, presentationKey, finish
         if (olderGeneration.current === generation) loadingOlder.current = false;
       }
     });
-  }, [fetchPaneConversation, olderCursor, paneId, conversationRefresh]);
+  }, [fetchPaneConversation, olderCursor, paneId, pagePrompts, conversationRefresh]);
 
   // Reconcile the estimated prepend with the actual reader row, through the list's
   // own scroll command. No scrollHeight delta or second virtualizer owns the position.
