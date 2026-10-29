@@ -50,8 +50,10 @@ function newerThanSend(send: WaitingSend, at: number, key: string): boolean {
   if (after === null) return at >= send.at;
   if (after.keys.has(key)) return false;
   // written before the send, though the chat had not shown it yet: older than the send by any clock.
-  // Strictly later: the send's own turn is written after its `at`, which is taken before submitting
-  return after.latest === null || (at >= after.latest && at + (after.takenAt - after.latest) > send.at);
+  // Strictly later: the send's own turn is written after its `at`, which is taken before submitting;
+  // a transcript that keeps whole seconds (Grok's) may record it up to a second early
+  const coarse = at % 1000 === 0 ? 1000 : 0;
+  return after.latest === null || (at >= after.latest && at + coarse + (after.takenAt - after.latest) > send.at);
 }
 
 function turnMatches(send: WaitingSend, turn: Turn, key: string): boolean {

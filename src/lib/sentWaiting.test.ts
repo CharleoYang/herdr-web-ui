@@ -163,12 +163,12 @@ describe("waitingText", () => {
   it("keeps a send waiting past an identical turn written before it that the chat had not shown yet", () => {
     const key = waitingKey("local", "refresh-lag");
     try {
-      // the chat last showed a turn at 1000, read at 1500; "repeat" was written at 2000 and sent again at 3000
+      // the chat last showed a turn at 1000, read at 1500; "repeat" was written at 2037 and sent again at 3000
       settleWaitingSends(key, [user("earlier", 1000)], 1500);
       rememberWaitingSend(key, "repeat", 3000, waitingBaseline(key));
-      settleWaitingSends(key, [user("earlier", 1000), user("repeat", 2000)], 3200);
+      settleWaitingSends(key, [user("earlier", 1000), user("repeat", 2037)], 3200);
       expect(currentWaitingSends(key).map((send) => send.text)).toEqual(["repeat"]);
-      settleWaitingSends(key, [user("earlier", 1000), user("repeat", 2000), user("repeat", 3500)], 3600);
+      settleWaitingSends(key, [user("earlier", 1000), user("repeat", 2037), user("repeat", 3500)], 3600);
       expect(currentWaitingSends(key)).toEqual([]);
     } finally { forgetWaitingSends(key); }
   });
@@ -210,13 +210,13 @@ describe("waitingText", () => {
     const key = waitingKey("local", "assistant-latest");
     try {
       // the chat showed a user turn at 1000 and the agent's answer at 100000, read at 101000;
-      // "yes" was typed in the terminal at 150000, then sent from Chat at 151000
+      // "yes" was typed in the terminal at 150123, then sent from Chat at 151123
       const shownTurns = [user("earlier", 1_000), { ...assistant("answer"), ts: new Date(100_000).toISOString() }];
       settleWaitingSends(key, shownTurns, 101_000, true);
-      rememberWaitingSend(key, "yes", 151_000, waitingBaseline(key));
-      settleWaitingSends(key, [...shownTurns, user("yes", 150_000)], 152_000, true);
+      rememberWaitingSend(key, "yes", 151_123, waitingBaseline(key));
+      settleWaitingSends(key, [...shownTurns, user("yes", 150_123)], 152_000, true);
       expect(currentWaitingSends(key).map((send) => send.text)).toEqual(["yes"]);
-      settleWaitingSends(key, [...shownTurns, user("yes", 150_000), user("yes", 151_500)], 153_000, true);
+      settleWaitingSends(key, [...shownTurns, user("yes", 150_123), user("yes", 151_500)], 153_000, true);
       expect(currentWaitingSends(key)).toEqual([]);
     } finally { forgetWaitingSends(key); }
   });
@@ -241,8 +241,27 @@ describe("waitingText", () => {
       // the waiting list changed, the transcript did not
       settleWaitingSends(key, [user("earlier", 1_000)], 3_200, true);
       rememberWaitingSend(key, "repeat", 3_300, waitingBaseline(key));
-      settleWaitingSends(key, [user("earlier", 1_000), user("repeat", 2_000)], 3_400, true);
+      settleWaitingSends(key, [user("earlier", 1_000), user("repeat", 2_037)], 3_400, true);
       expect(currentWaitingSends(key).map((send) => send.text)).toEqual(["first follow-up", "repeat"]);
+    } finally { forgetWaitingSends(key); }
+  });
+
+  it("settles a send by its own turn when the transcript keeps whole seconds", () => {
+    const key = waitingKey("local", "whole-seconds");
+    try {
+      settleWaitingSends(key, [user("earlier", 1_000)], 1_500, true);
+      rememberWaitingSend(key, "next", 2_500, waitingBaseline(key));
+      // written at 2600, kept as 2000
+      settleWaitingSends(key, [user("earlier", 1_000), user("next", 2_000)], 2_700, true);
+      expect(currentWaitingSends(key)).toEqual([]);
+    } finally { forgetWaitingSends(key); }
+  });
+
+  it("records no baseline for a chat that has not read its transcript", () => {
+    const key = waitingKey("local", "unread");
+    try {
+      settleWaitingSends(key, [], 1_000, false);
+      expect(waitingBaseline(key)).toBeNull();
     } finally { forgetWaitingSends(key); }
   });
 });

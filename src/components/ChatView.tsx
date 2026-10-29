@@ -2239,17 +2239,19 @@ export const ChatView = memo(function ChatView({ paneId, presentationKey, finish
   // queue lives in the store, so a reader who goes to another tab and comes back still sees it.
   const waitKey = waitingKey(machineId, paneId);
   const sentWaiting = useSyncExternalStore(subscribeWaitingSends, () => currentWaitingSends(waitKey));
-  // before paint: a frame never shows a send's turn and its waiting bubble together
+  // before paint: a frame never shows a send's turn and its waiting bubble together. Only a
+  // conversation read that answered says what the chat holds: a failed read leaves it unknown
+  const turnsRead = loaded && error === null && state.source === "conversation";
   useLayoutEffect(() => {
-    settleWaitingSends(waitKey, state.turns, Date.now(), loaded);
-  }, [loaded, sentWaiting, state.turns, waitKey]);
+    settleWaitingSends(waitKey, state.turns, Date.now(), turnsRead);
+  }, [sentWaiting, state.turns, turnsRead, waitKey]);
   const waitWords = useAnnouncedText(!loaded && error === null ? t("Loading conversation…") : waiting ? t("Waiting for the PC…") : null);
   const retryRead = useCallback(() => { setFailures(0); conversationRefresh.refresh(); }, [conversationRefresh]);
   const footer = <>
       <p className={waitWords === null ? "visually-hidden" : "chat-inline-state"} role="status">{waitWords}</p>
       {/* sent, and the agent has not started its turn for it yet: the user's own words where their
           turn will be, quieter, and what they wait for under them */}
-      {sentWaiting.length > 0 && <div className="chat-sent-waiting-list" role="status">
+      {sentWaiting.length > 0 && state.source === "conversation" && <div className="chat-sent-waiting-list" role="status">
         {sentWaiting.map((send) => {
           const chars = Array.from(send.text);
           return <p key={send.id} className="chat-sent-waiting">
