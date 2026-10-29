@@ -217,8 +217,8 @@ async function setup(label: string, agent = "claude", screen = "› Message\n", 
 }
 
 describe("Ovis-origin Pi transcript receipts", () => {
-  const piLine = (id: string, parentId: string | null, role: string, text: string) => JSON.stringify({
-    type: "message", id, parentId, timestamp: new Date().toISOString(), message: { role, content: [{ type: "text", text }], timestamp: Date.now() },
+  const piLine = (id: string, parentId: string | null, role: string, text: string, stamp = Date.now()) => JSON.stringify({
+    type: "message", id, parentId, timestamp: new Date().toISOString(), message: { role, content: [{ type: "text", text }], timestamp: stamp },
   }) + "\n";
   const piFile = (name: string) => {
     const path = join(root, `${name}-${crypto.randomUUID()}.jsonl`);
@@ -253,6 +253,48 @@ describe("Ovis-origin Pi transcript receipts", () => {
     expect(resumed.seen.flatMap((frame) => frame.type === "pending-messages" ? frame.removed ?? [] : [])
       .filter((item: { id: string }) => item.id === receipt.id)).toHaveLength(1);
     expect(f.bytes()).toBe(bytes);
+  }, 20_000);
+
+  it("does not confirm a receipt from the same text Pi stamped before Ovis pressed Enter", async () => {
+    const transcript = piFile("pi-stamped");
+    const f = await setup("pi-stamped", "pi", "› Message\n", {}, false, transcript);
+    f.socket.send({ type: "conversation-watch", pane_id: f.pane, enabled: true });
+    // typed into Pi's own terminal and queued there before either send below
+    const typedEarlier = Date.now() - 1000;
+    const receipts: PendingMessage[] = [];
+    for (const id of [960, 961]) {
+      const from = f.socket.seen.length;
+      f.socket.send({ type: "submit", id, pane_id: f.pane, text: "same", payload: "same", delivery: "immediate" });
+      expect((await f.socket.result(id)).ok).toBe(true);
+      const sent = await f.socket.wait((frame) => frame.type === "pending-messages" && frame.pane_id === f.pane
+        && frame.messages.some((item: PendingMessage) => item.request_id === id && item.error?.code === "pi_transcript_pending"), from);
+      receipts.push(sent.messages.find((item: PendingMessage) => item.request_id === id));
+    }
+    const [first, second] = receipts as [PendingMessage, PendingMessage];
+    // One write holds the earlier terminal record and Ovis's first one: the read that confirms the
+    // first receipt also saw the terminal's record, which must not confirm the second.
+    appendFileSync(transcript, piLine("external", "a0", "user", "same", typedEarlier) + piLine("ours-1", "external", "user", "same"));
+    const settled = await f.removed(first.id, "consumed");
+    expect(settled.removed.map((item: { id: string }) => item.id)).toEqual([first.id]);
+    expect(settled.messages.map((item: PendingMessage) => [item.id, item.error?.code])).toEqual([[second.id, "pi_transcript_pending"]]);
+    appendFileSync(transcript, piLine("ours-2", "ours-1", "user", "same"));
+    await f.removed(second.id, "consumed");
+  }, 20_000);
+
+  it("settles a receipt as unconfirmed when only an earlier-stamped record has its text", async () => {
+    const transcript = piFile("pi-earlier");
+    const f = await setup("pi-earlier", "pi", "\u203a Message\n", {}, false, transcript);
+    f.socket.send({ type: "conversation-watch", pane_id: f.pane, enabled: true });
+    const typedEarlier = Date.now() - 1000;
+    f.socket.send({ type: "submit", id: 962, pane_id: f.pane, text: "same", payload: "same", delivery: "immediate" });
+    expect((await f.socket.result(962)).ok).toBe(true);
+    await f.socket.wait((frame) => frame.type === "pending-messages" && frame.pane_id === f.pane
+      && frame.messages.some((item: PendingMessage) => item.request_id === 962 && item.error?.code === "pi_transcript_pending"));
+    const from = f.socket.seen.length;
+    appendFileSync(transcript, piLine("external", "a0", "user", "same", typedEarlier));
+    const settled = await f.socket.wait((frame) => frame.type === "pending-messages" && frame.pane_id === f.pane
+      && frame.messages.some((item: PendingMessage) => item.request_id === 962 && item.error?.code === "transcript_unconfirmed"), from);
+    expect(settled.removed ?? []).toEqual([]);
   }, 20_000);
 
   it("binds a production-shaped unwritten filename to its later header UUID", async () => {
@@ -658,7 +700,7 @@ describe("connection-owned pending input", () => {
     } finally { session.mockRestore(); }
   }, 30_000);
 
-  it("commits a message whose hookless Claude session cannot be read only after its own paste is in (control #2125)", async () => {
+  it("leaves a message uncertain, without its Enter, when its hookless Claude session cannot be read after its own paste (#2279)", async () => {
     const f = await setup("claude-session-unread-after-paste");
     // the recorder runs as `claude`; its PID record is supplied, and can no longer be read once the bridge pasted
     const session = spyOn(claudeStore, "claudeForegroundSession").mockImplementation(async (processes) =>
@@ -668,9 +710,12 @@ describe("connection-owned pending input", () => {
       const settled = f.socket.event((frame) => frame.messages.some((entry) => entry.id === message.id && (entry.state === "held" || entry.state === "uncertain"))
         || frame.removed?.some((entry) => entry.id === message.id) === true);
       await f.state("idle");
-      expect((await settled).removed ?? []).toContainEqual({ id: message.id, outcome: "sent" }); // neither held nor left uncertain
-      await f.waitBytes("\r");
-      expect(f.bytes()).toBe(`${paste(message.text)}\r`); // Enter follows its own paste, once
+      // an Enter could commit the paste in another session: the row is left for the user to check
+      expect((await settled).messages).toContainEqual(expect.objectContaining({
+        id: message.id, state: "uncertain", error: expect.objectContaining({ code: "submit_changed" }),
+      }));
+      await f.waitBytes(paste(message.text));
+      expect(f.bytes()).toBe(paste(message.text)); // the paste only: settled without its Enter
     } finally { session.mockRestore(); }
   }, 30_000);
 

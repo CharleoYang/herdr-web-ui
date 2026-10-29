@@ -23,6 +23,7 @@
     "generate:types": "bun run scripts/generate-protocol-types.ts",
     "generate:themes": "bun run scripts/generate-themes.ts",
     "generate:case-folding": "bun run scripts/generate-case-folding.ts",
+    "generate:confusables": "bun run scripts/generate-confusables.ts",
     "build:remote": "bun run scripts/build-remote-bundle.ts",
     "build:site": "bun scripts/build-site.ts",
     "test:ssh": "bun run scripts/ssh-integration.ts"

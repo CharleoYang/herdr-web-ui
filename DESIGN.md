@@ -2542,7 +2542,13 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   other than Pi, actual Enter delivery removes the pending row and refreshes the transcript. For
   a message submitted from Ovis Chat to Pi, Enter changes it to a read-only **Sent to Pi ·
   waiting for transcript** user bubble. Only a matching durable user record appended beyond the byte
-  boundary captured on that exact Pi file/session and extending its captured leaf removes it.
+  boundary captured on that exact Pi file/session and extending its captured leaf removes it, and
+  only a record Pi stamped no earlier than that capture: Pi stamps a message when it is submitted,
+  so an earlier stamp is the same text typed into Pi before Ovis's Enter, or a wall clock set back
+  in between. When only such a record has the text, the receipt becomes **transcript confirmation
+  unavailable** (dismissible) instead of confirmed or waiting for good. Pi exposes no submission
+  id, so the same text submitted elsewhere after that Enter still confirms the receipt, and so does
+  the same text typed while Pi compacts: Pi stamps what it stages then only when the stage drains.
   Bounded byte-exact tail checks assume Pi's append-only history contract, not arbitrary older
   history corruption detection; changed inode, header, anchor tail or branch fails closed. Pi may
   stage input while status says idle/done during automatic compaction, so status and screen text are
@@ -2963,6 +2969,19 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   sign-in status with an existing status-token dot, without badge pills. Within-provider reorder
   and visibility controls stay in fixed columns; hidden rows remain listed but fade. Empty lists
   show one dim sentence.
+- An expired Claude or Codex sign-in on this PC gets one **Sign in again** button: under the row's status in
+  Settings, and under **Sign-in expired.** in the usage popover (whose note then drops "Open X to
+  renew it"). It runs Add account's terminal-tab sign-in, but in that account's own credential home
+  (its `~/.claude-<name>`, CODEX_HOME or the default home), replacing the expired credential instead
+  of adding an account: the request names the account by the key the list showed, and the server
+  finds its home among the sign-ins on disk at that moment, never from a path the browser sends,
+  and the tab's command sets that home (or removes an inherited one, for the default home). A hub's
+  account (its sign-in lives in the hub), the other providers (their CLIs may keep a sign-in apart
+  from the one read here: Cursor's app, Copilot's editor; Antigravity signs in only in its app) and
+  a watching device get no button, and the popover keeps its "Open X" note for them. A refusal shows under the button; a
+  started sign-in closes the popover or Settings and selects the new tab. This follows Claude
+  Code's `/login` and `codex login`, which re-authenticate the config home they run in rather than
+  adding an account.
 - The global Add opens the shared `.modal` (a bottom sheet at 640px and below), with the existing
   focus trap, Escape/close and return focus. Its small stepper leads through provider (Claude, Codex,
   Cursor, GitHub Copilot, Grok, Antigravity, OpenCode, then Hub, in server discovery order),

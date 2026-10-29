@@ -6,8 +6,9 @@ import "./UsageMeters.css";
 import type { ProviderUsage, UsageWindow } from "../../shared/protocol.ts";
 import { useT, type Translate } from "../lib/i18n.ts";
 import { useSettings, type UsageCount, type UsageGlance } from "../lib/settings.ts";
-import { formatPercent, formatResetIn, glanceWindow, HIGH_PERCENT, meterPercent, meterText, orderProviders, PROVIDER_MARK, PROVIDER_NAME, usageName, useStatuslineSwitch, useUsage, windowLabel } from "../lib/usage.ts";
+import { canSignInAgain, formatPercent, formatResetIn, glanceWindow, HIGH_PERCENT, meterPercent, meterText, orderProviders, PROVIDER_MARK, PROVIDER_NAME, usageName, useStatuslineSwitch, useUsage, windowLabel } from "../lib/usage.ts";
 import { AgentMark } from "./AgentMark.tsx";
+import { UsageSignInAgain } from "./UsageLocalLogin.tsx";
 
 /** chips the strip holds when its width cannot be measured (before layout, or a test without one) */
 const FALLBACK_CHIPS = 4;
@@ -17,9 +18,10 @@ function level(window: UsageWindow | null): string {
 }
 
 /** Why the numbers shown are old or missing; null while they are fresh. */
-function problemText(t: Translate, usage: ProviderUsage): string | null {
+function problemText(t: Translate, usage: ProviderUsage, offered: boolean): string | null {
   const name = PROVIDER_NAME[usage.id];
-  return usage.problem === "expired" ? t("Sign-in expired. Open {name} to renew it.", { name })
+  // where the popover offers Sign in again, it need not say how
+  return usage.problem === "expired" ? offered ? t("Sign-in expired.") : t("Sign-in expired. Open {name} to renew it.", { name })
     : usage.problem === "rate_limited" ? t("{name} asked to slow down. These are the last numbers.", { name })
     : usage.problem === "failed" ? t("{name} could not be reached.", { name })
     : usage.problem === "locked" ? t("The server cannot open the keychain holding this sign-in.")
@@ -47,11 +49,12 @@ function Chip({ usage, count, glance }: { usage: ProviderUsage; count: UsageCoun
   );
 }
 
-function Provider({ usage, now, count, watching }: { usage: ProviderUsage; now: number; count: UsageCount; watching: boolean }) {
+function Provider({ usage, now, count, onLocalLogin, watching }: { usage: ProviderUsage; now: number; count: UsageCount; onLocalLogin: ((paneId: string) => void) | undefined; watching: boolean }) {
   const t = useT();
   const statusline = useStatuslineSwitch(false);
   const name = PROVIDER_NAME[usage.id];
-  const problem = problemText(t, usage);
+  const offered = onLocalLogin !== undefined && canSignInAgain(usage);
+  const problem = problemText(t, usage, offered);
   return (
     <section className="usage-provider" aria-label={usageName(usage)}>
       <header className="usage-provider-head">
@@ -61,6 +64,7 @@ function Provider({ usage, now, count, watching }: { usage: ProviderUsage; now: 
         {usage.account && <span className="usage-account" title={usage.account}>{usage.account}</span>}
       </header>
       {problem && <p className={`usage-note${isError(usage) ? " is-problem" : ""}`}>{problem}</p>}
+      {offered && <UsageSignInAgain usage={usage} onStarted={onLocalLogin} />}
       {/* a 403 to a token that has not expired is a refused network, not an expired sign-in: the status line can stand in */}
       {usage.statusline_offer && !watching && <button type="button" className="btn btn-ghost usage-offer" disabled={statusline.busy} onClick={() => void statusline.set(true)}>
         {t("Read from Claude's status line instead")}
@@ -93,8 +97,8 @@ function Provider({ usage, now, count, watching }: { usage: ProviderUsage; now: 
  * provider its logo and the limit chosen in Settings (week or session); the whole strip opens every limit
  * with its reset time.
  */
-/** `watching`: a watching device is not offered what it cannot turn on */
-export function UsageMeters({ watching = false }: { watching?: boolean }) {
+/** `watching`: a watching device is not offered what it cannot turn on or sign in to */
+export function UsageMeters({ onLocalLogin, watching = false }: { /** opens a sign-in tab; a watching device has none */ readonly onLocalLogin?: (paneId: string) => void; readonly watching?: boolean }) {
   const t = useT();
   const { settings } = useSettings();
   const { report, loading, refresh } = useUsage(settings.showUsage);
@@ -195,7 +199,7 @@ export function UsageMeters({ watching = false }: { watching?: boolean }) {
               <RefreshCw aria-hidden="true" className={loading ? "is-spinning" : undefined} />
             </button>
           </header>
-          {shown.map((usage) => <Provider watching={watching} key={usage.key} usage={usage} now={now} count={count} />)}
+          {shown.map((usage) => <Provider key={usage.key} usage={usage} now={now} count={count} watching={watching} onLocalLogin={onLocalLogin && ((paneId) => { setOpen(false); onLocalLogin(paneId); })} />)}
         </div>
       )}
     </div>

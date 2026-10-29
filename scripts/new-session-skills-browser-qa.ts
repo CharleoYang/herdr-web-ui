@@ -13,7 +13,8 @@
  * on Claude Code alone, that adds one `--settings` object when it is on and is off at each opening;
  * when that connection drops before the agent is ready, the message is held, never typed on its own,
  * and goes once on Send now; a choice the launch does not take disables Start and is dropped with the
- * agent; the keyboard reaches every control.
+ * agent; the keyboard reaches every control; a skill list the PC answers busy (503 file_busy, #2254) is asked for
+ * again and shows its chips, never the error.
  * Captures at 390 (true mobile emulation) and 1280, dark and light. All files and HTTP traffic
  * stay in this disposable, loopback-only app; no herdr session is opened.
  */
@@ -32,7 +33,7 @@ const evidence = join(process.env["UI_EVIDENCE_DIR"] || join(repo, "evidence"), 
 mkdirSync(evidence, { recursive: true });
 
 interface Recorded { url: string; body: Record<string, unknown> }
-interface QaWindow { qaRequests: Recorded[]; qaHold: boolean; qaRelease: () => void; qaSubmits: string[]; qaDrop: () => void; qaOldBridge: boolean }
+interface QaWindow { qaRequests: Recorded[]; qaHold: boolean; qaRelease: () => void; qaSubmits: string[]; qaDrop: () => void; qaOldBridge: boolean; qaSkillsBusy: Record<string, number>; qaSkillsBusyServed: number }
 
 const settled = (page: Page) => page.evaluate(() => Promise.all(document.getAnimations().map((animation) => animation.finished.catch(() => undefined))).then(() => new Promise<void>((done) => requestAnimationFrame(() => requestAnimationFrame(() => done())))));
 const recorded = (page: Page) => page.evaluate(() => (window as unknown as QaWindow).qaRequests);
@@ -109,10 +110,19 @@ try {
     window.qaRequests = [];
     window.qaHold = false;
     window.qaOldBridge = false;
+    // an agent's skill list answered 503 file_busy this many more times, as a PC still reading slow skill folders would (#2254)
+    window.qaSkillsBusy = {};
+    window.qaSkillsBusyServed = 0;
     let release = null;
     window.qaRelease = () => { if (release) release(); release = null; };
     window.fetch = async (input, init) => {
       const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      const busyAgent = url.includes("/agent/commands") ? new URL(url, location.href).searchParams.get("agent") : null;
+      if (busyAgent && (window.qaSkillsBusy[busyAgent] ?? 0) > 0) {
+        window.qaSkillsBusy[busyAgent] -= 1;
+        window.qaSkillsBusyServed += 1;
+        return new Response(JSON.stringify({ error: { code: "file_busy", message: "the skill folders did not answer in time" } }), { status: 503, headers: { "content-type": "application/json", "retry-after": "1" } });
+      }
       if ((init?.method ?? "GET") === "POST" && (url.includes("/api/tab/create") || url.includes("/api/workspace/create"))) {
         window.qaRequests.push({ url, body: JSON.parse(String(init?.body ?? "null")) });
         if (window.qaHold) await new Promise((resolve) => { release = resolve; });
@@ -211,9 +221,13 @@ try {
         page.on("pageerror", (error) => { errors.push(error.message); console.error(error.stack); });
         await openChat(page, url);
         const dialog = await openDialog(page, "tab-menu");
+        // the PC is still reading Codex's skill folders: its first answer is a busy 503, and the dialog asks again
+        await page.evaluate(() => { (window as unknown as QaWindow).qaSkillsBusy = { codex: 1 }; });
         await pickAgent(page, dialog, "Codex");
         const chips = dialog.locator(".new-session-skill-chip");
         await chips.first().waitFor();
+        assert.equal(await page.evaluate(() => (window as unknown as QaWindow).qaSkillsBusyServed), 1, "Codex's skill list was answered busy once first");
+        assert.equal(await dialog.locator(".new-session-skills-field .field-hint").count(), 0, "a busy answer shows no error once the list comes");
         assert.deepEqual(await chips.allTextContents(), ["$review-pr", "$release-notes", "$flaky-tests"], "Codex's skills in the folder, typed with $");
         assert.equal(await dialog.getByLabel("Model").count(), 1);
         assert.equal(await dialog.getByLabel("Effort").count(), 1);

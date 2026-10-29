@@ -53,7 +53,7 @@ export class HistoryChanged extends Error {
 /** What paneConversation resolved: which store the turns came from, and where they start. */
 export type RecognizedConversation = {
   activity?: "thinking" | "working" | "idle";
-  source: "copilot-transcript" | "grok-transcript" | "agy-transcript" | "muse-transcript" | "claude-transcript" | "omp-transcript" | "omo-transcript" | "gjc-transcript" | "pi-transcript" | "cmd-transcript" | "codex-transcript" | "devin-transcript" | "opencode-transcript" | "hermes-transcript";
+  source: "copilot-transcript" | "grok-transcript" | "agy-transcript" | "muse-transcript" | "letta-transcript" | "claude-transcript" | "omp-transcript" | "omo-transcript" | "gjc-transcript" | "pi-transcript" | "cmd-transcript" | "codex-transcript" | "devin-transcript" | "opencode-transcript" | "hermes-transcript";
   turns: ConversationTurn[];
   metadata: ConversationMetadata;
   /** `metadata` was read off the agent's own screen (ConversationResponse.screen) */
@@ -86,4 +86,8 @@ export function answerVersion(key: string, signature: string): string {
  * while it is still inside the newest page); with `before`, the page ending there,
  * never reaching back past `since`.
  */
-export type ConversationPage = { before?: string; since?: string; from?: string; history_id?: string };
+export type ConversationPage = {
+  before?: string; since?: string; from?: string; history_id?: string;
+  /** Prompts per page, when the reader asks for a page size (bounded by the server's own cap). */
+  prompts?: number;
+};

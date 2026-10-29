@@ -403,12 +403,12 @@ it("keeps the owner's held row sendable when its own Send now fails before anyth
     clientSnapshot: async (): Promise<SessionSnapshot> => { throw new Error("herdr unreachable before any write"); },
     omo: { sessionOf: () => null }, SUBMIT_DEADLINE_MS: 45_000, SUBMIT_DELAY_MS: 0, TYPED_SETTLE_MS: 0,
   });
-  const item = delivery.pending.enqueue(owner, "p", 1, "held text", null as never, { agent: null, terminalId: "p", session: null }, true);
+  const item = delivery.pending.enqueue(owner, "p", 1, "held text", null, { agent: null, terminalId: "p", session: null }, true);
   await delivery.pendingFrames["pending-action"](owner, { type: "pending-action", id: 10, pane_id: "p", pending_id: item.message.id, action: "steer" });
   expect(output.find((frame) => frame.type === "pending-result" && frame.id === 10)).toMatchObject({ ok: false, code: "submit_failed" });
   expect(typed).toEqual([]);
   expect(delivery.pending.list(owner, "p")[0]?.state).toBe("held");
-  expect(() => delivery.pending.enqueue(owner, "p", 2, "another", null as never, { agent: null, terminalId: "p", session: null })).not.toThrow();
+  expect(() => delivery.pending.enqueue(owner, "p", 2, "another", null, { agent: null, terminalId: "p", session: null })).not.toThrow();
 });
 
 // the test process stands in for the attach client; its own CLAUDE_CONFIG_DIR would name another store
@@ -443,7 +443,7 @@ it.skipIf(Boolean(process.env["CLAUDE_CONFIG_DIR"]))("holds a message queued for
   });
   processes.set("p", { shell_pid: SHELL, foreground_processes: [{ pid: process.pid, name: "claude", argv: ["claude", "attach", JOB] }] });
   try {
-    const item = delivery.pending.enqueue(owner, "p", 1, "for session A", null as never, { agent: "claude", terminalId: "p", session: null, claudeSession: SESSION_A }, true);
+    const item = delivery.pending.enqueue(owner, "p", 1, "for session A", null, { agent: "claude", terminalId: "p", session: null, claudeSession: SESSION_A }, true);
     // each Send now a new attempt, as the client numbers them: the same generation would replay the last reply
     const steer = async (id: number) => {
       await delivery.pendingFrames["pending-action"](owner, { type: "pending-action", id, pane_id: "p", pending_id: item.message.id, action: "steer", resend_generation: id });

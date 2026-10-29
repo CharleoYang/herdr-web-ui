@@ -91,6 +91,17 @@ export function submitRefusal(code: string, message: string, draft?: string, box
   return submitNote(code, message, agent);
 }
 
+/**
+ * The note after Send it, which sends the terminal's draft as the message, did not go. A refusal over another
+ * draft offers that draft's buttons. Any other names the draft on a line under its reason: the server may have
+ * cleared it from the terminal before the send failed (submit_partial), and the Chat box never held it.
+ */
+export function draftSendNote(result: string | DraftRefusal, draft: string): string | DraftRefusal {
+  if (typeof result !== "string" && "draft" in result) return result;
+  const note = typeof result === "string" ? result : "plain" in result && result.plain === true ? result.note : submitNote("input_draft", result.note);
+  return `${note}\n${t("Draft: “{draft}”", { draft })}`;
+}
+
 /** The same message as typed, however a terminal wrapped or indented it: equal once all whitespace is gone. */
 export function sameMessage(a: string, b: string): boolean {
   const bare = (text: string): string => text.replace(/[\s\u00a0]+/gu, "");

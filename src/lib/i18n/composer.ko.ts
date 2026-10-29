@@ -78,6 +78,8 @@ export const COMPOSER_KO: Record<string, string> = {
   "Not sent: Hermes' input in the terminal is not empty. Send or clear it there, then send this message.": "보내지 않았습니다: 터미널의 Hermes 입력칸이 비어 있지 않습니다. 터미널에서 보내거나 지운 다음 이 메시지를 보내세요.",
   "Not sent: Claude Code's input box in the terminal already holds “{draft}”.": "보내지 않음: 터미널의 Claude Code 입력란에 이미 입력된 내용이 있습니다(“{draft}”).",
   "Clear it and send": "지우고 보내기",
+  "Send it": "그대로 보내기",
+  "Draft: “{draft}”": "초안: “{draft}”",
   "Send anyway": "그래도 보내기",
   "Not sent: Claude Code's input box in the terminal may not be empty. It shows “{box}”.": "보내지 않음: 터미널의 Claude Code 입력란이 비어 있지 않을 수 있습니다. 입력란에 “{box}”가 보입니다.",
   "Not sent: it waited too long behind an earlier message, and nothing was typed. Send it again.": "보내지 않음: 앞선 메시지 뒤에서 너무 오래 기다렸고 아무것도 입력되지 않았습니다. 다시 보내세요.",
