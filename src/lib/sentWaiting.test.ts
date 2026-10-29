@@ -205,4 +205,44 @@ describe("waitingText", () => {
       expect(currentWaitingSends(key)).toEqual([]);
     } finally { forgetWaitingSends(key); }
   });
+
+  it("bounds an unshown earlier turn by the newest turn the chat showed, the agent's included", () => {
+    const key = waitingKey("local", "assistant-latest");
+    try {
+      // the chat showed a user turn at 1000 and the agent's answer at 100000, read at 101000;
+      // "yes" was typed in the terminal at 150000, then sent from Chat at 151000
+      const shownTurns = [user("earlier", 1_000), { ...assistant("answer"), ts: new Date(100_000).toISOString() }];
+      settleWaitingSends(key, shownTurns, 101_000, true);
+      rememberWaitingSend(key, "yes", 151_000, waitingBaseline(key));
+      settleWaitingSends(key, [...shownTurns, user("yes", 150_000)], 152_000, true);
+      expect(currentWaitingSends(key).map((send) => send.text)).toEqual(["yes"]);
+      settleWaitingSends(key, [...shownTurns, user("yes", 150_000), user("yes", 151_500)], 153_000, true);
+      expect(currentWaitingSends(key)).toEqual([]);
+    } finally { forgetWaitingSends(key); }
+  });
+
+  it("settles the first message of an empty chat whatever the browser's clock says", () => {
+    const key = waitingKey("local", "empty-chat");
+    const pc = Date.parse("2026-10-29T10:00:00Z");
+    try {
+      // the chat has loaded and holds no turns; the phone runs a minute ahead of the PC
+      settleWaitingSends(key, [], pc + 60_000, true);
+      rememberWaitingSend(key, "first", pc + 60_500, waitingBaseline(key));
+      settleWaitingSends(key, [user("first", pc + 900)], pc + 61_000, true);
+      expect(currentWaitingSends(key)).toEqual([]);
+    } finally { forgetWaitingSends(key); }
+  });
+
+  it("keeps the time the chat first showed its turns: settling again for the waiting list is no new read", () => {
+    const key = waitingKey("local", "unchanged-read");
+    try {
+      settleWaitingSends(key, [user("earlier", 1_000)], 1_500, true);
+      rememberWaitingSend(key, "first follow-up", 3_000, waitingBaseline(key));
+      // the waiting list changed, the transcript did not
+      settleWaitingSends(key, [user("earlier", 1_000)], 3_200, true);
+      rememberWaitingSend(key, "repeat", 3_300, waitingBaseline(key));
+      settleWaitingSends(key, [user("earlier", 1_000), user("repeat", 2_000)], 3_400, true);
+      expect(currentWaitingSends(key).map((send) => send.text)).toEqual(["first follow-up", "repeat"]);
+    } finally { forgetWaitingSends(key); }
+  });
 });

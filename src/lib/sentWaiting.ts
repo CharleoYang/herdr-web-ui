@@ -4,9 +4,9 @@ import { paneLifetimes } from "./paneLifetime.ts";
 
 /**
  * The user turns the chat held when a message was sent. Its own turn is written after the send, so
- * it is none of these. `latest` is the newest of their times (the PC's clock) and `takenAt` when the
- * chat read them (the browser's): their difference is never less than how far the browser's clock
- * runs ahead of the PC's, so it bounds the skew without trusting either clock alone.
+ * it is none of these. `latest` is the newest time of all the turns it held (the PC's clock) and
+ * `takenAt` when the chat first read them (the browser's): their difference is never less than how
+ * far the browser's clock runs ahead of the PC's, so it bounds the skew without trusting either clock.
  */
 export interface WaitingBaseline {
   keys: ReadonlySet<string>;
@@ -49,8 +49,9 @@ function newerThanSend(send: WaitingSend, at: number, key: string): boolean {
   const after = send.after;
   if (after === null) return at >= send.at;
   if (after.keys.has(key)) return false;
-  // written before the send, though the chat had not shown it yet: older than the send by any clock
-  return after.latest === null || (at >= after.latest && at + (after.takenAt - after.latest) >= send.at);
+  // written before the send, though the chat had not shown it yet: older than the send by any clock.
+  // Strictly later: the send's own turn is written after its `at`, which is taken before submitting
+  return after.latest === null || (at >= after.latest && at + (after.takenAt - after.latest) > send.at);
 }
 
 function turnMatches(send: WaitingSend, turn: Turn, key: string): boolean {
@@ -118,12 +119,21 @@ export function currentWaitingSends(key: string): readonly WaitingSend[] {
   return waiting.get(key)?.sends ?? empty;
 }
 
-/** Consume each transcript turn once, leaving every other send visible until its own turn exists. */
-export function settleWaitingSends(key: string, turns: readonly Turn[], now = Date.now()): void {
+/**
+ * Consume each transcript turn once, leaving every other send visible until its own turn exists.
+ * `loaded`: the chat has read the pane's transcript, so no turns means an empty chat, not an unread one.
+ */
+export function settleWaitingSends(key: string, turns: readonly Turn[], now = Date.now(), loaded = turns.length > 0): void {
   const candidates = userTurns(turns);
-  if (turns.length > 0) {
-    const times = candidates.map(({ turn }) => turnTime(turn)).filter(Number.isFinite);
-    shown.set(key, { keys: new Set(candidates.map((candidate) => candidate.key)), latest: times.length > 0 ? Math.max(...times) : null, takenAt: now });
+  if (loaded) {
+    // every shown turn was written before this read, the agent's too: the newest of them all bounds the skew
+    const times = turns.map(turnTime).filter(Number.isFinite);
+    const latest = times.length > 0 ? Math.max(...times) : null;
+    const keys = new Set(candidates.map((candidate) => candidate.key));
+    const before = shown.get(key);
+    // the same turns settled again (the waiting list changed) are no new read: the first read's time stays
+    const same = before !== undefined && before.latest === latest && before.keys.size === keys.size && [...keys].every((item) => before.keys.has(item));
+    if (!same) shown.set(key, { keys, latest, takenAt: now });
   }
   const pane = waiting.get(key);
   if (!pane || pane.sends.length === 0) return;
@@ -138,7 +148,7 @@ export function settleWaitingSends(key: string, turns: readonly Turn[], now = Da
   announce();
 }
 
-/** A removed pane releases its waiting sends, consumed-turn identities and shown turns. */
+/** Release a pane's waiting sends, consumed-turn identities and shown turns (a replaced herdr, tests). */
 export function forgetWaitingSends(key: string): void {
   shown.delete(key);
   if (waiting.delete(key)) announce();

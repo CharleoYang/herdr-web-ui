@@ -2241,8 +2241,8 @@ export const ChatView = memo(function ChatView({ paneId, presentationKey, finish
   const sentWaiting = useSyncExternalStore(subscribeWaitingSends, () => currentWaitingSends(waitKey));
   // before paint: a frame never shows a send's turn and its waiting bubble together
   useLayoutEffect(() => {
-    settleWaitingSends(waitKey, state.turns);
-  }, [sentWaiting, state.turns, waitKey]);
+    settleWaitingSends(waitKey, state.turns, Date.now(), loaded);
+  }, [loaded, sentWaiting, state.turns, waitKey]);
   const waitWords = useAnnouncedText(!loaded && error === null ? t("Loading conversation…") : waiting ? t("Waiting for the PC…") : null);
   const retryRead = useCallback(() => { setFailures(0); conversationRefresh.refresh(); }, [conversationRefresh]);
   const footer = <>
