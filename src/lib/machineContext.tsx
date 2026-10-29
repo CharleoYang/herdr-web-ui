@@ -16,7 +16,7 @@ export function useMachineApi() {
     fetchPaneConversation: (pane: string, page?: api.ConversationPageQuery) => api.fetchPaneConversation(pane, id, page),
     peekPaneConversation: (pane: string) => api.peekPaneConversation(pane, id),
     fetchPanePrompt: (pane: string) => api.fetchPanePrompt(pane, id),
-    fetchPanePromptState: (pane: string, options?: { draft?: boolean }) => api.fetchPanePromptState(pane, id, options),
+    fetchPanePromptState: (pane: string) => api.fetchPanePromptState(pane, id),
     answerPanePrompt: (answer: Parameters<typeof api.answerPanePrompt>[0]) => api.answerPanePrompt(answer, id),
     uploadPaneImage: (pane: string, image: Blob) => api.uploadPaneImage(pane, image, id),
     fetchPaneCommands: (pane: string) => api.fetchPaneCommands(pane, id),
