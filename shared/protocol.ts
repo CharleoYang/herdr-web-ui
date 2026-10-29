@@ -952,10 +952,15 @@ export interface ClientConnectionTrace {
   events: ClientConnectionEvent[];
 }
 
-/** What a server supports beyond the base protocol, listed in its first snapshot; older bridges list nothing. */
+/** What a server supports beyond the base protocol, listed in its `features` frame and its first snapshot; older bridges list nothing. */
 export type ServerFeature = "submit" | "pending-input" | "pending-hold" | "secret-input" | "input-ready" | "take-over" | "watch" | "conversation-watch" | "ping" | "terminal-insert";
 
 export type ServerMessage =
+  /** the first frame of a connection, before the snapshot that can wait seconds on herdr: what this server
+   * supports and this socket's `connection` id (the snapshot names the same), and the herdr it reads now
+   * (`herdr_lifetime` as a snapshot names it; absent when unproven). A page acts on it before the snapshot only
+   * when that herdr is the one it already knows. Older bridges never send it: their features come with the snapshot */
+  | { type: "features"; features: ServerFeature[]; connection: string; herdr_lifetime?: string }
   /** `connection`: this socket's id on the PC, for a create request's `first_message_connection`; older bridges send none */
   | { type: "snapshot"; snapshot: SessionSnapshot; features?: ServerFeature[]; connection?: string }
   /** raw PTY bytes: append to the terminal, never repaint over it. A mirrored pane (HerdrIdentity.terminal_mirror) sends whole screens the same way. */

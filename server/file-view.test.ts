@@ -4,7 +4,7 @@ import { homedir, tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 
 import * as fileView from "./file-view.ts";
-import { crossSiteFileRead, fileInfo, fileResponse, forgetPageMedia, locateFile, locateFileInFolder, PAGE_MEDIA_LIFETIME_MS, PAGE_MEDIA_PER_RENDER, pageFileHooks, pageMediaResponse, pageMediaSource, resolveFilePath, watchPageMedia } from "./file-view.ts";
+import { crossSiteFileRead, fileInfo, fileResponse, forgetPageMedia, locateFile, locateFileInFolder, PAGE_MEDIA_LIFETIME_MS, PAGE_MEDIA_PER_RENDER, pageFileHooks, pageMediaResponse, pageMediaSource, resolveFilePath, STREAM_CHUNK_BYTES, watchPageMedia } from "./file-view.ts";
 import { setFilePoolOptions } from "./file-pool.ts";
 import { runFileTask } from "./file-tasks.ts";
 import { clearFileCache, filesNamed } from "./files.ts";
@@ -1368,5 +1368,217 @@ describe("locateFile", () => {
     writeFileSync(join(root, "docs/notes.md"), "notes");
     clearFileCache();
     expect(await locateFile("notes.md", root)).toMatchObject({ info: { path: join(root, "docs/notes.md") } });
+  });
+});
+
+describe("Claude scratch fallback served from what it opened in its folder (#2259)", () => {
+  const roots: string[] = [];
+  beforeEach(trackDescriptors);
+  afterEach(() => {
+    descriptorsClosed();
+    clearFileCache();
+    for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
+  });
+  /** A pane, its scratch folder holding `name` (`inside`), and `outside` beside that folder under the same name. */
+  const fixture = (name: string, inside: string, outside: string) => {
+    const root = mkdtempSync(join(tmpdir(), "herdr-scratch-open-"));
+    roots.push(root);
+    const cwd = join(root, "pane");
+    const scratch = join(root, "scratch");
+    mkdirSync(cwd);
+    mkdirSync(scratch);
+    writeFileSync(join(scratch, name), inside);
+    writeFileSync(join(root, name), outside);
+    /** the scratch file replaced by a link to the one outside */
+    const swap = () => { unlinkSync(join(scratch, name)); symlinkSync(join(root, name), join(scratch, name)); };
+    return { cwd, scratch, swap };
+  };
+  /** A body sent from its descriptor's own path keeps that descriptor until the body and its answer are collected: once both are gone, each is closed. */
+  const bodiesCollected = async () => {
+    // within the test's own timeout, so a slow collection fails here, with the descriptors named
+    const deadline = Date.now() + 3_000;
+    while (live.size > 0) {
+      if (Date.now() > deadline) throw new Error(`descriptors still open after collection: ${[...live].join(", ")}`);
+      Bun.gc(true);
+      // a turn of the event loop, for the collected bodies' finalizers to run
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+  };
+  const fromScratch = async (name: string, cwd: string, scratch: string) => {
+    const found = await fileView.findFile(name, cwd, async () => scratch);
+    if (found === null || !("info" in found)) throw new Error("expected the scratch file");
+    return found;
+  };
+
+  it("refuses a link swapped in after the file was found", async () => {
+    const { cwd, scratch, swap } = fixture("note.txt", "INSIDE", "OUTSIDE-SECRET");
+    const found = await fromScratch("note.txt", cwd, scratch);
+    swap();
+    const swapped = await fileResponse(found.info, false, false, null, null, undefined, found.within);
+    expect(await swapped.text()).not.toContain("OUTSIDE-SECRET");
+    expect(swapped.status).toBe(404);
+  });
+
+  it("refuses a link swapped in between the open's check and the open itself", async () => {
+    const { cwd, scratch, swap } = fixture("note.txt", "INSIDE", "OUTSIDE-SECRET");
+    const found = await fromScratch("note.txt", cwd, scratch);
+    pageFileHooks.afterResolve = () => { delete pageFileHooks.afterResolve; swap(); };
+    const swapped = await fileResponse(found.info, false, false, null, null, undefined, found.within);
+    expect(pageFileHooks.afterResolve).toBeUndefined();
+    expect(await swapped.text()).not.toContain("OUTSIDE-SECRET");
+    expect(swapped.status).toBe(404);
+  });
+
+  it("describes the file only from what it opened in the folder", async () => {
+    const { scratch, swap } = fixture("note.txt", "INSIDE", "OUTSIDE-SECRET");
+    pageFileHooks.afterResolve = () => { delete pageFileHooks.afterResolve; swap(); };
+    expect(await locateFileInFolder("note.txt", scratch)).toBeNull();
+    expect(pageFileHooks.afterResolve).toBeUndefined();
+  });
+
+  it("renders a page only from what it opened in the folder", async () => {
+    const { cwd, scratch, swap } = fixture("page.html", "<p>INSIDE</p>", "<p>OUTSIDE-SECRET</p>");
+    const found = await fromScratch("page.html", cwd, scratch);
+    expect(await (await fileResponse(found.info, false, true, null, null, undefined, found.within)).text()).toContain("INSIDE");
+    swap();
+    const swapped = await fileResponse(found.info, false, true, null, null, undefined, found.within);
+    expect(await swapped.text()).not.toContain("OUTSIDE-SECRET");
+    expect(swapped.status).toBe(404);
+  });
+
+  it("refuses a link swapped in before the viewer opens, by the path it was given, what it found", async () => {
+    const { cwd, scratch, swap } = fixture("note.txt", "INSIDE", "OUTSIDE-SECRET");
+    const mayBeScratch = (path: string) => path.startsWith(scratch);
+    const stat = await fromScratch("note.txt", cwd, scratch);
+    // the viewer's next request names the file by the path stat answered
+    const byPath = await fileView.findFile(stat.info.path, cwd, async () => scratch, mayBeScratch);
+    expect(byPath).toMatchObject({ info: { path: stat.info.path }, within: realpathSync(scratch) });
+    if (byPath === null || !("info" in byPath)) throw new Error("expected the scratch file");
+    expect(await (await fileResponse(byPath.info, false, false, null, null, undefined, byPath.within)).text()).toBe("INSIDE");
+    swap();
+    expect(await fileView.findFile(stat.info.path, cwd, async () => scratch, mayBeScratch)).toBeNull();
+    // a path outside the pane's scratch folder is a direct link, as before
+    const outside = join(scratch, "..", "note.txt");
+    expect(await fileView.findFile(outside, cwd, async () => scratch, () => true)).toMatchObject({ info: { path: outside } });
+  });
+
+  it("finds a path in the folder only there, in any name form, never past it", async () => {
+    for (const [stored, swapped] of [["NFD", "NFC"], ["NFC", "NFD"]] as const) {
+      const name = "é.txt".normalize(stored);
+      const { cwd, scratch } = fixture(name, "INSIDE", "OUTSIDE-SECRET");
+      // a file system that stores one form for both cannot hold the swapped name beside it
+      if (existsSync(join(scratch, name.normalize(swapped)))) return;
+      const mayBeScratch = (path: string) => path.startsWith(scratch);
+      const stat = await fromScratch(name, cwd, scratch);
+      // the file the viewer was told of gone, and a link to the file outside put there under the other form of its name
+      unlinkSync(join(scratch, name));
+      symlinkSync(join(scratch, "..", name), join(scratch, name.normalize(swapped)));
+      const byPath = await fileView.findFile(stat.info.path, cwd, async () => scratch, mayBeScratch);
+      if (byPath !== null && "info" in byPath) expect(await (await fileResponse(byPath.info, false, false, null, null, undefined, byPath.within ?? null)).text()).not.toContain("OUTSIDE-SECRET");
+      expect(byPath).toBeNull();
+    }
+  });
+
+  it("finds a path given in full in the folder only where it points, never a file deeper whose path ends in it", async () => {
+    const { cwd, scratch } = fixture("other.txt", "INSIDE", "OUTSIDE-SECRET");
+    mkdirSync(join(scratch, "sub"));
+    writeFileSync(join(scratch, "sub", "a.txt"), "DEEPER");
+    const mayBeScratch = (path: string) => path.startsWith(scratch);
+    // `<scratch>/a.txt` is not there: not found, as a missing path anywhere else
+    expect(await fileView.findFile(join(scratch, "a.txt"), cwd, async () => scratch, mayBeScratch)).toBeNull();
+    // a bare name is still found deeper in the scratch folder, as the fallback always did
+    expect(await fileView.findFile("a.txt", cwd, async () => scratch, mayBeScratch)).toMatchObject({ info: { path: join(scratch, "sub", "a.txt") } });
+  });
+
+  it("keeps sending the file it opened when a link is swapped in while it is sent", async () => {
+    // larger than one read too: such a body is sent after its headers, never from the path
+    for (const inside of ["INSIDE", "I".repeat(STREAM_CHUNK_BYTES + 1)]) {
+      const { cwd, scratch, swap } = fixture("note.txt", inside, "OUTSIDE-SECRET");
+      await (async () => {
+        const found = await fromScratch("note.txt", cwd, scratch);
+        const responses = await Promise.all([false, true].map((download) => fileResponse(found.info, download, false, null, null, undefined, found.within)));
+        expect(responses.map((response) => response.status)).toEqual([200, 200]);
+        swap();
+        for (const response of responses) expect(await response.text()).toBe(inside);
+      })();
+    }
+    await bodiesCollected();
+  });
+
+  it("sends a file larger than one read with its exact length, whole and by range", async () => {
+    // only Linux names an open file by its descriptor (`/proc/self/fd`); elsewhere it is streamed without one
+    if (process.platform !== "linux") return;
+    const size = 2 * STREAM_CHUNK_BYTES + 4096;
+    // bytes that tell their own offset, so a range sent from the wrong place is seen
+    const bytes = Buffer.from(Array.from({ length: size }, (_, at) => at % 251));
+    const { cwd, scratch } = fixture("big.bin", "", "OUTSIDE-SECRET");
+    writeFileSync(join(scratch, "big.bin"), bytes);
+    // a disk that answers at once, whatever this machine's load: the case a file body is for
+    pageFileHooks.fastDiskMs = 60_000;
+    await (async () => {
+      const found = await fromScratch("big.bin", cwd, scratch);
+      const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: (request) => fileResponse(found.info, true, false, null, request, undefined, found.within) });
+      try {
+        const whole = await fetch(server.url);
+        expect(whole.headers.get("content-length")).toBe(String(size));
+        expect(Buffer.from(await whole.arrayBuffer()).equals(bytes)).toBe(true);
+        // more than one read: sent as a file body, not read before the headers
+        const [first, last] = [10, STREAM_CHUNK_BYTES + 5000];
+        const part = await fetch(server.url, { headers: { range: `bytes=${first}-${last}` } });
+        expect(part.status).toBe(206);
+        expect(part.headers.get("content-range")).toBe(`bytes ${first}-${last}/${size}`);
+        expect(part.headers.get("content-length")).toBe(String(last - first + 1));
+        expect(Buffer.from(await part.arrayBuffer()).equals(bytes.subarray(first, last + 1))).toBe(true);
+      } finally { await server.stop(true); }
+    })();
+    await bodiesCollected();
+  });
+
+  it("names the descriptor a file thread opens in the folder in its cell, and takes back one it refuses", async () => {
+    const { cwd, scratch, swap } = fixture("note.txt", "INSIDE", "OUTSIDE-SECRET");
+    const found = await fromScratch("note.txt", cwd, scratch);
+    const cell = () => { const opened = new Int32Array(new SharedArrayBuffer(4)); opened[0] = -1; return opened; };
+    const kept = cell();
+    let named = -1;
+    pageFileHooks.afterAuthorize = () => { named = Atomics.load(kept, 0); };
+    const opened = runFileTask({ op: "open", path: found.info.path, get: { range: null, ifRange: false }, opened: kept, within: found.within });
+    // named before it was authorized, and handed back with the body read
+    expect(named).toBeGreaterThanOrEqual(0);
+    expect(opened).toMatchObject({ bytes: new TextEncoder().encode("INSIDE") });
+    expect(Atomics.load(kept, 0)).toBe(-1);
+    delete pageFileHooks.afterAuthorize;
+    const refused = cell();
+    pageFileHooks.afterOpen = () => { delete pageFileHooks.afterOpen; swap(); };
+    expect(runFileTask({ op: "open", path: found.info.path, get: { range: null, ifRange: false }, opened: refused, within: found.within })).toBeNull();
+    // taken back before it was closed: the pool never closes that number again (`abandon`)
+    expect(Atomics.load(refused, 0)).toBe(-1);
+  });
+
+  it("names the descriptor a file thread describes a file in the folder from in its cell, and takes it back", async () => {
+    const { scratch } = fixture("note.txt", "INSIDE", "OUTSIDE-SECRET");
+    const described = new Int32Array(new SharedArrayBuffer(4));
+    described[0] = -1;
+    let named = -1;
+    pageFileHooks.afterAuthorize = () => { named = Atomics.load(described, 0); };
+    expect(runFileTask({ op: "describe", path: join(scratch, "note.txt"), folder: scratch, opened: described })).toMatchObject({ info: { size: 6 }, within: realpathSync(scratch) });
+    delete pageFileHooks.afterAuthorize;
+    expect(named).toBeGreaterThanOrEqual(0);
+    expect(Atomics.load(described, 0)).toBe(-1);
+  });
+
+  it("still serves the file in the folder whole, by range and to a HEAD", async () => {
+    const { cwd, scratch } = fixture("note.txt", "0123456789", "OUTSIDE-SECRET");
+    const found = await fromScratch("note.txt", cwd, scratch);
+    const whole = await fileResponse(found.info, false, false, null, null, undefined, found.within);
+    expect(whole.status).toBe(200);
+    expect(whole.headers.get("content-type")).toStartWith("text/plain");
+    expect(await whole.text()).toBe("0123456789");
+    const range = await fileResponse(found.info, false, false, null, new Request("http://ovis/", { headers: { range: "bytes=2-4" } }), undefined, found.within);
+    expect(range.status).toBe(206);
+    expect(range.headers.get("content-range")).toBe("bytes 2-4/10");
+    expect(await range.text()).toBe("234");
+    const head = await fileResponse(found.info, false, false, null, new Request("http://ovis/", { method: "HEAD" }), undefined, found.within);
+    expect(head.headers.get("content-length")).toBe("10");
+    expect(head.body).toBeNull();
   });
 });

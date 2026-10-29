@@ -156,7 +156,7 @@ Every agent herdr runs shows up with its live status, terminal and alerts. The c
 
 | Agent | Chat | Answer prompts from chat |
 | --- | --- | --- |
-| **Claude Code** | Native transcript, resolved through herdr | ✓ approvals, questions, plan and menu picks, and the `/model` list (picked for the session) |
+| **Claude Code** | Native transcript, resolved through herdr | ✓ approvals, questions, plan and menu picks, the `/model` list, and the `/effort` levels with Ultracode's switch (each picked for the session) |
 | **Codex** | Native rollout, with tool results and commentary/final phases | ✓ approvals and questions, including queued ones, and the `/model` lists (picked for the session) |
 | **omp** | Native session file, in the store the pane's omp process writes to: `~/.omp/agent`, a profile's, or where its `--session-dir`, or the `PI_CODING_AGENT_SESSION_DIR`, `PI_CODING_AGENT_DIR`, `PI_CONFIG_DIR` or XDG data and state directories it was started with, put it (absolute paths only, not values from omp's `.env` files; on Windows only `~/.omp` and its profiles) | ✓ approvals, questions, and the model picker of `/model` and `/switch` (picked for the session: the chat sends `/model` as `/switch`, since omp's own `/model` opens its role hub) |
 | **omo** | Native session file, found through the pane's process tree | ✓ the `/model` list (picked for the session); other menus — use Terminal |

@@ -783,6 +783,13 @@ does not fail the job, and is not counted as a plain pass either: its first log 
 `flaky`, and on GitHub it gets a warning annotation and a line in the job summary. A flaky script
 is a bug to fix in the script or the app, not noise: the second run only keeps one PR's merge
 from waiting on another change's race. A script that fails twice fails the job.
+One run of a script may take `BROWSER_SCRIPT_TIMEOUT_SECONDS` (default 600). A run past it is
+stopped with every process it started, prints `TIMEOUT <script>` and its last 40 log lines at
+once, is not run again and fails the lane (the summary and `summary.json` give it exit 124), so a
+hang names itself instead of running into the job's `timeout-minutes`. A script that exits while
+a process it started still holds its output open is stopped the same way, as `STOPPED`; on
+Linux such a process is found through `/proc` even after its parent has exited. A job cancelled at its `timeout-minutes` with scripts still logging
+was usually short of time, not hung: check how long `check: took a slot after` says it waited.
 The console, GitHub annotations, job summary and `summary.json` name the failing assertion and
 its first script file and line when the log contains them.
 `bun scripts/ci-flakes.ts` ranks, across the last 24 hours of `ci.yml` runs and every attempt of

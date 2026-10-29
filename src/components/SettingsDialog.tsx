@@ -268,6 +268,7 @@ const THEME_NAMES: Record<ThemeId, string> = {
   catppuccin: "Catppuccin",
   "catppuccin-latte": "Catppuccin Latte",
   "tokyo-night": "Tokyo Night",
+  "black": "Black",
   "tokyo-night-day": "Tokyo Night Day",
   gruvbox: "Gruvbox",
   "gruvbox-light": "Gruvbox Light",

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "bun:test";
-import { closeSync, fstatSync, mkdtempSync, openSync, rmSync, writeFileSync } from "node:fs";
+import { closeSync, constants as fsConstants, fstatSync, mkdtempSync, openSync, rmSync, writeFileSync, writeSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -13,8 +13,9 @@ const waitAsync = (Atomics as unknown as { waitAsync: (cells: Int32Array, index:
 
 /** A held answer: the thread runs its task, then waits until `release`. */
 const gate = () => {
-  const cells = new Int32Array(new SharedArrayBuffer(8));
+  const cells = new Int32Array(new SharedArrayBuffer(12));
   cells[1] = -1;
+  cells[2] = -1;
   return {
     buffer: cells.buffer as SharedArrayBuffer,
     release: () => { Atomics.store(cells, 0, 1); Atomics.notify(cells, 0); },
@@ -23,6 +24,11 @@ const gate = () => {
       const waited = waitAsync(cells, 1, -1, 10_000);
       if ((waited.async ? await waited.value : waited.value) === "timed-out") throw new Error("the held thread never ran its task");
       return cells[1]!;
+    },
+    /** The FIFO a FIFO gate's thread, ended inside its read, never closed: closed once that thread is gone. */
+    closeFifo: () => {
+      const fd = Atomics.exchange(cells, 2, -1);
+      if (fd >= 0) closeSync(fd);
     },
   };
 };
@@ -154,6 +160,26 @@ describe("file threads", () => {
     expect(() => fstatSync(fd)).toThrow();
   });
 
+  it("closes a descriptor a scratch file's description opened, when its thread is ended mid-check", async () => {
+    setUp({ workers: 1, waiting: 0, deadlineMs: 30_000 });
+    const fifo = join(root, "stall");
+    expect(Bun.spawnSync(["mkfifo", fifo]).exitCode).toBe(0);
+    const hold = gate();
+    const describing = fileTask({ op: "describe", path: file, folder: root, authorizeGate: { cells: hold.buffer, fifo } } as FileTask);
+    // the thread holds the file open inside its check, blocked in a system call ending it cannot cut short
+    const fd = await hold.ran();
+    expect(fstatSync(fd).size).toBe(5);
+    setFilePoolOptions();
+    await expect(describing).rejects.toThrow("replaced");
+    // the call returns (a write that never waits: the thread opened the FIFO before it said it ran), the thread is gone, and what it opened is closed
+    const writer = openSync(fifo, fsConstants.O_WRONLY | fsConstants.O_NONBLOCK);
+    writeSync(writer, "x");
+    closeSync(writer);
+    await fileThreadsClosed();
+    expect(() => fstatSync(fd)).toThrow();
+    hold.closeFifo();
+  });
+
   it("keeps a descriptor its thread is reading open until that thread is gone, when the last server stops", async () => {
     setUp({ workers: 1, waiting: 0, deadlineMs: 30_000 });
     const fifo = join(root, "stall");
@@ -170,10 +196,13 @@ describe("file threads", () => {
     const other = openSync(big, "r");
     expect(other).not.toBe(fd);
     closeSync(other);
-    // the read returns, the thread is gone, and only then is its descriptor closed
-    closeSync(openSync(fifo, "w"));
+    // the read returns (a write that never waits: the thread opened the FIFO before it said it ran), the thread is gone, and only then is its descriptor closed
+    const writer = openSync(fifo, fsConstants.O_WRONLY | fsConstants.O_NONBLOCK);
+    writeSync(writer, "x");
+    closeSync(writer);
     await fileThreadsClosed();
     expect(() => fstatSync(fd)).toThrow();
+    hold.closeFifo();
   });
 
   it("ends its threads, a busy one too, when the last server holding them stops", async () => {

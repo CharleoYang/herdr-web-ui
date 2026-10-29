@@ -998,6 +998,41 @@ Enter to select · ↑/↓ to navigate · Esc to cancel
     });
   });
 
+  it("completes Claude's /effort while Ultracode is on, and through its switch (#2232)", async () => {
+    // Claude Code 2.1.311's slider: with the switch on (no card before the switch was read), a level
+    // picked with `s`; with it off, the switch's row, Tab, then `s` once the slider shows it on
+    const cases = [
+      { start: "on", option: 3, label: "Turn Ultracode off", keys: ["s"] },
+      { start: "off", option: 5, label: "Turn Ultracode on", keys: [["tab"], "s"] },
+    ];
+    for (const { start, option, label, keys: expected } of cases) {
+      let keys: unknown[] = [];
+      const pane = { agent: "claude", status: "idle",
+        get screen() {
+          if (keys.includes("s")) return fixture("claude-effort-2.1.311-set-120.txt");
+          return fixture(`claude-effort-2.1.311-${keys.some((sent) => Array.isArray(sent) && sent.includes("tab")) ? "on" : start}-120.txt`);
+        } };
+      await withFakeHerdr(pane, async (paneId, sent) => {
+        keys = sent;
+        const current = { ...send("/effort", "claude", [{ ...row("effort", "dialog"), forms: claudeSource.forms!.effort }]),
+          at: Date.now() - 10, screen: "fixture-anchor", identity: JSON.stringify([undefined, undefined]), store: null };
+        expect(current.form).toEqual({ match: "bare", interaction: "dialog", dialog: "claude-effort" });
+        noteSubmitted(paneId, current.text, current);
+        const shown = await served(paneId);
+        expect(shown.outcomes?.at(-1)?.state, start).toBe("interaction-required");
+        expect(shown.prompt?.options.at(-1)?.label, start).toBe(label);
+        // the switch's drawn state stays with the server
+        expect(shown.prompt, start).not.toHaveProperty("claudeUltracode");
+        const url = new URL("http://localhost/api/pane/prompt/answer");
+        const answered = await handlePromptRequest(new Request(url, { method: "POST",
+          body: JSON.stringify({ pane_id: paneId, prompt_id: shown.prompt!.id, option_index: option }) }), url);
+        expect(answered?.status, start).toBe(200);
+        expect(keys, start).toEqual(expected);
+        expect((await served(paneId)).outcomes?.at(-1), start).toMatchObject({ state: "result-observed", evidence: [{ kind: "dialog" }] });
+      });
+    }
+  });
+
   it("closes a command's card correlation when a later plain message is sent", async () => {
     const pane = { agent: "claude", status: "idle", screen: fixture("claude-goal-2.1.304-active-120.txt") };
     await withFakeHerdr(pane, async (paneId) => {
