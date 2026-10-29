@@ -983,7 +983,9 @@ export class UsageService {
 /** Whether a Claude sign-in found at `source` (claudeHomes) lives in the config directory the switch changes. */
   private switchesConfigOf(source: string): boolean {
     const configured = this.ctx.env["CLAUDE_CONFIG_DIR"]?.trim();
-    return configured ? source !== "default" && resolve(source) === resolve(configured) : source === "default";
+    // "default" is ~/.claude: the same sign-in found there and under CLAUDE_CONFIG_DIR is kept once, as "default"
+    const dir = (place: string) => resolve(place === "default" ? join(this.ctx.home, ".claude") : place);
+    return dir(source) === dir(configured || "default");
   }
 
   private statuslineOptions() {

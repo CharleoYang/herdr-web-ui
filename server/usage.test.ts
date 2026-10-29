@@ -253,6 +253,15 @@ describe("providers", () => {
     expect(switched).toMatchObject({ problem: "expired", statusline_offer: true });
   });
 
+  it("offers the status line when CLAUDE_CONFIG_DIR names the default ~/.claude, however it is spelled", async () => {
+    write(join(home, ".claude", ".credentials.json"), { claudeAiOauth: { accessToken: "k", expiresAt: NOW + HOUR } });
+    replies.set("https://api.anthropic.com/api/oauth/usage", { status: 403, body: { error: { message: "Request not allowed" } } });
+    for (const spelled of [join(home, ".claude"), `${join(home, ".claude")}/`]) {
+      const [usage] = (await new UsageService({ ...context(), env: { ...context().env, CLAUDE_CONFIG_DIR: spelled } }, only("claude")).report()).providers;
+      expect(usage).toMatchObject({ problem: "expired", statusline_offer: true });
+    }
+  });
+
   it("answers a failed switch without quoting Claude's settings or a command saved in them", async () => {
     mkdirSync(join(home, ".claude", "herdr-statusline"), { recursive: true });
     const wrapper = join(home, ".claude", "herdr-statusline", "statusline-tee.sh");

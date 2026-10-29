@@ -303,9 +303,13 @@ function locked<T>(configDir: string, change: () => T): T {
   } catch (error) {
     if (!(error !== null && typeof error === "object" && "code" in error && error.code === "EEXIST")) throw error;
     const age = Date.now() - (lstatSync(lock, { throwIfNoEntry: false })?.mtimeMs ?? Date.now());
-    if (age < STALE_LOCK_MS) throw new StatuslineInstallError("another change to Claude's status line is in progress; try again in a moment");
-    rmSync(lock, { recursive: true, force: true });
-    mkdirSync(lock);
+    const busy = () => new StatuslineInstallError("another change to Claude's status line is in progress; try again in a moment");
+    if (age < STALE_LOCK_MS) throw busy();
+    // the stale lock is moved aside before it is taken: of two changes taking it over at once, one wins the mkdir
+    const aside = `${lock}.${process.pid}.${randomUUID()}`;
+    try { renameSync(lock, aside); } catch { throw busy(); }
+    rmSync(aside, { recursive: true, force: true });
+    try { mkdirSync(lock); } catch { throw busy(); }
   }
   try {
     return change();
