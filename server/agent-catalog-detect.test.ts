@@ -235,21 +235,20 @@ describe.skipIf(process.platform === "win32")("AgentDetector", () => {
   it("ends a timed-out version flag with every process it started, even one still holding its output", async () => {
     const pidFile = join(bin, "holder.pid");
     stub("holder", `sleep 30 &\necho $! > '${pidFile}'\nsleep 30`);
-    const started = performance.now();
     const run = await runVersion(join(bin, "holder"), ["--version"], 300);
-    expect(run.timedOut).toBe(true);
-    expect(performance.now() - started).toBeLessThan(2_000);
+    // ended by the 300 ms limit, not by the flag (it sleeps 30 s): timed out, with no exit code of its own
+    expect([run.timedOut, run.exitCode]).toEqual([true, null]);
     expect(await ends(Number(readFileSync(pidFile, "utf8").trim()))).toBe(true);
   });
 
   it("reads the version of a flag that answers and exits at once, and ends the child it left holding the output", async () => {
     const pidFile = join(bin, "leaver.pid");
     stub("leaver", `sleep 30 &\necho $! > '${pidFile}'\necho 'leaver 1.2.3'\nexit 0`);
-    const started = performance.now();
-    const run = await runVersion(join(bin, "leaver"), ["--version"], 5_000);
-    expect(run.timedOut).toBe(false);
+    // a 3 s limit, under the test's own 5 s: a run kept until the limit fails on its answer, not the test timeout
+    const run = await runVersion(join(bin, "leaver"), ["--version"], 3_000);
+    // answered by the flag's own exit, not by the limit, though its child still held the output
+    expect([run.timedOut, run.exitCode]).toEqual([false, 0]);
     expect(run.stdout).toContain("leaver 1.2.3");
-    expect(performance.now() - started).toBeLessThan(2_000);
     expect(await ends(Number(readFileSync(pidFile, "utf8").trim()))).toBe(true);
   });
 
