@@ -87,6 +87,7 @@ export const COMPOSER_JA: Record<string, string> = {
   "Not confirmed: it may already have reached the agent. Check the terminal before sending again.": "未確認: すでにエージェントに届いている可能性があります。再送信の前にターミナルを確認してください。",
   "Not confirmed: the pane did not confirm this message. Check the terminal before sending it again.": "未確認: ペインがこのメッセージを確認しませんでした。再送信する前にターミナルを確認してください。",
   "Not sent: {message}": "未送信: {message}",
+  "Not confirmed: the terminal draft was cleared or may have changed. Your message stayed here. Check the terminal before sending again.": "未確認: ターミナルの下書きが消去されたか、変更された可能性があります。メッセージはここに残っています。再送信する前にターミナルを確認してください。",
   "Type the numbers you choose, e.g. 1 3": "選ぶ番号を入力 (例: 1 3)",
   "Type your reply…": "返答を入力…",
   "Type {range} or your own reply…": "{range} または返答を入力…",

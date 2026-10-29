@@ -87,6 +87,7 @@ export const COMPOSER_ZH: Record<string, string> = {
   "Not confirmed: it may already have reached the agent. Check the terminal before sending again.": "未确认：可能已经送达 agent。再次发送前请检查终端。",
   "Not confirmed: the pane did not confirm this message. Check the terminal before sending it again.": "未确认：窗格未确认此消息。重新发送前请检查终端。",
   "Not sent: {message}": "未发送：{message}",
+  "Not confirmed: the terminal draft was cleared or may have changed. Your message stayed here. Check the terminal before sending again.": "未确认：终端草稿已被清除或可能发生了变化。您的消息仍保留在这里。再次发送前请检查终端。",
   "Type the numbers you choose, e.g. 1 3": "输入所选编号，例如 1 3",
   "Type your reply…": "输入你的回复…",
   "Type {range} or your own reply…": "输入 {range} 或你自己的回复…",

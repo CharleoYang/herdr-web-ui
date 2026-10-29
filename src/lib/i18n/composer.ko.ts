@@ -87,6 +87,7 @@ export const COMPOSER_KO: Record<string, string> = {
   "Not confirmed: it may already have reached the agent. Check the terminal before sending again.": "확인되지 않음: 이미 에이전트에 전달되었을 수 있습니다. 다시 보내기 전에 터미널을 확인하세요.",
   "Not confirmed: the pane did not confirm this message. Check the terminal before sending it again.": "확인되지 않음: 패널이 이 메시지를 확인하지 않았습니다. 다시 보내기 전에 터미널을 확인하세요.",
   "Not sent: {message}": "보내지 않음: {message}",
+  "Not confirmed: the terminal draft was cleared or may have changed. Your message stayed here. Check the terminal before sending again.": "확인되지 않음: 터미널 초안이 지워졌거나 변경되었을 수 있습니다. 메시지는 여기에 남아 있습니다. 다시 보내기 전에 터미널을 확인하세요.",
   "Type the numbers you choose, e.g. 1 3": "고른 번호를 입력 (예: 1 3)",
   "Type your reply…": "답을 입력…",
   "Type {range} or your own reply…": "{range} 또는 직접 입력…",

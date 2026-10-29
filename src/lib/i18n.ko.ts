@@ -293,6 +293,7 @@ const BASE: Record<string, string> = {
   "Held input": "보관한 입력",
 };
 
+/** The parts KO is made of; src/lib/i18n.test.ts fails when a key is in two parts, since a spread keeps only the last. */
 export const KO_PARTS: Record<string, Record<string, string>> = {
   base: BASE,
   settings: SETTINGS_KO,

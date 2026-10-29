@@ -88,9 +88,10 @@ export type DraftRefusal = { note: string; draft: string } | { note: string; any
  * or showed a box it could not tell empty (`box`; empty when it could not read one whole).
  */
 export function submitRefusal(code: string, message: string, draft?: string, box?: string, agent?: string | null): string | DraftRefusal {
-  // a cleared draft with no Enter receipt: the agent may already hold the message as its next turn,
-  // and the reader is told to look, not that it failed
-  if (code === "submit_partial") return { info: t("Not confirmed: it may already be queued in the terminal. Your message stayed here. Check the terminal before sending again.") };
+  // Claude's cleared draft with no Enter receipt: the agent may already hold the message as its next
+  // turn, and the reader is told to look, not that it failed. OpenCode's means part of the message
+  // was typed and nothing was sent: that stays an alert
+  if (code === "submit_partial" && agent !== "opencode") return { info: t("Not confirmed: it may already be queued in the terminal. Your message stayed here. Check the terminal before sending again.") };
   if (code === "input_draft" && draft) return { note: t("Not sent: Claude Code's input box in the terminal already holds “{draft}”.", { draft }), draft };
   if (code === "input_draft" && box) return { note: t("Not sent: Claude Code's input box in the terminal may not be empty. It shows “{box}”.", { box }), anyway: true };
   return submitNote(code, message, agent);
@@ -129,8 +130,13 @@ export function submitNote(code: string, message: string, agent?: string | null)
   const opencode = openCodeRefusalNote(code, message);
   if (opencode !== null) return opencode;
   // a cleared draft with no Enter receipt is not a lost message: the agent may already hold it as a
-  // queued turn, so the words say both, and the terminal is where the reader decides
-  if (code === "submit_partial") return t("Not confirmed: it may already be queued in the terminal. Your message stayed here. Check the terminal before sending again.");
+  // queued turn, so the words say both, and the terminal is where the reader decides. OpenCode's
+  // part-typed input is no queued turn
+  if (code === "submit_partial") {
+    return agent === "opencode"
+      ? t("Not confirmed: the terminal draft was cleared or may have changed. Your message stayed here. Check the terminal before sending again.")
+      : t("Not confirmed: it may already be queued in the terminal. Your message stayed here. Check the terminal before sending again.");
+  }
   if (code === "agent_blocked") return t("Not sent: the agent is waiting for an answer in the terminal. Answer it first.");
   if (code === "read_only") return t("Not sent: this view only watches the pane.");
   if (code === "held_input") return t("Not sent: send or discard the held input first.");
