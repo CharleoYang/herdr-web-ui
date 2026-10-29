@@ -1416,10 +1416,13 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
 - Rows use only shared theme tokens in dark and light. Touch keeps row menus and folds visible,
   with `--touch-target` controls, and draws no hover fill; reduced motion removes row transitions
   and keeps the working dot's breath (opacity only).
-- Footer holds the contextual **Install app** action and Settings, its gear alone (named
-  **Settings** to screen readers and in its tooltip), with the plan meters filling the rest of its row,
-  as rows on the same grid with no rule above.
-  It carries no product name or version: the running versions are read in Settings.
+- Footer holds Settings, its gear alone (named **Settings** to screen readers and in its tooltip),
+  with the plan meters filling the rest of its row, as a row on the same grid with no rule above.
+  It carries no product name or version: the running versions are read in Settings. Nor does it
+  offer **Install app**: the page can only tell it is installed from inside the app's own window,
+  so a footer row kept showing in every browser tab and in browsers that never prompt. Settings →
+  Phone & devices → Install offers it when the browser can install, and the steps otherwise,
+  as the Claude web app keeps getting its apps in the account menu rather than a sidebar row.
 
 ### Plan meters (`.usage*`)
 - Right of the Settings gear, one button holding as many chips as the row has room for (judged

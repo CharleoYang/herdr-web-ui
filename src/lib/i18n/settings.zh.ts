@@ -102,6 +102,7 @@ export const SETTINGS_ZH: Record<string, string> = {
   "Phone": "手机",
   "Devices": "设备",
   "Installed": "已安装",
+  "Install app": "安装应用",
   "About": "关于",
   "Star on GitHub": "在 GitHub 上点 Star",
   "Remote PCs": "远程 PC",

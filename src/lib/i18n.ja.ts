@@ -44,7 +44,6 @@ const BASE: Record<string, string> = {
   "Agent default": "エージェントの既定",
   "Phone & devices": "スマートフォンとデバイス",
   "Access token": "アクセストークン",
-  "Install app": "アプリをインストール",
 
   // ---- shortcuts (lib/shortcuts.ts labels) ----
   "Command palette": "コマンドパレット",

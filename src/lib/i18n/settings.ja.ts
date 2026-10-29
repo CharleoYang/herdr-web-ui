@@ -102,6 +102,7 @@ export const SETTINGS_JA: Record<string, string> = {
   "Phone": "スマートフォン",
   "Devices": "デバイス",
   "Installed": "インストール済み",
+  "Install app": "アプリをインストール",
   "About": "情報",
   "Star on GitHub": "GitHub で Star する",
   "Remote PCs": "リモート PC",
