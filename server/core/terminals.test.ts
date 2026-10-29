@@ -44,7 +44,9 @@ async function join({ readOnly = false, ready, recovering, times = 1, receiptRes
 
 it("retains only a bounded opaque resume ID on an attach claim", async () => {
   const valid = crypto.randomUUID();
-  for (const value of [valid, "", "not-a-resume-id", "x".repeat(4096)]) {
+  // only the UUIDv4 the browser generates: not 36 dashes, another UUID version or upper case
+  for (const value of [valid, "", "not-a-resume-id", "x".repeat(4096), "-".repeat(36),
+    "00000000-0000-0000-0000-000000000000", "12345678-1234-1234-8234-123456789abc", valid.toUpperCase()]) {
     await join({ ready: true, receiptResumeId: value, verifyResume: (id) => expect(id).toBe(value === valid ? valid : undefined) });
   }
 });

@@ -222,14 +222,16 @@ export function createPendingDelivery({ options, clients, attachments, sight, se
     publishPi(paneId);
     void reconcilePiDeliveries(paneId);
   };
-  const failPi = (paneId: string, items: readonly PiTypedReceipt[], unavailable = false): void => {
+  const failPi = (paneId: string, items: readonly PiTypedReceipt[], reason: "changed" | "budget" | "ambiguous" = "changed"): void => {
     let changed = false;
     for (const item of items) {
       if (!activePiReceipt(paneId, item)) continue;
       releasePiSlot(item);
-      item.message.error = unavailable
+      item.message.error = reason === "budget"
         ? { code: "transcript_unconfirmed", message: "Pi's transcript exceeded the confirmation budget" }
-        : { code: "pi_transcript_target_changed", message: "The Pi terminal or session changed before its transcript append was confirmed" };
+        : reason === "ambiguous"
+          ? { code: "transcript_unconfirmed", message: "Pi's transcript shows the same text submitted before this send" }
+          : { code: "pi_transcript_target_changed", message: "The Pi terminal or session changed before its transcript append was confirmed" };
       changed = true;
     }
     if (changed) {
@@ -271,7 +273,8 @@ export function createPendingDelivery({ options, clients, attachments, sight, se
       }
       if (result.retry) return;
       failPi(paneId, matching.filter((item) => result.changed.includes(item.message.id)));
-      failPi(paneId, matching.filter((item) => result.unavailable?.includes(item.message.id)), true);
+      failPi(paneId, matching.filter((item) => result.unavailable?.includes(item.message.id)), "budget");
+      failPi(paneId, matching.filter((item) => result.ambiguous?.includes(item.message.id)), "ambiguous");
       if (result.consumed.length === 0) return;
       const consumed = new Set(matching.filter((item) => activePiReceipt(paneId, item) && result.consumed.includes(item.message.id)).map((item) => item.message.id));
       for (const item of matching) if (consumed.has(item.message.id)) {
