@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { UsageReport } from "../shared/protocol.ts";
 import { FRESH_MS, handleUsageRequest, MAX_READ_BYTES, MIN_REFRESH_MS, RETRY_MS, runCommand, USAGE_PROVIDERS, UsageHttpError, UsageService, type KeychainRead, type UsageContext, type UsageProvider } from "./usage.ts";
+import { installStatusline } from "./statusline-install.ts";
 
 const NOW = Date.parse("2026-09-29T12:00:00Z");
 const HOUR = 3600_000;
@@ -227,6 +228,20 @@ describe("providers", () => {
     expect(requests).toHaveLength(2);
   });
 
+  it("offers the status line for a 403 to a token that has not expired, never for a real expiry or once it is on", async () => {
+    write(join(home, ".claude", ".credentials.json"), { claudeAiOauth: { accessToken: "k", expiresAt: NOW + HOUR } });
+    write(join(home, ".claude.json"), { oauthAccount: { accountUuid: "a" } });
+    replies.set("https://api.anthropic.com/api/oauth/usage", { status: 403, body: { error: { message: "Request not allowed" } } });
+    const read = async () => (await new UsageService(context(), only("claude")).report()).providers[0];
+    expect(await read()).toMatchObject({ problem: "expired", statusline_offer: true });
+    replies.set("https://api.anthropic.com/api/oauth/usage", { status: 401, body: {} });
+    expect(await read()).not.toHaveProperty("statusline_offer");
+    replies.set("https://api.anthropic.com/api/oauth/usage", { status: 403, body: { error: { message: "Request not allowed" } } });
+    installStatusline({ home });
+    expect(await read()).not.toHaveProperty("statusline_offer");
+    expect((await read())?.problem).toBe("expired");
+  });
+
   it("keeps a newer endpoint answer over an older capture when a later refresh is refused", async () => {
     write(join(home, ".claude", ".credentials.json"), { claudeAiOauth: { accessToken: "k", expiresAt: NOW + 2 * HOUR } });
     write(join(home, ".claude.json"), { oauthAccount: { accountUuid: "a" } });
@@ -240,23 +255,6 @@ describe("providers", () => {
     replies.set("https://api.anthropic.com/api/oauth/usage", { status: 403, body: { error: { message: "Request not allowed" } } });
     expect((await service.report()).providers[0]).toMatchObject({ problem: "expired", checked_at: new Date(NOW).toISOString(), windows: [{ used_percent: 42 }] });
     expect(requests).toHaveLength(2);
-  });
-
-  it("keeps the local-only HTTP report off every credential, command and endpoint path", async () => {
-    let touches = 0;
-    const fail = () => { touches++; throw new Error("local-only report touched a provider"); };
-    const provider: UsageProvider = { id: "codex", signIns: fail, read: fail };
-    const service = new UsageService({ ...context(), fetch: fail, keychain: fail, run: fail }, [provider], fail);
-    const url = new URL("http://localhost/api/usage?scope=claude-local&refresh=1");
-    const report = async () => (await handleUsageRequest(new Request(url), url, service)).json() as Promise<UsageReport>;
-    expect(await report()).toEqual({ providers: [] });
-    const path = join(home, ".herdr", "statusline-last.json");
-    write(path, { _herdr: { account: { id: "a", label: "a@example.com" } }, rate_limits: { five_hour: { used_percentage: 17, resets_at: (NOW + HOUR) / 1000 } } });
-    utimesSync(path, new Date(NOW), new Date(NOW));
-    expect((await report()).providers[0]).toMatchObject({ id: "claude", key: "claude:a", account: "a@example.com", windows: [{ used_percent: 17 }] });
-    now += HOUR;
-    expect(await report()).toEqual({ providers: [] });
-    expect(touches).toBe(0);
   });
 
   it("reads Claude's other per-model weekly limits from `limits`, after the flat fields", async () => {

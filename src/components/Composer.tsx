@@ -267,10 +267,8 @@ export function Composer({
   const { fetchPaneFiles } = useMachineApi();
   const { settings, resolvedLanguage } = useSettings();
   const mobile = useMediaQuery("(max-width: 640px), (pointer: coarse)");
-  // With usage reporting disabled, Claude's chip reads only the local capture: no sign-in discovery
-  // and no endpoint fallback. The usage hub and other providers remain behind showUsage.
-  const usageEnabled = !mobile && machineId === "local" && providerForAgent(agent) !== null && (settings.showUsage || agent === "claude");
-  const { report: usageReport } = useUsage(usageEnabled, !settings.showUsage);
+  const usageEnabled = settings.showUsage && !mobile && machineId === "local" && providerForAgent(agent) !== null;
+  const { report: usageReport } = useUsage(usageEnabled);
   const usage = usageEnabled && usageReport !== null ? composerUsage(usageReport.providers, agent, settings.usageOrder, settings.usageHidden) : undefined;
   const usageWindows = usage === undefined ? [] : statusWindows(usage);
   const usageLimit = usageWindows[0];
@@ -1043,11 +1041,7 @@ export function Composer({
     const reset = formatResetIn(window.resets_at, Date.now());
     return `${windowLabel(window)} ${meterText(window, settings.usageCount)}${reset ? ` · ${t("Resets in {time}", { time: reset })}` : ""}`;
   }).join("\n");
-  // both plan-wide windows beside the model, as Claude's own status line names them: the five-hour
-  // session and the week; a plan with only one of them shows only that one
-  const usageCaption = usageWindows
-    .map((window) => `${window.kind === "session" ? "5h" : "wk"} ${formatPercent(meterPercent(window, settings.usageCount))}`)
-    .join(" · ");
+  const usageCaption = usageLimit === undefined ? "" : `${usageLimit.kind === "session" ? "5h" : windowLabel(usageLimit)} ${formatPercent(meterPercent(usageLimit, settings.usageCount))}`;
   const usageAccessible = usage === undefined ? "" : `${t("Subscription usage")}: ${usageName(usage)}, ${usageDetail.replaceAll("\n", ", ")}`;
   const hintText = hint === null ? null
     : hint === "no-room" ? t("{max}-character limit · {count} over", { max: formatChars(MAX_COMPOSER_CHARS), count: formatChars(roomless?.missing ?? 0) })

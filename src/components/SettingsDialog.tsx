@@ -1294,7 +1294,7 @@ function OpenSettingsDialog({ section = null, linkPage = null, linkSection = nul
       case "terminal": return <TerminalPage keyBarButtonRef={keyBarButtonRef} onEditKeyBar={openKeyBar} />;
       case "alerts": return <AlertsPage onEnableNotifications={onEnableNotifications} />;
       case "voice": return <VoicePage />;
-      case "usage": return <UsageSettings onLocalLogin={onUsageLogin} />;
+      case "usage": return <UsageSettings onLocalLogin={onUsageLogin} readOnly={auth?.role === "watch"} />;
       case "shortcuts": return <ShortcutsPage />;
       // after every device went, its own pairing included, a browser asks the server where it stands: the roster answers, or the gate does
       case "devices": return <DevicesPage auth={auth} security={security} onSignOut={actions.lock} onRevokedAll={actions.refresh} />;

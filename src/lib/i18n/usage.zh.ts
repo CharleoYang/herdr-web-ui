@@ -83,4 +83,8 @@ export const USAGE_ZH: Record<string, string> = {
   "{name} asked to slow down. These are the last numbers.": "{name} 要求降低请求频率。显示的是上次读取的数值。",
   "{name} could not be reached.": "无法连接 {name}。",
   "The server cannot open the keychain holding this sign-in.": "服务器无法打开保存此登录信息的钥匙串。",
+  "Read Claude's limits from its status line": "从 Claude 状态栏读取额度",
+  "For networks where Claude's usage API is refused. Wraps Claude Code's status line on this PC and keeps only the limits; turning it off puts Claude's settings back.": "适用于 Claude 用量 API 被拒绝的网络。在此电脑上包装 Claude Code 状态栏，只保存额度；关闭后会恢复 Claude 的设置。",
+  "Read from Claude's status line instead": "改为从 Claude 状态栏读取",
+  "Could not change Claude's status line": "无法更改 Claude 状态栏",
 };

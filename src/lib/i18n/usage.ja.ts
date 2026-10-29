@@ -83,4 +83,8 @@ export const USAGE_JA: Record<string, string> = {
   "{name} asked to slow down. These are the last numbers.": "{name} からリクエストの制限を受けました。最後に取得した値です。",
   "{name} could not be reached.": "{name} に接続できませんでした。",
   "The server cannot open the keychain holding this sign-in.": "このサインイン情報を保存したキーチェーンをサーバーが開けません。",
+  "Read Claude's limits from its status line": "Claude のステータスラインから上限を読む",
+  "For networks where Claude's usage API is refused. Wraps Claude Code's status line on this PC and keeps only the limits; turning it off puts Claude's settings back.": "Claude の使用量 API が拒否されるネットワーク向けです。この PC で Claude Code のステータスラインをラップして上限だけを保存し、オフにすると Claude の設定を元に戻します。",
+  "Read from Claude's status line instead": "代わりに Claude のステータスラインから読む",
+  "Could not change Claude's status line": "Claude のステータスラインを変更できませんでした",
 };

@@ -68,7 +68,7 @@ import type {
   SwapPaneRequest,
   TabCreated,
   UpdateInstallRequest,
-  UsageReport,
+  StatuslineState, UsageReport,
   WorkspaceCreated,
   PluginActionRequest,
   PluginActionResult,
@@ -111,8 +111,18 @@ export function fetchRemoteAccess(): Promise<RemoteAccess> {
 }
 
 /** The sidebar's plan meters; `refresh` asks the providers again instead of the server's recent answer. */
-export function fetchUsage(refresh = false, localOnly = false): Promise<UsageReport> {
-  return getJson<UsageReport>(localOnly ? "/api/usage?scope=claude-local" : refresh ? "/api/usage?refresh=1" : "/api/usage");
+export function fetchUsage(refresh = false): Promise<UsageReport> {
+  return getJson<UsageReport>(refresh ? "/api/usage?refresh=1" : "/api/usage");
+}
+
+/** Settings → Subscription usage: whether Claude's limits are read from its status line on the server's PC. */
+export function fetchStatusline(): Promise<StatuslineState> {
+  return getJson<StatuslineState>("/api/usage/statusline", { cache: "no-store" });
+}
+
+/** Turns that on or off; the server decides what it installs and where, so only the switch is sent. */
+export async function setStatusline(enabled: boolean): Promise<StatuslineState> {
+  return await (await sendJson("/api/usage/statusline", "POST", { enabled })).json() as StatuslineState;
 }
 
 /** Local server's CLIProxyAPI controls; secrets are only ever sent, never read back. */

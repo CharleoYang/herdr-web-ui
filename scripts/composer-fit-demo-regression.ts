@@ -869,7 +869,7 @@ try {
         const usage = page.locator(".composer-status .composer-usage");
         await usage.waitFor();
         assert.equal(await usage.evaluate((node) => node.tagName === "SPAN" && !node.hasAttribute("tabindex")), true, "desktop quota is a read-only glance");
-        assert.equal(await usage.locator('span[aria-hidden="true"]').textContent(), weeklyOnly ? "wk 84%" : "5h 22% \u00b7 wk 84%", "both plan-wide windows, the session first; no session shows the week alone");
+        assert.equal(await usage.locator('span[aria-hidden="true"]').textContent(), weeklyOnly ? "Weekly 84%" : "5h 22%", "the session precedes the tighter week; no session falls back to the week");
         assert.equal(await usage.evaluate((node) => node.classList.contains("is-high")), weeklyOnly);
         assert.match(await usage.getAttribute("title") ?? "", /sam@work\.example/);
       });
@@ -877,7 +877,7 @@ try {
         assert.equal(await page.locator(".composer-status .composer-usage").count(), 0, "mobile omits the desktop quota even when sidebar limits are enabled");
         assert.equal(await page.locator(".composer-context").evaluate((node) => node.tagName === "SPAN" && !node.hasAttribute("aria-expanded")), true);
       });
-      console.log("PASS desktop quota is read-only and names the session then the week; mobile keeps only the inert context ring");
+      console.log("PASS desktop quota is read-only and session-first with weekly fallback; mobile keeps only the inert context ring");
 
       // The message box is typed at the transcript's size (Settings → Chat font size): with a mouse
       // exactly, on a phone never under 16px, the smallest size iOS does not zoom the page for

@@ -6,7 +6,7 @@ import "./UsageMeters.css";
 import type { ProviderUsage, UsageWindow } from "../../shared/protocol.ts";
 import { useT, type Translate } from "../lib/i18n.ts";
 import { useSettings, type UsageCount, type UsageGlance } from "../lib/settings.ts";
-import { formatPercent, formatResetIn, glanceWindow, HIGH_PERCENT, meterPercent, meterText, orderProviders, PROVIDER_MARK, PROVIDER_NAME, usageName, useUsage, windowLabel } from "../lib/usage.ts";
+import { formatPercent, formatResetIn, glanceWindow, HIGH_PERCENT, meterPercent, meterText, orderProviders, PROVIDER_MARK, PROVIDER_NAME, usageName, useStatuslineSwitch, useUsage, windowLabel } from "../lib/usage.ts";
 import { AgentMark } from "./AgentMark.tsx";
 
 /** chips the strip holds when its width cannot be measured (before layout, or a test without one) */
@@ -47,8 +47,9 @@ function Chip({ usage, count, glance }: { usage: ProviderUsage; count: UsageCoun
   );
 }
 
-function Provider({ usage, now, count }: { usage: ProviderUsage; now: number; count: UsageCount }) {
+function Provider({ usage, now, count, watching }: { usage: ProviderUsage; now: number; count: UsageCount; watching: boolean }) {
   const t = useT();
+  const statusline = useStatuslineSwitch(false);
   const name = PROVIDER_NAME[usage.id];
   const problem = problemText(t, usage);
   return (
@@ -60,6 +61,11 @@ function Provider({ usage, now, count }: { usage: ProviderUsage; now: number; co
         {usage.account && <span className="usage-account" title={usage.account}>{usage.account}</span>}
       </header>
       {problem && <p className={`usage-note${isError(usage) ? " is-problem" : ""}`}>{problem}</p>}
+      {/* a 403 to a token that has not expired is a refused network, not an expired sign-in: the status line can stand in */}
+      {usage.statusline_offer && !watching && <button type="button" className="btn btn-ghost usage-offer" disabled={statusline.busy} onClick={() => void statusline.set(true)}>
+        {t("Read from Claude's status line instead")}
+      </button>}
+      {statusline.error && <p className="usage-note is-problem" role="alert">{statusline.error}</p>}
       {usage.windows.map((window, index) => {
         const reset = formatResetIn(window.resets_at, now);
         const value = meterPercent(window, count);
@@ -85,7 +91,8 @@ function Provider({ usage, now, count }: { usage: ProviderUsage; now: number; co
  * provider its logo and the limit chosen in Settings (week or session); the whole strip opens every limit
  * with its reset time.
  */
-export function UsageMeters() {
+/** `watching`: a watching device is not offered what it cannot turn on */
+export function UsageMeters({ watching = false }: { watching?: boolean }) {
   const t = useT();
   const { settings } = useSettings();
   const { report, loading, refresh } = useUsage(settings.showUsage);
@@ -186,7 +193,7 @@ export function UsageMeters() {
               <RefreshCw aria-hidden="true" className={loading ? "is-spinning" : undefined} />
             </button>
           </header>
-          {shown.map((usage) => <Provider key={usage.key} usage={usage} now={now} count={count} />)}
+          {shown.map((usage) => <Provider watching={watching} key={usage.key} usage={usage} now={now} count={count} />)}
         </div>
       )}
     </div>

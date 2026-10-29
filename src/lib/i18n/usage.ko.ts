@@ -83,4 +83,8 @@ export const USAGE_KO: Record<string, string> = {
   "{name} asked to slow down. These are the last numbers.": "{name}에서 요청 속도 제한을 걸었습니다. 마지막으로 읽은 값입니다.",
   "{name} could not be reached.": "{name}에 연결하지 못했습니다.",
   "The server cannot open the keychain holding this sign-in.": "서버가 이 로그인 정보가 든 키체인을 열 수 없습니다.",
+  "Read Claude's limits from its status line": "Claude 상태 줄에서 한도 읽기",
+  "For networks where Claude's usage API is refused. Wraps Claude Code's status line on this PC and keeps only the limits; turning it off puts Claude's settings back.": "Claude 사용량 API가 거부되는 네트워크용입니다. 이 PC에서 Claude Code 상태 줄을 감싸 한도만 보관하고, 끄면 Claude 설정을 그대로 되돌립니다.",
+  "Read from Claude's status line instead": "대신 Claude 상태 줄에서 읽기",
+  "Could not change Claude's status line": "Claude 상태 줄을 바꾸지 못했어요",
 };

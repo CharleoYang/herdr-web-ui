@@ -365,7 +365,7 @@ export interface ApiError {
 
 export type { PaneFindMatch, PaneFindRequest, PaneFindResponse } from "./find.ts";
 
-export type { UsageProviderId, UsageWindow, UsageProblem, ProviderUsage, UsageReport } from "./usage.ts";
+export type { UsageProviderId, UsageWindow, UsageProblem, ProviderUsage, UsageReport, StatuslineState } from "./usage.ts";
 
 export type { CLIProxyStatus, CLIProxyProvider, CLIProxyLogin, CLIProxyLoginStatus } from "./cliproxy.ts";
 

@@ -23,6 +23,7 @@ import { open, type FileHandle } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { readStatusline, type StatuslinePayload } from "./statusline.ts";
+import { installStatusline, removeStatusline, statuslineInstallState, type StatuslineInstallState } from "./statusline-install.ts";
 import type { ProviderUsage, UsageProblem, UsageProviderId, UsageReport, UsageWindow } from "../shared/protocol.ts";
 import { jsonResponse } from "./http.ts";
 import { opencodeDatabasePath } from "./opencode.ts";
@@ -963,6 +964,25 @@ interface Search {
 export class UsageService {
   /** A local CLI login ended: rediscover sign-ins, preserving account rate-limit backoffs. */
   invalidate(): void { this.searches.clear(); this.entries.clear(); }
+  /** Whether Claude's status line is wrapped here (server/statusline-install.ts), on this server's home and CLAUDE_CONFIG_DIR. */
+  statusline(): StatuslineInstallState {
+    return statuslineInstallState(this.statuslineOptions());
+  }
+
+  /** Turns the status-line reading on or off; Claude's next reading comes from where it now can. */
+  setStatusline(enabled: boolean): StatuslineInstallState {
+    try {
+      if (enabled) installStatusline(this.statuslineOptions());
+      else removeStatusline(this.statuslineOptions());
+    } finally {
+      this.invalidate();
+    }
+    return this.statusline();
+  }
+
+  private statuslineOptions() {
+    return { home: this.ctx.home, configDir: this.ctx.env["CLAUDE_CONFIG_DIR"] };
+  }
   private readonly searches = new Map<UsageProviderId, Search>();
   /** by provider and source */
   private readonly entries = new Map<string, Entry>();
@@ -973,17 +993,6 @@ export class UsageService {
 
   constructor(private readonly ctx: UsageContext = systemUsageContext(), private readonly providers: readonly UsageProvider[] = USAGE_PROVIDERS,
     private readonly additional: (refresh: boolean) => Promise<readonly ProviderUsage[]> = async () => []) {}
-
-  /** A disk-only report: never discovers credentials, invokes providers, or falls back to HTTP. */
-  localReport(): UsageReport {
-    const local = readStatusline(this.ctx.home, this.ctx.now());
-    if (!local?.account) return { providers: [] };
-    const windows = claudeStatuslineWindows(local);
-    return { providers: windows.length === 0 ? [] : [{
-      id: "claude", key: `claude:${local.account.id}`, account: local.account.label,
-      plan: null, windows, problem: null, checked_at: new Date(local.readAt).toISOString(),
-    }] };
-  }
 
   /**
    * `refresh` asks again sooner than FRESH_MS. Concurrent callers share one pass; a refresh that
@@ -1088,7 +1097,13 @@ export class UsageService {
       const wait = Math.max(RETRY_MS, error instanceof UsageHttpError ? error.retryAfterMs ?? FRESH_MS : 0);
       if (error instanceof UsageHttpError && error.status === 429) this.backoffs.set(backoff, now + wait);
       if (fallback) return fromLocal(fallback);
-      if (error instanceof UsageHttpError && (error.status === 401 || error.status === 403)) return keep("expired", signIn.plan ?? null, RETRY_MS);
+      if (error instanceof UsageHttpError && (error.status === 401 || error.status === 403)) {
+        const expired = keep("expired", signIn.plan ?? null, RETRY_MS);
+        // a 403 for a token that has not expired is a refusal, not an expiry: the status line can stand in
+        const refused = provider.id === "claude" && error.status === 403 && (signIn.expiresAt === null || signIn.expiresAt > now);
+        if (refused && expired.usage && !this.statusline().installed) expired.usage = { ...expired.usage, statusline_offer: true };
+        return expired;
+      }
       if (error instanceof UsageHttpError && error.status === 429) return keep("rate_limited", signIn.plan ?? null, wait);
       console.warn(`usage: ${provider.id} could not be read: ${error instanceof Error ? error.message : String(error)}`);
       return keep("failed", signIn.plan ?? null, RETRY_MS);
@@ -1098,6 +1113,24 @@ export class UsageService {
 
 export async function handleUsageRequest(request: Request, url: URL, service: UsageService): Promise<Response> {
   if (request.method !== "GET") return jsonResponse({ error: { code: "method_not_allowed", message: "Use GET /api/usage" } }, 405, { allow: "GET" });
-  const report = url.searchParams.get("scope") === "claude-local" ? service.localReport() : await service.report(url.searchParams.get("refresh") === "1");
-  return jsonResponse(report, 200, { "cache-control": "no-store" });
+  return jsonResponse(await service.report(url.searchParams.get("refresh") === "1"), 200, { "cache-control": "no-store" });
+}
+
+/**
+ * GET /api/usage/statusline: whether Claude's limits are read from its status line on this PC.
+ * POST /api/usage/statusline `{ "enabled": boolean }`: turns that on or off. The body names nothing
+ * else (no path, no command): what is installed and where is this server's own decision.
+ */
+export async function handleStatuslineRequest(request: Request, service: UsageService): Promise<Response> {
+  if (request.method === "GET") return jsonResponse(service.statusline(), 200, { "cache-control": "no-store" });
+  if (request.method !== "POST") return jsonResponse({ error: { code: "method_not_allowed", message: "Use GET or POST /api/usage/statusline" } }, 405, { allow: "GET, POST" });
+  const body: unknown = await request.json().catch(() => null);
+  if (typeof body !== "object" || body === null || Array.isArray(body) || Object.keys(body).length !== 1 || typeof (body as Record<string, unknown>)["enabled"] !== "boolean") {
+    return jsonResponse({ error: { code: "invalid_body", message: "Send { \"enabled\": true } or { \"enabled\": false }" } }, 400);
+  }
+  try {
+    return jsonResponse(service.setStatusline((body as { enabled: boolean }).enabled), 200, { "cache-control": "no-store" });
+  } catch (error) {
+    return jsonResponse({ error: { code: "statusline_failed", message: error instanceof Error ? error.message : String(error) } }, 409);
+  }
 }

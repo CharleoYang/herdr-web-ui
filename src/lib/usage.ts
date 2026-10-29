@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { ProviderUsage, UsageProviderId, UsageReport, UsageWindow } from "../../shared/protocol.ts";
-import { fetchUsage } from "./api.ts";
+import type { ProviderUsage, StatuslineState, UsageProviderId, UsageReport, UsageWindow } from "../../shared/protocol.ts";
+import { fetchStatusline, fetchUsage, setStatusline } from "./api.ts";
 import type { UsageCount, UsageGlance } from "./settings.ts";
 import { t } from "./i18n.ts";
 import { usePageVisible } from "./visibility.ts";
@@ -120,7 +120,7 @@ export function moveInOrder(shown: readonly string[], saved: readonly string[], 
   return [...next, ...saved.filter((known) => !shown.includes(known))];
 }
 
-export function useUsage(enabled: boolean, localOnly = false) {
+export function useUsage(enabled: boolean) {
   const [report, setReport] = useState<UsageReport | null>(null);
   const [loading, setLoading] = useState(false);
   const visible = usePageVisible();
@@ -130,18 +130,18 @@ export function useUsage(enabled: boolean, localOnly = false) {
     const current = ++generation.current;
     setLoading(true);
     try {
-      const next = await fetchUsage(refresh, localOnly);
+      const next = await fetchUsage(refresh);
       if (current === generation.current) setReport((previous) => JSON.stringify(previous) === JSON.stringify(next) ? previous : next);
     } catch { /* offline or restarting: the last report stays */ }
     finally { if (current === generation.current) setLoading(false); }
-  }, [localOnly]);
+  }, []);
 
   useEffect(() => {
     if (!enabled) { generation.current++; setReport(null); setLoading(false); return; }
     if (!visible) return;
     void load(false);
     const timer = setInterval(() => void load(false), POLL_MS);
-    return () => { generation.current++; clearInterval(timer); };
+    return () => clearInterval(timer);
   }, [enabled, visible, load]);
 
   useEffect(() => {
@@ -153,4 +153,39 @@ export function useUsage(enabled: boolean, localOnly = false) {
 
   const refresh = useCallback(() => { if (enabled) void load(true); }, [enabled, load]);
   return { report, loading, refresh };
+}
+
+const STATUSLINE_CHANGED = "herdr-statusline-changed";
+
+/**
+ * Settings' switch for reading Claude's limits from its status line on the server's PC, and the
+ * usage popover's offer of it: `watch` reads the state (the offer only turns it on). A change asks
+ * every usage view for fresh limits, and every switch for the new state.
+ */
+export function useStatuslineSwitch(watch: boolean) {
+  const [state, setState] = useState<StatuslineState | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    if (!watch) return;
+    let live = true;
+    const read = () => void fetchStatusline().then((next) => { if (live) setState(next); }, () => { /* an older server: no switch */ });
+    read();
+    window.addEventListener(STATUSLINE_CHANGED, read);
+    return () => { live = false; window.removeEventListener(STATUSLINE_CHANGED, read); };
+  }, [watch]);
+  const set = useCallback(async (enabled: boolean) => {
+    setBusy(true);
+    setError(null);
+    try {
+      setState(await setStatusline(enabled));
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : t("Could not change Claude's status line"));
+    } finally {
+      setBusy(false);
+      window.dispatchEvent(new Event(STATUSLINE_CHANGED));
+      window.dispatchEvent(new Event("herdr-usage-changed"));
+    }
+  }, []);
+  return { state, busy, error, set };
 }

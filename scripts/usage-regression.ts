@@ -37,6 +37,8 @@ const RELOADED = "x-usage-qa-reloaded";
 async function staged(context: BrowserContext): Promise<{ asked: string[]; afterReload: string[] }> {
   const asked: string[] = [];
   const afterReload: string[] = [];
+  // the status-line switch reads Claude's settings on the server's PC: answered here, never by the test server
+  await context.route("**/api/usage/statusline", (route) => route.fulfill({ json: { installed: false, supported: true } }));
   await context.route("**/api/usage*", (route) => {
     asked.push(new URL(route.request().url()).search);
     if (route.request().headers()[RELOADED]) afterReload.push(route.request().url());
@@ -182,6 +184,52 @@ export async function checkUsageMeters(browser: Browser, origin: string): Promis
     await phone.close();
   }
   console.log("PASS plan meters beside the Settings gear: session left by default, accounts, order, hiding, week and used, row fit, popover, refresh, Escape, off switch and phone fit");
+  await checkStatuslineSwitch(browser, origin);
+}
+
+/**
+ * A Claude sign-in the usage API refuses although its token has not expired (a blocked network's
+ * 403) offers the status line in the popover; Settings' switch shows and undoes it. Only on or off
+ * is sent, and nothing reaches the test server's own home.
+ */
+async function checkStatuslineSwitch(browser: Browser, origin: string): Promise<void> {
+  const context = await browser.newContext({ viewport: { width: 1280, height: 800 }, locale: "en-US" });
+  try {
+    let installed = false;
+    const posted: unknown[] = [];
+    await context.route("**/api/usage/statusline", (route) => {
+      if (route.request().method() === "POST") {
+        const body = route.request().postDataJSON() as { enabled: boolean };
+        posted.push(body);
+        installed = body.enabled;
+      }
+      return route.fulfill({ json: { installed, supported: true } });
+    });
+    await context.route("**/api/usage*", (route) => route.fulfill({ json: { providers: [installed ? report().providers[0]!
+      : { id: "claude", key: "claude:u1", account: "me@example.com", plan: "max", problem: "expired", checked_at: null, windows: [], statusline_offer: true }] } satisfies UsageReport }));
+    await context.addInitScript(() => localStorage.setItem("ovis:settings", JSON.stringify({ showUsage: true })));
+    const page = await context.newPage();
+    await page.goto(origin);
+    await page.locator(".usage-strip").click();
+    const offer = page.getByRole("button", { name: "Read from Claude's status line instead", exact: true });
+    await offer.click();
+    // turned on, the limits are asked for again at once: the offer goes and the windows come
+    await offer.waitFor({ state: "detached" });
+    await page.locator(".usage-row").first().waitFor();
+    assert.deepEqual(posted, [{ enabled: true }]);
+
+    await page.keyboard.press("Escape");
+    await page.locator(".sidebar-footer-row .sidebar-footer-action").click();
+    await openSettingsPage(page, "Subscription usage");
+    const statusline = page.getByRole("switch", { name: "Read Claude's limits from its status line", exact: true });
+    await page.waitForFunction(() => document.querySelector('[role="switch"][aria-label="Read Claude\'s limits from its status line"]')?.getAttribute("aria-checked") === "true");
+    await statusline.click();
+    await page.waitForFunction(() => document.querySelector('[role="switch"][aria-label="Read Claude\'s limits from its status line"]')?.getAttribute("aria-checked") === "false");
+    assert.deepEqual(posted, [{ enabled: true }, { enabled: false }]);
+  } finally {
+    await context.close();
+  }
+  console.log("PASS a refused Claude sign-in offers the status line in place; Settings' switch shows and undoes it, sending only on or off");
 }
 
 if (import.meta.main) {
@@ -191,14 +239,14 @@ if (import.meta.main) {
   const { chromium } = await import("playwright-core");
   const { chromePath } = await import("./chrome-path.ts");
   const { createServer } = await import("../server/index.ts");
-  const { UsageService } = await import("../server/usage.ts");
+  const { systemUsageContext, UsageService } = await import("../server/usage.ts");
   const root = mkdtempSync(join(tmpdir(), "herdr-usage-meters-"));
   let server: ReturnType<typeof createServer> | undefined;
   let browser: Browser | undefined;
   try {
     server = createServer({
       port: 0, hostname: "127.0.0.1", token: "", stateDir: root,
-      usage: new UsageService(undefined, []),
+      usage: new UsageService({ ...systemUsageContext(), home: root, env: {} }, []),
     });
     browser = await chromium.launch({ executablePath: chromePath(), headless: true, args: ["--no-sandbox"] });
     await checkUsageMeters(browser, `http://127.0.0.1:${server.port}`);
