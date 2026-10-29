@@ -257,12 +257,30 @@ describe("waitingText", () => {
     } finally { forgetWaitingSends(key); }
   });
 
-  it("settles a whole-second turn for a send made before the chat's first read", () => {
+  it("settles a whole-second turn for a send made before the chat's first read once the agent answers it", () => {
     const key = waitingKey("local", "whole-seconds-first-read");
-    const at = Date.parse("2026-10-29T10:00:02.500Z");
+    const second = Date.parse("2026-10-29T10:00:02Z");
+    const answer = { ...assistant("done"), ts: new Date(second + 1_000).toISOString() };
     try {
-      rememberWaitingSend(key, "next", at, waitingBaseline(key));
-      settleWaitingSends(key, [user("next", Date.parse("2026-10-29T10:00:02Z"))], at + 300, true);
+      rememberWaitingSend(key, "next", second + 500, waitingBaseline(key));
+      settleWaitingSends(key, [user("next", second)], second + 800, true);
+      // stamped in the send's own second: an older message of that second could read the same
+      expect(currentWaitingSends(key).map((send) => send.text)).toEqual(["next"]);
+      settleWaitingSends(key, [user("next", second), answer], second + 1_400, true);
+      expect(currentWaitingSends(key)).toEqual([]);
+    } finally { forgetWaitingSends(key); }
+  });
+
+  it("keeps a new send waiting before the first read when only an older identical turn of the same second is there", () => {
+    const key = waitingKey("local", "unread-second-send");
+    const second = Date.parse("2026-10-29T10:00:02Z");
+    // "repeat" came from the terminal at 02.100 and was answered before this browser sent it again at 02.700
+    const older = [user("repeat", second), { ...assistant("ok"), ts: new Date(second).toISOString() }];
+    try {
+      rememberWaitingSend(key, "repeat", second + 700, waitingBaseline(key));
+      settleWaitingSends(key, older, second + 800, true);
+      expect(currentWaitingSends(key).map((send) => send.text)).toEqual(["repeat"]);
+      settleWaitingSends(key, [...older, user("repeat", second), { ...assistant("ok"), ts: new Date(second + 1_000).toISOString() }], second + 1_400, true);
       expect(currentWaitingSends(key)).toEqual([]);
     } finally { forgetWaitingSends(key); }
   });
