@@ -230,14 +230,14 @@ export class AgentDetector {
     }
   }
 
-  async #version(executable: string, fingerprint: string, args: readonly string[], path: string): Promise<Kept> {
+  async #version(executable: string, fingerprint: string, args: readonly string[], timeoutMs: number, path: string): Promise<Kept> {
     const kept = this.#kept.get(executable);
     if (kept?.fingerprint === fingerprint && (kept.retryAt === null || this.#now() < kept.retryAt)) return kept;
     const running = this.#running.get(fingerprint);
     if (running) return running;
     const read = this.#slot(async (): Promise<Kept> => {
       try {
-        const run = await this.#run(executable, args, this.#timeoutMs, path);
+        const run = await this.#run(executable, args, timeoutMs, path);
         if (run.timedOut) return { fingerprint, version: null, error: "timeout", retryAt: this.#now() + TIMEOUT_KEPT_MS };
         // a flag that failed proves the agent does not run: its error (a wrapper's missing target,
         // with Node's version in the path) is never read for a version. A failure is asked again
@@ -278,7 +278,7 @@ export class AgentDetector {
       if (fingerprint === null) continue;
       // the agent's own folder first (npm's global folder holds its node), then the PATH it was found on
       const path = [dirname(executable), this.#locate.searchPath?.() ?? process.env["PATH"] ?? ""].filter((part) => part !== "").join(delimiter);
-      const { version, error } = await this.#version(executable, fingerprint, entry.detect.version_args, path);
+      const { version, error } = await this.#version(executable, fingerprint, entry.detect.version_args, entry.detect.version_timeout_ms ?? this.#timeoutMs, path);
       return {
         installed: true,
         binary,

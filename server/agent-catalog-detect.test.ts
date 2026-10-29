@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { delimiter, join } from "node:path";
+import { basename, delimiter, join } from "node:path";
 
 import { AGENT_CATALOG, type AgentCatalogEntry } from "../shared/agent-catalog.ts";
 import { AgentDetector, catalogLocator, LOGIN_PATH_KEPT_MS, runVersion, TIMEOUT_KEPT_MS, versionSpawn } from "./agent-catalog-detect.ts";
@@ -29,7 +29,7 @@ describe.skipIf(process.platform === "win32")("AgentDetector", () => {
     stub("claude", "echo '2.1.311 (Claude Code)'");
     stub("codex", "echo 'codex-cli 0.150.0'");
     stub("omp", "echo 'usage: omp [options]'");
-    stub("hermes", "exec sleep 10");
+    stub("hermes", "echo 'Hermes Agent v0.21.5'");
   });
   afterAll(() => {
     rmSync(bin, { recursive: true, force: true });
@@ -80,6 +80,22 @@ describe.skipIf(process.platform === "win32")("AgentDetector", () => {
     expect(await detector.state(entry("omp"), "linux")).toEqual({ installed: true, binary: "omp", on_path: true, version: null, version_error: "unreadable", meets_min_version: null });
   });
 
+  it("gives a slow version flag the longer limit its catalog entry sets, and every other one the default", async () => {
+    // Hermes answers its version flag in 2.3 to 6.7 s on a busy PC, past the 5 s default
+    expect(entry("hermes").detect.version_timeout_ms).toBeGreaterThan(7_000);
+    const limits: Record<string, number> = {};
+    // nothing is run: the limit each probe is given is all this reads
+    const run = async (executable: string, _args: readonly string[], timeoutMs: number): Promise<never> => {
+      limits[basename(executable)] = timeoutMs;
+      throw new Error("not run here");
+    };
+    const detector = new AgentDetector({ home: emptyHome, locate, timeoutMs: 300, run });
+    const slow = entry("claude");
+    await detector.state({ ...slow, detect: { ...slow.detect, version_timeout_ms: 12_345 } }, "linux");
+    await detector.state(entry("codex"), "linux");
+    expect(limits).toEqual({ claude: 12_345, codex: 300 });
+  });
+
   it("never reads a version out of a flag that fails, or out of what it prints as an error", async () => {
     // a wrapper whose target is gone, as a removed nvm Node leaves one: the shell's error names the
     // missing path, Node's version and all, and exits 127
@@ -106,16 +122,17 @@ describe.skipIf(process.platform === "win32")("AgentDetector", () => {
   });
 
   it("kills a version flag that hangs, and asks again only after a while", async () => {
+    // gjc: an agent with no limit of its own, so the detector's 300 ms applies
+    stub("gjc", "exec sleep 10");
     let now = 1_000;
     const detector = new AgentDetector({ home: emptyHome, locate, timeoutMs: 300, now: () => now });
-    const started = performance.now();
-    expect(await detector.state(entry("hermes"), "linux")).toEqual({ installed: true, binary: "hermes", on_path: true, version: null, version_error: "timeout", meets_min_version: null });
-    expect(performance.now() - started).toBeLessThan(5_000);
-    await detector.state(entry("hermes"), "linux");
-    expect(runsOf("hermes")).toBe(1);
+    // the 10 s sleep is ended at the detector's 300 ms limit: the answer says it timed out
+    expect(await detector.state(entry("gjc"), "linux")).toEqual({ installed: true, binary: "gjc", on_path: true, version: null, version_error: "timeout", meets_min_version: null });
+    await detector.state(entry("gjc"), "linux");
+    expect(runsOf("gjc")).toBe(1);
     now += TIMEOUT_KEPT_MS;
-    await detector.state(entry("hermes"), "linux");
-    expect(runsOf("hermes")).toBe(2);
+    await detector.state(entry("gjc"), "linux");
+    expect(runsOf("gjc")).toBe(2);
   });
 
   it("reports an agent not on PATH as not installed, and runs nothing where its name proves nothing", async () => {
