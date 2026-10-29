@@ -849,6 +849,10 @@ export async function openWorktree(request: OpenWorktreeRequest, machineId = "lo
 /**
  * GET /api/sessions/history: the earlier sessions of `agent` in the workspace's folder, newest first;
  * never cached. `paneId` is the pane the list was asked for from: Claude's are that pane's store's.
+ * Pi reads refused by their deadline, reader limit or a changed transcript throw ApiError 503
+ * `session_history_busy` (with retryAfterMs). The dialog retries while keeping its loading state,
+ * then offers Retry, never incomplete rows. The server reuses only stat-keyed completed labels,
+ * never an unfinished scan.
  */
 export function fetchSessionHistory(workspaceId: string, agent: SessionHistoryAgent, machineId = "local", paneId: string | null = null): Promise<SessionHistoryResponse> {
   const query = new URLSearchParams({ workspace_id: workspaceId, agent, ...(paneId === null ? {} : { pane_id: paneId }) });
