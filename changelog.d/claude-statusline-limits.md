@@ -4,7 +4,7 @@
   server's PC wraps the status line set in Claude's `settings.json` (under `CLAUDE_CONFIG_DIR` too)
   and runs that command unchanged, keeping only the five-hour and weekly windows and the account,
   owner-only, in `~/.herdr/statusline-last.json`; turned off, it puts `settings.json` back as it was
-  and deletes what it added. A Claude account refused that way offers **Read from Claude's status line
+  and deletes what it added, never a file there it did not write. A Claude account refused that way offers **Read from Claude's status line
   instead** in the usage popover. A reading counts only for the account that drew it and only until
   its window resets; the endpoint stays the fallback. A watching device cannot turn it on. By
   @CharleoYang.

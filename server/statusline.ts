@@ -1,4 +1,4 @@
-import { readFileSync, statSync } from "node:fs";
+import { closeSync, openSync, readSync, statSync } from "node:fs";
 import { join } from "node:path";
 
 /**
@@ -37,6 +37,24 @@ export const STALE_MS = 6 * 60 * 60_000;
 
 export const statuslinePath = (home: string): string => join(home, ".herdr", "statusline-last.json");
 
+/** The capture writes a few hundred bytes; a file past this is not one of its readings, and is not read. */
+const MAX_CAPTURE_BYTES = 64 * 1024;
+
+/** The file's text, or null where it is not a regular file of at most MAX_CAPTURE_BYTES. */
+function readCapture(path: string): string | null {
+  // stat first: opening a FIFO left at this path would wait for a writer
+  if (!statSync(path).isFile()) return null;
+  const fd = openSync(path, "r");
+  try {
+    const buffer = Buffer.alloc(MAX_CAPTURE_BYTES + 1);
+    let read = 0;
+    for (let got = 1; got > 0 && read < buffer.length; read += got) got = readSync(fd, buffer, read, buffer.length - read, read);
+    return read > MAX_CAPTURE_BYTES ? null : buffer.subarray(0, read).toString("utf8");
+  } finally {
+    closeSync(fd);
+  }
+}
+
 const record = (value: unknown): Record<string, unknown> => (typeof value === "object" && value !== null && !Array.isArray(value) ? value as Record<string, unknown> : {});
 const text = (value: unknown): string | null => (typeof value === "string" && value.trim() !== "" ? value.trim() : null);
 const percent = (value: unknown): number | null => (typeof value === "number" && Number.isFinite(value) ? Math.min(100, Math.max(0, value)) : null);
@@ -68,7 +86,9 @@ export function readStatusline(home: string, now: number = Date.now()): Statusli
   try {
     const stat = statSync(path);
     if (now - stat.mtimeMs > STALE_MS) return null;
-    const payload = parseStatusline(JSON.parse(readFileSync(path, "utf8")), stat.mtimeMs);
+    const text = readCapture(path);
+    if (text === null) return null;
+    const payload = parseStatusline(JSON.parse(text), stat.mtimeMs);
     if (payload === null) return null;
     if (payload.fiveHour && payload.fiveHour.resetsAt !== null && Date.parse(payload.fiveHour.resetsAt) <= now) payload.fiveHour = null;
     if (payload.sevenDay && payload.sevenDay.resetsAt !== null && Date.parse(payload.sevenDay.resetsAt) <= now) payload.sevenDay = null;

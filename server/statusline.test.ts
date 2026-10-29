@@ -65,6 +65,12 @@ describe("readStatusline", () => {
     expect(readStatusline(home, now)?.fiveHour).toBeNull();
   });
 
+  it("does not read a capture larger than any the capture writes", () => {
+    write({ ...payload, padding: "x".repeat(1024 * 1024) });
+    expect(readStatusline(home, payload.rate_limits.five_hour.resets_at * 1000 - 60_000)).toBeNull();
+    rmSync(path);
+  });
+
   it("stops reading a payload older than a five-hour window", () => {
     write(payload);
     const now = payload.rate_limits.five_hour.resets_at * 1000 - 60_000;

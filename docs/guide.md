@@ -338,7 +338,9 @@ Only providers with a sign-in are shown; a GitHub account without Copilot is lef
   set) and keeps only the two windows and the account in `~/.herdr/statusline-last.json`, readable only
   by you. A reading counts only for the account that drew it and only until its window resets, and an
   answer from the endpoint newer than it wins. Turning it off puts `settings.json` back as it was and
-  deletes what was added. A watching device sees the switch and cannot turn it. It is not available on
+  deletes what was added; a file there that it did not write is never replaced or deleted. If you have
+  since changed the status line yourself and it still runs the wrapper, turning it off changes nothing
+  and says so: set the status line yourself first. A watching device sees the switch and cannot turn it. It is not available on
   Windows.
 - On macOS, a server started outside the logged-in desktop session (over SSH, or by a multiplexer started there) reads the keychain item through a one-shot job in that desktop session. A keychain that still cannot be opened shows as such instead of the numbers.
 

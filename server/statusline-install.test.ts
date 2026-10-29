@@ -159,16 +159,72 @@ describe("status-line switch and capture", () => {
     expect(run([]).exitCode).toBe(1);
     expect(readFileSync(settings(), "utf8")).toBe(other);
     expect(readFileSync(settings(real), "utf8")).toBe(wrapped);
-    expect(run(["--remove"], link).exitCode).toBe(0);
-    expect(readSettings(real).statusLine.command).toBe("printf orig");
+    // a command the installer did not write is never replaced; one that still runs the wrapper keeps it
+    const kept = run(["--remove"], link);
+    expect(kept.exitCode).toBe(1);
+    expect(kept.stderr).toContain("nothing was removed");
+    expect(readFileSync(settings(real), "utf8")).toBe(wrapped);
+    expect(draw("{}", real)).toBe("orig");
   });
 
   it("--remove leaves a newer command that only mentions the wrapper's path", () => {
     install();
     const mention = `printf '%s\\n' "${own()}/./statusline-tee.sh"`;
     writeFileSync(settings(), JSON.stringify({ statusLine: { type: "command", command: mention } }));
-    install("--remove");
+    expect(run(["--remove"]).exitCode).toBe(1);
     expect(readSettings().statusLine.command).toBe(mention);
+  });
+
+  it("--remove replaces only the exact command it wrote, never one that names or runs the wrapper otherwise", () => {
+    const custom = join(home, "custom");
+    mkdirSync(custom);
+    writeFileSync(join(custom, "bash"), "#!/bin/sh\nprintf '%s' \"$@\"\n", { mode: 0o755 });
+    const original = readFileSync(settings(), "utf8");
+    for (const spelling of [
+      (path: string) => `echo ${path}`,
+      (path: string) => `printf '%s' '${path}'`,
+      (path: string) => `${join(custom, "bash")} ${path}`,
+      () => `sh "$HOME/.claude/herdr-statusline/statusline-tee.sh"`,
+      () => `sh "$HOME/.claude/herdr-statusline/./statusline-tee.sh"`,
+      () => "cd ~/.claude/herdr-statusline && ./statusline-tee.sh",
+      () => "cd ~/.claude/herdr-statusline && ./statusline-tee.sh;",
+      () => "~/.claude/herdr-statusline/statusline-tee.s[h]",
+      () => "~/.claude/herdr-*/statusline-tee.sh",
+      () => "cd ~/.claude/herdr-statusline && ./statusline-tee.s[h]",
+    ]) {
+      writeFileSync(settings(), original);
+      install();
+      const command = spelling(tee());
+      writeFileSync(settings(), JSON.stringify({ statusLine: { type: "command", command } }));
+      // nothing is removed while the changed line may still run the wrapper, and the switch says so
+      const kept = run(["--remove"]);
+      expect(kept.exitCode).toBe(1);
+      expect(kept.stderr).toContain("nothing was removed");
+      expect(settingsCommand()).toBe(command);
+      // the wrapper stays, so the line it draws keeps working, and it is never wrapped again
+      expect(existsSync(tee())).toBe(true);
+      expect(run([]).exitCode).toBe(1);
+      expect(settingsCommand()).toBe(command);
+      rmSync(own(), { recursive: true });
+    }
+  });
+
+  it("wraps and puts back a command with an empty argument or a glob that is not the wrapper", () => {
+    const command = "printf '%s|%s' left '' [x] && printf '*' && ls -d ~/.claude/statusline.s? >/dev/null";
+    writeFileSync(settings(), JSON.stringify({ statusLine: { type: "command", command } }));
+    install();
+    expect(draw("{}")).toBe("left|[x]|*");
+    install("--remove");
+    expect(settingsCommand()).toBe(command);
+  });
+
+  it("wraps a command that names a statusline-tee.sh path it cannot read", () => {
+    const command = `echo ${join(home, ".claude", "statusline.sh")}/statusline-tee.sh`;
+    writeFileSync(settings(), JSON.stringify({ statusLine: { type: "command", command } }));
+    install();
+    expect(draw("{}")).toBe(`${join(home, ".claude", "statusline.sh")}/statusline-tee.sh\n`);
+    install("--remove");
+    expect(settingsCommand()).toBe(command);
   });
 
   it("knows a wrapper path quoted with spaces in it", () => {
@@ -177,10 +233,12 @@ describe("status-line switch and capture", () => {
     writeFileSync(settings(spaced), JSON.stringify({ statusLine: { type: "command", command: "printf orig" } }));
     expect(run([], spaced).exitCode).toBe(0);
     expect(draw("{}", spaced)).toBe("orig");
-    writeFileSync(settings(spaced), JSON.stringify({ statusLine: { type: "command", command: `sh "${spaced}/herdr-statusline/./statusline-tee.sh"` } }));
+    const command = `sh "${spaced}/herdr-statusline/./statusline-tee.sh"`;
+    writeFileSync(settings(spaced), JSON.stringify({ statusLine: { type: "command", command } }));
     expect(run([], spaced).exitCode).toBe(1);
-    expect(run(["--remove"], spaced).exitCode).toBe(0);
-    expect(readSettings(spaced).statusLine.command).toBe("printf orig");
+    expect(run(["--remove"], spaced).exitCode).toBe(1);
+    expect(readSettings(spaced).statusLine.command).toBe(command);
+    expect(draw("{}", spaced)).toBe("orig");
   });
 
   it("a wrapper run inside itself draws nothing instead of running forever", () => {
@@ -286,6 +344,7 @@ describe("status-line switch and capture", () => {
       rate_limits: { five_hour: { used_percentage: 17, resets_at: 1793190600, extra: true }, seven_day: { used_percentage: 64, resets_at: 1793343600 }, other: {} },
     }));
     expect(JSON.parse(readFileSync(capture(), "utf8"))).toEqual({
+      generatedBy: "Generated by the herdr web UI's status-line installer (server/statusline-install.ts); do not edit.",
       rate_limits: { five_hour: { used_percentage: 17, resets_at: 1793190600 }, seven_day: { used_percentage: 64, resets_at: 1793343600 } },
       _herdr: { account: { id: "acct", label: "me@example.com" } },
     });
@@ -414,6 +473,94 @@ describe("status-line switch and capture", () => {
     writeFileSync(join(own(), "statusline-capture.ts"), "console.log('mine');\n");
     install("--remove");
     expect(readFileSync(join(own(), "statusline-capture.ts"), "utf8")).toBe("console.log('mine');\n");
+  });
+
+  for (const [name, mine] of [["statusline-capture.ts", "console.log('mine');\n"], ["install.json", '{"mine":true}\n']] as const) {
+    it(`never overwrites or deletes a user's ${name} of the installer's name`, () => {
+      const before = readFileSync(settings(), "utf8");
+      mkdirSync(own());
+      writeFileSync(join(own(), name), mine);
+      const refused = run([]);
+      expect(refused.exitCode).toBe(1);
+      expect(refused.stderr).toContain("did not write");
+      expect(readFileSync(join(own(), name), "utf8")).toBe(mine);
+      expect(readFileSync(settings(), "utf8")).toBe(before);
+      expect(statuslineInstallState({ home }).installed).toBe(false);
+      install("--remove");
+      expect(readFileSync(join(own(), name), "utf8")).toBe(mine);
+      expect(readFileSync(settings(), "utf8")).toBe(before);
+    });
+  }
+
+  it("never replaces or deletes a statusline-last.json it did not write", () => {
+    mkdirSync(join(home, ".herdr"));
+    writeFileSync(capture(), "user data\n");
+    install();
+    draw(JSON.stringify({ rate_limits: { five_hour: { used_percentage: 40 } } }));
+    expect(readFileSync(capture(), "utf8")).toBe("user data\n");
+    install("--remove");
+    expect(readFileSync(capture(), "utf8")).toBe("user data\n");
+    expect(existsSync(own())).toBe(false);
+  });
+
+  it("never replaces a statusline-last.json link, even one to nothing", () => {
+    mkdirSync(join(home, ".herdr"));
+    symlinkSync(join(home, "elsewhere.json"), capture());
+    install();
+    draw(JSON.stringify({ rate_limits: { five_hour: { used_percentage: 40 } } }));
+    expect(lstatSync(capture()).isSymbolicLink()).toBe(true);
+    expect(existsSync(join(home, "elsewhere.json"))).toBe(false);
+  });
+
+  it("reads as on through another spelling of the config directory it was turned on in", () => {
+    const real = join(home, ".claude-real");
+    const link = join(home, ".claude-link");
+    mkdirSync(real);
+    symlinkSync(real, link);
+    writeFileSync(settings(real), JSON.stringify({ statusLine: { type: "command", command: "printf orig" } }));
+    expect(run([], real).exitCode).toBe(0);
+    expect(statuslineInstallState({ home, configDir: link }).installed).toBe(true);
+    expect(run(["--remove"], link).exitCode).toBe(0);
+    expect(readSettings(real).statusLine.command).toBe("printf orig");
+  });
+
+  it("keeps a settings.json it created that was since moved into dotfiles and linked", () => {
+    rmSync(settings());
+    install();
+    const dotfiles = join(home, "dotfiles-settings.json");
+    writeFileSync(dotfiles, readFileSync(settings()));
+    rmSync(settings());
+    symlinkSync(dotfiles, settings());
+    install("--remove");
+    expect(lstatSync(settings()).isSymbolicLink()).toBe(true);
+    expect(readSettings().statusLine).toBeUndefined();
+    expect(existsSync(own())).toBe(false);
+  });
+
+  it("writes no reading from a capture helper that is not the installer's own", () => {
+    // the shipped source, run where the installed (marked) copy was replaced or removed
+    const result = Bun.spawnSync([process.execPath, new URL("./statusline-capture.ts", import.meta.url).pathname], {
+      env: env(), stdin: Buffer.from(JSON.stringify({ rate_limits: { five_hour: { used_percentage: 40 } } })), timeout: 10_000,
+    });
+    expect(result.exitCode).toBe(0);
+    expect(existsSync(capture())).toBe(false);
+  });
+
+  it("never deletes a file named like a killed write's leftover that holds something else", () => {
+    mkdirSync(own());
+    const named = join(own(), ".install.json.4242.0b0e7f5c-8a1d-4c3e-9f2a-7d6b5c4a3e21.tmp");
+    writeFileSync(named, "user data\n");
+    expect(run([]).exitCode).toBe(1);
+    install("--remove");
+    expect(readFileSync(named, "utf8")).toBe("user data\n");
+  });
+
+  it("keeps the last reading instead of buffering an oversized payload", () => {
+    install();
+    draw(JSON.stringify({ rate_limits: { five_hour: { used_percentage: 40 } } }));
+    const huge = JSON.stringify({ rate_limits: { five_hour: { used_percentage: 90 } }, padding: "x".repeat(1024 * 1024) });
+    expect(draw(huge)).toBe(huge);
+    expect(readStatusline(home)?.fiveHour?.usedPercent).toBe(40);
   });
 
   it("waits for a lock whose holder still runs however old it is, and takes over one whose holder is gone", () => {

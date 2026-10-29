@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { Database } from "bun:sqlite";
 import { createHash } from "node:crypto";
-import { mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { UsageReport } from "../shared/protocol.ts";
@@ -271,11 +271,13 @@ describe("providers", () => {
   });
 
   it("answers a failed switch without quoting Claude's settings or a command saved in them", async () => {
-    mkdirSync(join(home, ".claude", "herdr-statusline"), { recursive: true });
-    const wrapper = join(home, ".claude", "herdr-statusline", "statusline-tee.sh");
-    write(join(home, ".claude", "settings.json"), { statusLine: { type: "command", command: `API_KEY=FAKE_SECRET_FOR_TEST sh ${wrapper}` } });
+    mkdirSync(join(home, ".claude"), { recursive: true });
     const service = new UsageService(context(), only("claude"));
     const post = () => handleStatuslineRequest(new Request("http://x/api/usage/statusline", { method: "POST", body: JSON.stringify({ enabled: true }) }), service);
+    expect((await post()).status).toBe(200);
+    // a command that runs the installed wrapper behind a secret of its own is refused, not wrapped
+    const wrapper = join(home, ".claude", "herdr-statusline", "statusline-tee.sh");
+    write(join(home, ".claude", "settings.json"), { statusLine: { type: "command", command: `API_KEY=FAKE_SECRET_FOR_TEST sh ${wrapper}` } });
     const refused = await post();
     expect(refused.status).toBe(409);
     expect(await refused.text()).not.toContain("FAKE_SECRET_FOR_TEST");
@@ -283,6 +285,18 @@ describe("providers", () => {
     const broken = await post();
     expect(broken.status).toBe(500);
     expect(await broken.text()).not.toContain("FAKE_SECRET_FOR_TEST");
+  });
+
+  it("answers a turn-off it could only do in part as refused, not as off", async () => {
+    mkdirSync(join(home, ".claude"), { recursive: true });
+    const service = new UsageService(context(), only("claude"));
+    const post = (enabled: boolean) => handleStatuslineRequest(new Request("http://x/api/usage/statusline", { method: "POST", body: JSON.stringify({ enabled }) }), service);
+    expect((await post(true)).status).toBe(200);
+    const wrapper = join(home, ".claude", "herdr-statusline", "statusline-tee.sh");
+    write(join(home, ".claude", "settings.json"), { statusLine: { type: "command", command: `sh ${wrapper}` } });
+    const kept = await post(false);
+    expect(kept.status).toBe(409);
+    expect(existsSync(wrapper)).toBe(true);
   });
 
   it("never offers the status line where it cannot run", async () => {
