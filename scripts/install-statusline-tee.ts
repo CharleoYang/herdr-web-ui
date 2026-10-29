@@ -44,15 +44,45 @@ const shellQuote = (value: string): string => (/^[\w./:@%+=,-]+$/.test(value) ? 
 const isObject = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null && !Array.isArray(value);
 const commandOf = (value: unknown): string | null => (isObject(value) && typeof value["command"] === "string" ? value["command"] : null);
 
-/** Whether `command` runs the wrapper at `tee`, however its path is spelled (a symlinked config dir). */
-function runsWrapper(command: string, tee: string): boolean {
-  const path = command.startsWith("'") && command.endsWith("'") ? command.slice(1, -1).replaceAll(`'\\''`, "'") : command;
+/**
+ * The words a POSIX shell would split `command` into, with quotes and backslashes taken off and a
+ * leading unquoted `~/` expanded; nothing is run. Enough to find a path however it is quoted.
+ */
+function shellWords(command: string): string[] {
+  const words: string[] = [];
+  let word: string | null = null;
+  for (let at = 0; at < command.length; at++) {
+    const char = command[at]!;
+    if (/\s/.test(char)) { if (word !== null) words.push(word); word = null; continue; }
+    word ??= "";
+    if (char === "'") {
+      const end = command.indexOf("'", at + 1);
+      word += command.slice(at + 1, end === -1 ? undefined : end);
+      at = end === -1 ? command.length : end;
+    } else if (char === '"') {
+      for (at++; at < command.length && command[at] !== '"'; at++) {
+        word += command[at] === "\\" && /["\\$`]/.test(command[at + 1] ?? "") ? command[++at] : command[at];
+      }
+    } else if (char === "\\") {
+      word += command[++at] ?? "";
+    } else if (char === "~" && word === "" && command[at + 1] === "/") {
+      word += homedir();
+    } else {
+      word += char;
+    }
+  }
+  if (word !== null) words.push(word);
+  return words;
+}
+
+/** Whether `path` is the wrapper at `tee`, however it is spelled (a symlinked config dir, `/./`, `//`). */
+function runsWrapper(path: string, tee: string): boolean {
   try { return realpathSync(path) === realpathSync(tee); } catch { return false; }
 }
 
 /** Whether `command` names a wrapper of this installer: any copy by name, or this one however spelled. */
 const runsAWrapper = (command: string, tee: string): boolean =>
-  command.includes(WRAPPER) || command.split(/\s+/).some((word) => word !== "" && runsWrapper(word, tee));
+  command.includes(WRAPPER) || shellWords(command).some((word) => word !== "" && runsWrapper(word, tee));
 
 function locations() {
   const configured = process.env["CLAUDE_CONFIG_DIR"]?.trim();
@@ -212,7 +242,8 @@ function install(): string {
   const current = value[KEY];
   const command = commandOf(current);
   if (command !== null && runsAWrapper(command, where.tee)) {
-    if (existsSync(where.record) && runsWrapper(command, where.tee)) return `already installed: ${where.settings} runs ${command}`;
+    const words = shellWords(command);
+    if (existsSync(where.record) && words.length === 1 && runsWrapper(words[0]!, where.tee)) return `already installed: ${where.settings} runs ${command}`;
     throw new Error(`${where.settings} already runs a status-line wrapper of this installer (${command}): run --remove with the CLAUDE_CONFIG_DIR it was installed with, or set statusLine yourself`);
   }
   checkOwnDirectory(where.own);
@@ -252,7 +283,7 @@ function remove(): string {
   const removeFile = (path: string) => {
     try { if (lstatSync(path).isFile()) rmSync(path); } catch (error) { if (!isMissing(error)) throw error; }
   };
-  for (const name of OWN_FILES) removeFile(join(where.own, name));
+  for (const name of [...OWN_FILES, ...readdirSync(where.own).filter((name) => LEFTOVER.test(name))]) removeFile(join(where.own, name));
   removeFile(where.payload);
   const left = readdirSync(where.own);
   if (left.length > 0) return `removed: ${outcome}, and deleted the installer's files and ${where.payload}; ${where.own} stays for what else is in it (${left.join(", ")})`;

@@ -136,8 +136,15 @@ describe("statusline installer and capture", () => {
     writeFileSync(settings(real), JSON.stringify({ statusLine: { type: "command", command: `sh ${settingsCommand(real)}` } }));
     const wrapped = readFileSync(settings(real), "utf8");
     expect(run([], real).exitCode).toBe(1);
-    writeFileSync(settings(real), JSON.stringify({ statusLine: { type: "command", command: `sh ${join(real, "herdr-statusline")}//statusline-tee.sh` } }));
-    expect(run([], real).exitCode).toBe(1);
+    for (const command of [
+      `sh ${join(real, "herdr-statusline")}//statusline-tee.sh`,
+      `sh "${join(real, "herdr-statusline")}/./statusline-tee.sh"`,
+      `sh '${join(link, ".", "herdr-statusline")}/./statusline-tee.sh'`,
+      `sh ${join(real, "herdr-statusline").replaceAll("/", "\\/")}/.\\/statusline-tee.sh`,
+    ]) {
+      writeFileSync(settings(real), JSON.stringify({ statusLine: { type: "command", command } }));
+      expect(run([], real).exitCode).toBe(1);
+    }
     writeFileSync(settings(real), wrapped);
     writeFileSync(settings(), JSON.stringify({ statusLine: { type: "command", command: settingsCommand(real) } }));
     const other = readFileSync(settings(), "utf8");
@@ -146,6 +153,18 @@ describe("statusline installer and capture", () => {
     expect(readFileSync(settings(real), "utf8")).toBe(wrapped);
     expect(run(["--remove"], link).exitCode).toBe(0);
     expect(readSettings(real).statusLine.command).toBe("printf orig");
+  });
+
+  it("knows a wrapper path quoted with spaces in it", () => {
+    const spaced = join(home, "Claude Config");
+    mkdirSync(spaced);
+    writeFileSync(settings(spaced), JSON.stringify({ statusLine: { type: "command", command: "printf orig" } }));
+    expect(run([], spaced).exitCode).toBe(0);
+    expect(draw("{}", spaced)).toBe("orig");
+    writeFileSync(settings(spaced), JSON.stringify({ statusLine: { type: "command", command: `sh "${spaced}/herdr-statusline/./statusline-tee.sh"` } }));
+    expect(run([], spaced).exitCode).toBe(1);
+    expect(run(["--remove"], spaced).exitCode).toBe(0);
+    expect(readSettings(spaced).statusLine.command).toBe("printf orig");
   });
 
   it("a wrapper run inside itself draws nothing instead of running forever", () => {
@@ -211,6 +230,9 @@ describe("statusline installer and capture", () => {
     install();
     expect(existsSync(leftover)).toBe(false);
     expect(draw("{}")).toBe("{}");
+    writeFileSync(leftover, "{");
+    install("--remove");
+    expect(existsSync(own())).toBe(false);
   });
 
   it("keeps settings.json whole when a write fails, so a later --remove still recovers it", () => {
