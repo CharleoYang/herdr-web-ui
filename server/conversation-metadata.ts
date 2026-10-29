@@ -3,6 +3,8 @@ import { piContextWindow } from "./pi-models.ts";
 import { cmdContextWindow } from "./cmd.ts";
 import { copilotRecords } from "./copilot.ts";
 import { museModel } from "./muse.ts";
+import { localCommandStdout } from "./claude-transcript.ts";
+import { CLAUDE_FAMILY, VERSION } from "./start-screen.ts";
 import type { ConversationMetadata, ConversationResponse } from "../shared/protocol.ts";
 
 type RecordValue = Record<string, unknown>;
@@ -33,6 +35,45 @@ function contextOf(used: number, model: string | null, window: number | null, be
   }
   const long = model?.startsWith("claude") && (used > CLAUDE_STANDARD_WINDOW || before?.window === CLAUDE_LONG_WINDOW);
   return { used, window: long ? CLAUDE_LONG_WINDOW : null };
+}
+
+// Claude Code's /model answer names the model by its display name: in backticks (2.1.3xx), or bare
+// before "and saved" / "for this session" in older versions (bold ones lose the bold to the strip)
+const CLAUDE_MODEL_SET = /^Set model to (?:`([^`]+)`|(.+?)(?= and saved | for this session|$))/u;
+// only the plain "<Family> <major>[.<minor>]" maps back to an id, the inverse of modelLabel's
+// rule (src/lib/modelName.ts) and of the start screen's (start-screen.ts); its answers name the
+// same id in a 1M window or as the default
+const CLAUDE_MODEL_NAME = new RegExp(`^(${CLAUDE_FAMILY}) (${VERSION})(?:\\.(0|${VERSION}))?(?: \\(1M context\\))?(?: \\(default\\))?$`, "iu");
+// the efforts Claude Code records on its answers (`entry.effort`)
+const CLAUDE_EFFORT = "(low|medium|high|xhigh|max)";
+const CLAUDE_EFFORT_SET = new RegExp(`^Set effort level to ${CLAUDE_EFFORT}(?= |$)`, "u");
+const CLAUDE_MODEL_EFFORT = new RegExp(` with \`${CLAUDE_EFFORT}\` effort$`, "u");
+
+/**
+ * What a Claude Code /model or /effort answer set, so the pill follows it before the next answer
+ * names it. Only the command's own record counts: a `local_command` entry (for its own command
+ * when it names one), or a user entry that is the whole output and was not typed (a prompt carries
+ * `origin` or `permissionMode`). Any other answer (kept, refused, a name of another form, an
+ * effort no answer records) sets nothing, and the value stays as it was.
+ */
+function claudeCommandSetting(entry: RecordValue): { model: string | null; effort: string | null } {
+  const none = { model: null, effort: null };
+  if (entry.isSidechain === true) return none;
+  const local = entry.type === "system" && entry.subtype === "local_command";
+  const answer = entry.type === "user" && entry.isMeta !== true && !("origin" in entry) && !("permissionMode" in entry);
+  if (!local && !answer) return none;
+  const said = localCommandStdout(local ? entry.content : record(entry.message).content)?.split("\n")[0];
+  if (!said) return none;
+  const command = label(record(entry.commandRun).command);
+  const set = CLAUDE_MODEL_SET.exec(said);
+  if (set && (command === null || command === "model")) {
+    const name = CLAUDE_MODEL_NAME.exec(set[1] ?? set[2] ?? "");
+    // a model it cannot name keeps the pill whole: no new effort beside the old model
+    if (!name) return none;
+    return { model: `claude-${name[1]!.toLowerCase()}-${name[2]}${name[3] === undefined ? "" : `-${name[3]}`}`, effort: CLAUDE_MODEL_EFFORT.exec(said)?.[1] ?? null };
+  }
+  const effort = CLAUDE_EFFORT_SET.exec(said);
+  return effort && (command === null || command === "effort") ? { model: null, effort: effort[1]! } : none;
 }
 
 /** Read recorded settings, never infer effort from the presence of thinking text.
@@ -138,6 +179,9 @@ export function parseConversationMetadata(text: string, source: ConversationResp
       }
       // Claude Code records the effort each response ran at; versions before it record none
       if (entry.type === "assistant" && "effort" in entry) metadata.reasoning_effort = label(entry.effort);
+      const set = claudeCommandSetting(entry);
+      if (set.model) metadata.model = set.model;
+      if (set.effort) metadata.reasoning_effort = set.effort;
     }
   }
   return metadata;
