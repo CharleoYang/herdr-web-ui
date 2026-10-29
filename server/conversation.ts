@@ -70,7 +70,7 @@ import { forgetHermesTranscriptState, hermesConversationPage, hermesToolOutput, 
 
 import { createOmpTranscriptParser, isContextClear, MAX_TURNS, omoTaskResults, parseOmpTranscript, PI_IMAGE_REF, PI_PROMPT_IMAGE_REF, piImageBlock, piMessage, piNotice, piPromptImages, piResults, type TranscriptParser } from "./transcript-records.ts";
 import { skillPromptMessage } from "./skill-activity.ts";
-import { CLAUDE_IMAGE_REF, claudeImageType, claudeResultText, createClaudeTranscriptParser, parseClaudeTranscript, type TranscriptEntry } from "./claude-transcript.ts";
+import { CLAUDE_IMAGE_REF, claudeImageType, claudeResultText, createClaudeTranscriptParser, entryHostToolResults, isHostHandoff, parseClaudeTranscript, type TranscriptEntry } from "./claude-transcript.ts";
 import { forgetSubagents, lineNotifications, subagentDetails, type SubagentDetail } from "./claude-subagents.ts";
 import { launchedAgents } from "./launched-agents.ts";
 import { readsStartScreen, startScreenMetadata } from "./start-screen.ts";
@@ -2528,15 +2528,23 @@ function* codexToolImageSteps(path: string, ref: string, codexHome: string): Ste
 function outputInText(source: RecognizedConversation["source"], text: string, ref: string): string | null {
   text = activeHistoryText(text, source);
   const needle = JSON.stringify(ref);
+  // a senpi host tool result names its call inside its header's text, not as a JSON string
+  const hostNeedle = `id=${ref}):`;
+  // Claude Code's own result for a call, kept until no host result for the call follows it
+  let native: string | null = null;
   for (const line of text.split("\n")) {
-    if (!line.includes(needle)) continue;
+    if (!line.includes(needle) && !(source === "claude-transcript" && line.includes(hostNeedle))) continue;
     let entry: Record<string, unknown>;
     try { entry = JSON.parse(line) as Record<string, unknown>; } catch { continue; }
     let output: string | null = null;
     if (source === "claude-transcript") {
       const content = (entry.message as { content?: unknown } | undefined)?.content;
+      const host = entryHostToolResults(entry, content).filter((result) => result.id === ref).at(-1);
       const result = Array.isArray(content) ? content.find((block) => (block as { type?: unknown; tool_use_id?: unknown } | null)?.type === "tool_result" && (block as { tool_use_id?: unknown }).tool_use_id === ref) : undefined;
-      if (result !== undefined) output = claudeResultText((result as { content?: unknown }).content);
+      if (host !== undefined) output = claudeResultText((content as unknown[]).slice(host.header + 1, host.end));
+      // senpi's denial is no output: the host's result for the call comes in a later entry, and wins
+      // over any denial wording this does not know
+      else if (result !== undefined && native === null && !isHostHandoff(result as { content?: unknown; is_error?: unknown })) native = claudeResultText((result as { content?: unknown }).content);
     } else if (source === "codex-transcript") {
       const payload = entry.payload as { type?: unknown; call_id?: unknown; output?: unknown } | undefined;
       if ((payload?.type === "function_call_output" || payload?.type === "custom_tool_call_output") && payload.call_id === ref) output = codexOutputText(payload.output);
@@ -2546,7 +2554,7 @@ function outputInText(source: RecognizedConversation["source"], text: string, re
     }
     if (output !== null) return output.length > TOOL_OUTPUT_MAX ? `${output.slice(0, TOOL_OUTPUT_MAX)}\n… trimmed` : output;
   }
-  return null;
+  return native !== null && native.length > TOOL_OUTPUT_MAX ? `${native.slice(0, TOOL_OUTPUT_MAX)}\n… trimmed` : native;
 }
 
 /** Asset reads share the reset boundary even when their ref predates /clear. */

@@ -178,6 +178,64 @@ export function unwrapPastes(text: string): string {
   return changed ? visible.replace(/^\n+|\n+$/g, "") : text;
 }
 
+/**
+ * senpi (OmO's engine, its anthropic-subscription provider) runs Claude Code through the SDK but runs
+ * the tools on its own host: Claude Code records each call with senpi's PreToolUse denial as its
+ * result, then senpi sends the host's result as the next prompt's text, one
+ * `Tool result (<tool>, id=<call id>):\n` block before the result's own blocks, and a block that is
+ * exactly "\n\n" between that and the next message it sends along (session-sync.ts
+ * buildDeltaPromptBlocks). The result is the call's, not anything the person typed.
+ */
+const HOST_RESULT_HEADER = /^Tool result \((.+), id=([A-Za-z0-9_-]{1,128})\):\n$/;
+const HOST_MESSAGE_BREAK = "\n\n";
+/** senpi's denial, in each wording it has shipped: the host runs the tool, and this is not its result */
+const HOST_HANDOFF = /^PreToolUse:\S+ hook error: [\s\S]*\bSenpi (?:executes|runs) this tool on the host and returns its result as the next user message\b/;
+
+/** One host tool result in a prompt's blocks: the call it answers, its header's index, and the end of its blocks (exclusive). */
+export interface HostToolResult { name: string; id: string; header: number; end: number }
+
+const isTextBlock = (block: unknown, text?: string): block is { type: "text"; text: string } =>
+  typeof block === "object" && block !== null && (block as { type?: unknown }).type === "text"
+  && typeof (block as { text?: unknown }).text === "string" && (text === undefined || (block as { text: string }).text === text);
+
+/**
+ * The host tool results a prompt's blocks carry, in order. Only a message's first block can be a
+ * header: one quoted inside a message's text, or inside another result, is that message's words.
+ */
+export function hostToolResults(content: readonly unknown[]): HostToolResult[] {
+  const results: HostToolResult[] = [];
+  for (let start = 0; start < content.length;) {
+    let end = start;
+    while (end < content.length && !isTextBlock(content[end], HOST_MESSAGE_BREAK)) end++;
+    const header = content[start];
+    const match = isTextBlock(header) ? HOST_RESULT_HEADER.exec(header.text) : null;
+    if (match !== null) results.push({ name: match[1]!, id: match[2]!, header: start, end });
+    start = end + 1;
+  }
+  return results;
+}
+
+/**
+ * The host tool results of an entry: only a program's prompt (the SDK's) carries them, so a person at
+ * Claude Code's own prompt only quotes one.
+ */
+export function entryHostToolResults(entry: { type?: unknown; promptSource?: unknown; entrypoint?: unknown }, content: unknown): HostToolResult[] {
+  const sdk = entry.promptSource === "sdk" || (typeof entry.entrypoint === "string" && entry.entrypoint.startsWith("sdk"));
+  return sdk && entry.type === "user" && Array.isArray(content) ? hostToolResults(content) : [];
+}
+
+/** The blocks host results take in a prompt, the breaks around them included: the rest is the prompt's own. */
+export function hostedBlocks(results: readonly HostToolResult[]): Set<number> {
+  const hosted = new Set<number>();
+  for (const host of results) for (let at = host.header - 1; at <= host.end; at++) hosted.add(at);
+  return hosted;
+}
+
+/** senpi's denial of a call it runs on its host: the result comes later, as a host tool result. */
+export function isHostHandoff(result: { content?: unknown; is_error?: unknown }): boolean {
+  return result.is_error === true && HOST_HANDOFF.test(claudeResultText(result.content));
+}
+
 /** A parsed JSONL line's message shape (only the fields we read). */
 export interface TranscriptEntry {
   type?: string;
@@ -192,6 +250,9 @@ export interface TranscriptEntry {
   isCompactSummary?: boolean;
   origin?: unknown;
   permissionMode?: unknown;
+  /** "sdk" (with an `sdk-…` entrypoint): a program sent the prompt through Claude Code's SDK, not a person at its prompt */
+  promptSource?: unknown;
+  entrypoint?: unknown;
   /** "updates": Claude Code shows the entry's thinking text as a progress message, not as reasoning */
   thinkingDisplay?: unknown;
   message?: { role?: string; content?: unknown; stop_reason?: unknown };
@@ -258,6 +319,8 @@ interface ClaudeParseState {
   turns: ConversationTurn[];
   /** Tool parts still waiting for their result, by tool_use id. */
   pending: Map<string, Extract<ConversationPart, { kind: "tool" }>>;
+  /** Every tool part by its tool_use id: a host tool result answers its call after Claude Code's own result did. */
+  calls: Map<string, Extract<ConversationPart, { kind: "tool" }>>;
   /** The agent's last entry called a tool: its turn is not over. */
   atWork: boolean;
   /** Injected feedback can resume the model after a completed reply. */
@@ -269,7 +332,7 @@ interface ClaudeParseState {
 
 function claudeParseState(options: ClaudeTranscriptOptions): ClaudeParseState {
   return {
-    turns: [], pending: new Map(), atWork: false, completed: false,
+    turns: [], pending: new Map(), calls: new Map(), atWork: false, completed: false,
     noticed: options.noticed ?? new Set(), lastPrompt: null, peersSeen: new Set(),
   };
 }
@@ -288,7 +351,7 @@ export function createClaudeTranscriptParser(options: ClaudeTranscriptOptions = 
 }
 
 function claudeTranscriptParser(options: ClaudeTranscriptOptions, state: ClaudeParseState): TranscriptParser {
-  const { turns, pending, noticed, peersSeen } = state;
+  const { turns, pending, calls, noticed, peersSeen } = state;
   /** Where a notice goes: before the turn at work it was written in, else at the end. */
   const noticeAt = (): number => state.atWork && turns.at(-1)?.role === "assistant" ? turns.length - 1 : turns.length;
   /** True when the block was a notification (shown or not): it is no turn of anyone's typing. */
@@ -336,7 +399,7 @@ function claudeTranscriptParser(options: ClaudeTranscriptOptions, state: ClaudeP
       return;
     }
     if (entry.isMeta) return;
-    if (isContextClear(entry, "claude-transcript")) { turns.length = 0; pending.clear(); state.lastPrompt = null; return; }
+    if (isContextClear(entry, "claude-transcript")) { turns.length = 0; pending.clear(); calls.clear(); state.lastPrompt = null; return; }
     const content = entry.message?.content;
     // a compaction's summary marks where the conversation was folded, readable on request
     if (entry.isCompactSummary) {
@@ -418,8 +481,37 @@ function claudeTranscriptParser(options: ClaudeTranscriptOptions, state: ClaudeP
     }
 
     if (entry.type === "user" && Array.isArray(content)) {
+      // the host's results of senpi's calls are the calls' output; what else the entry holds is still the prompt
+      const hosts = entryHostToolResults(entry, content);
+      for (const host of hosts) {
+        const call = calls.get(host.id);
+        let tool: Extract<ConversationPart, { kind: "tool" }>;
+        // the call id is Claude Code's own and unique; the header's name is senpi's mapping of it
+        if (call !== undefined) tool = call;
+        // a call this read never saw (before the window): still a tool's output by the header, so it
+        // goes in the work, never in the person's seat
+        else {
+          tool = { kind: "tool", name: host.name, summary: host.name, input: "", output: "", call_id: host.id };
+          assistantTurn(entry.timestamp).parts.push(tool);
+        }
+        const blocks = content.slice(host.header + 1, host.end);
+        delete tool.output_ref; delete tool.output_size; delete tool.error;
+        trimOutput(tool, claudeResultText(blocks), host.id);
+        // senpi sends no failure flag with the result: like an empty result, it reads as done
+        tool.state = "ok";
+        if (tool.skill) tool.skill.status = "loaded";
+        const pictures = blocks.flatMap((block, at) => {
+          const mediaType = claudeImageType(block);
+          const ref = mediaType === null ? null : claudeImageRef(entry.uuid, host.header + 1 + at);
+          return mediaType === null || ref === null ? [] : [{ media_type: mediaType, ref }];
+        });
+        if (pictures.length > 0) tool.images = pictures; else delete tool.images;
+      }
+      // the results and the breaks around them were senpi's, not the person's
+      const hosted = hostedBlocks(hosts);
+      const blocks = hosted.size === 0 ? content : content.map((block: unknown, at: number) => hosted.has(at) ? null : block);
       const invocations: ConversationPart[] = [];
-      const prompt = content.flatMap((block: unknown) => {
+      const prompt = blocks.flatMap((block: unknown) => {
         if (block === null || typeof block !== "object") return [];
         const part = block as { type?: string; text?: unknown };
         // a notice can share an entry with a tool's result
@@ -431,13 +523,15 @@ function claudeTranscriptParser(options: ClaudeTranscriptOptions, state: ClaudeP
         }
         return part.type === "text" && typeof part.text === "string" && !isCommandEntry(part.text.trim(), entry) ? [part.text] : [];
       }).join("\n");
-      for (const [index, block] of content.entries()) {
+      for (const [index, block] of blocks.entries()) {
         if (typeof block !== "object" || block === null) continue;
         const result = block as { type?: string; tool_use_id?: string; content?: unknown; is_error?: unknown };
         if (result.type !== "tool_result" || typeof result.tool_use_id !== "string") continue;
         const tool = pending.get(result.tool_use_id);
         if (tool === undefined) continue;
         pending.delete(result.tool_use_id);
+        // senpi took the call to its host: no outcome yet, and its output arrives as a host tool result
+        if (isHostHandoff(result)) continue;
         trimOutput(tool, claudeResultText(result.content), result.tool_use_id);
         if (result.is_error === true) tool.error = true;
         // the result's flag, and only it, says how the call went: an empty result is still a success
@@ -447,7 +541,7 @@ function claudeTranscriptParser(options: ClaudeTranscriptOptions, state: ClaudeP
         const pictures = Array.isArray(result.content) ? claudeImages(entry.uuid, result.content, index) : [];
         if (pictures.length > 0) tool.images = pictures;
       }
-      const images = claudeImages(entry.uuid, content).map((image) => ({ kind: "image" as const, ...image }));
+      const images = claudeImages(entry.uuid, blocks).map((image) => ({ kind: "image" as const, ...image }));
       if (prompt.trim() || images.length > 0) pushPrompt({ role: "user", ts: entry.timestamp ?? null, parts: [...images, ...(prompt.trim() ? [{ kind: "text" as const, text: unwrapPastes(prompt) }] : []), ...invocations] }, entry);
       return;
     }
@@ -487,6 +581,7 @@ function claudeTranscriptParser(options: ClaudeTranscriptOptions, state: ClaudeP
           if (typeof id === "string" && id.length > 0) { part.call_id = id; part.state = "pending"; }
           turn.parts.push(part);
           pending.set(String(id ?? ""), part);
+          if (typeof id === "string" && id.length > 0) calls.set(id, part);
         }
         // unsupported transcript blocks are intentionally ignored
       }

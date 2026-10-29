@@ -1,7 +1,7 @@
 import type { StreamSource } from "./conversation-shared.ts";
 import { claudePeerNotice, piMessage, piPromptImages } from "./transcript-records.ts";
 import type { TranscriptEntry } from "./claude-transcript.ts";
-import { claudeImages, isCommandEntry, withoutPictureBytes } from "./claude-transcript.ts";
+import { claudeImages, entryHostToolResults, hostedBlocks, isCommandEntry, withoutPictureBytes } from "./claude-transcript.ts";
 import { copilotRootRecord } from "./copilot.ts";
 import { musePrompt } from "./muse.ts";
 
@@ -102,12 +102,14 @@ const TURN_MARK: Record<StreamSource, Buffer> = {
 };
 
 /**
- * Does this line open a turn? Pages start at such lines, so a page never splits
+ * Does this line open a turn? "inline": a prompt that opens no page (a message senpi sent along with
+ * host tool results, which stay on the page of the calls they answer); it still forks the branch and
+ * starts a prompt chain. Pages start at the others, so a page never splits
  * a turn: a Codex task (its prompt, duplicate records and tool calls all follow
  * task_started), a Claude or omp prompt (tool results answer the turn before it),
  * and the same for pi, whose prompts are `message` records with a user role.
  */
-function opensTurn(source: StreamSource, line: string, blobs: string | null): boolean {
+function opensTurn(source: StreamSource, line: string, blobs: string | null): boolean | "inline" {
   let entry: { type?: unknown; uuid?: unknown; origin?: unknown; permissionMode?: unknown; data?: { content?: unknown }; isMeta?: unknown; isCompactSummary?: unknown; payload?: { type?: unknown }; message?: { role?: unknown; content?: unknown } };
   try { entry = JSON.parse(line); } catch { return false; }
   if (entry === null || typeof entry !== "object") return false;
@@ -129,11 +131,17 @@ function opensTurn(source: StreamSource, line: string, blobs: string | null): bo
   if (entry.type !== "user" || entry.isMeta || entry.isCompactSummary) return false;
   const content = entry.message?.content;
   if (typeof content === "string") return !isCommandEntry(content, entry);
+  if (!Array.isArray(content)) return false;
+  // senpi's host tool results answer the calls before them: only a message sent along with them is a
+  // prompt, and it stays on those calls' page
+  const hosted = hostedBlocks(entryHostToolResults(entry as Parameters<typeof entryHostToolResults>[0], content));
+  const own = hosted.size === 0 ? content : content.filter((_block: unknown, at: number) => !hosted.has(at));
   // a prompt that is only a picture is one too, as the parser draws it; a picture beside a tool's
   // result opens nothing: the result must stay on the page of the call it answers
-  return Array.isArray(content) && (content.some((block: { type?: unknown; text?: unknown } | null) =>
+  const prompt = own.some((block: { type?: unknown; text?: unknown } | null) =>
     block?.type === "text" && typeof block.text === "string" && !isCommandEntry(block.text.trim(), entry))
-    || (!content.some((block: { type?: unknown } | null) => block?.type === "tool_result") && claudeImages(entry.uuid, content).length > 0));
+    || (!content.some((block: { type?: unknown } | null) => block?.type === "tool_result") && claudeImages(entry.uuid, own).length > 0);
+  return prompt && hosted.size > 0 ? "inline" : prompt;
 }
 
 /**
@@ -154,7 +162,8 @@ export function turnStarts(bytes: Buffer, source: StreamSource, chain: PromptCha
     if (source === "claude-transcript" && line.includes('"type":"assistant"')) chain.answered = true;
     // a queued attachment carrying another session's message has no "user" in it: its own mark
     const candidate = line.includes(TURN_MARK[source]) || (source === "claude-transcript" && line.includes(PEER_MARK));
-    if (candidate && opensTurn(source, line.toString("utf8"), blobs)) {
+    const opens = candidate ? opensTurn(source, line.toString("utf8"), blobs) : false;
+    if (opens) {
       if (source === "claude-transcript") {
         let parent: string | null = null;
         let peer = false;
@@ -168,7 +177,7 @@ export function turnStarts(bytes: Buffer, source: StreamSource, chain: PromptCha
         // leaves the prompt chain as it was, so the human re-send rule below still sees its own prompts
         if (peer) { starts.push(offset); offset = end + 1; continue; }
         // a re-send of an unanswered prompt opens no turn of its own
-        if (chain.answered || parent === null || parent !== chain.parent) starts.push(offset);
+        if (opens === true && (chain.answered || parent === null || parent !== chain.parent)) starts.push(offset);
         chain.parent = parent;
         chain.answered = false;
       } else {
