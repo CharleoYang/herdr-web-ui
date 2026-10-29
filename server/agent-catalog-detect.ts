@@ -92,7 +92,7 @@ export interface VersionRun {
   timedOut: boolean;
 }
 /** `path`: the PATH the flag runs with, instead of this server's own (not on Windows) */
-export type RunVersion = (executable: string, args: readonly string[], timeoutMs: number, path?: string) => Promise<VersionRun>;
+export type RunVersion = (executable: string, args: readonly string[], timeoutMs: number, path?: string, signal?: AbortSignal) => Promise<VersionRun>;
 
 /** Reads at most VERSION_OUTPUT_BYTES, and nothing more once `stop` settles: a process the timeout ended may have left a child holding the pipe. */
 async function readBounded(stream: ReadableStream<Uint8Array>, stop: Promise<void>): Promise<string> {
@@ -117,7 +117,7 @@ async function readBounded(stream: ReadableStream<Uint8Array>, stop: Promise<voi
 /** Ends `pid` and every process it started: its process group off Windows, its process tree on Windows. */
 function killTree(pid: number): void {
   if (process.platform === "win32") {
-    Bun.spawn(["taskkill", "/pid", String(pid), "/T", "/F"], { stdin: "ignore", stdout: "ignore", stderr: "ignore" });
+    Bun.spawn(["taskkill", "/pid", String(pid), "/T", "/F"], { stdin: "ignore", stdout: "ignore", stderr: "ignore", windowsHide: true });
     return;
   }
   try { process.kill(-pid, "SIGKILL"); } catch { /* the group is gone already */ }
@@ -138,22 +138,26 @@ export function versionSpawn(executable: string, args: readonly string[], platfo
  * At `timeoutMs` the whole group is killed and its output no longer read: a version flag that starts
  * a child holding stdout open (an npm shim, a launcher) would otherwise outlast the timeout.
  */
-export const runVersion: RunVersion = async (executable, args, timeoutMs, path) => {
+export const runVersion: RunVersion = async (executable, args, timeoutMs, path, signal) => {
+  if (signal?.aborted) return { stdout: "", stderr: "", exitCode: null, timedOut: false };
   const { cmd, windowsVerbatimArguments } = versionSpawn(executable, args);
   const env = path === undefined || process.platform === "win32" ? undefined : { ...process.env, PATH: path };
-  const child = Bun.spawn(cmd, { stdin: "ignore", stdout: "pipe", stderr: "pipe", detached: process.platform !== "win32", windowsVerbatimArguments, env });
+  const child = Bun.spawn(cmd, { stdin: "ignore", stdout: "pipe", stderr: "pipe", detached: process.platform !== "win32", windowsVerbatimArguments, windowsHide: true, env });
   let timedOut = false;
   let stopReading!: () => void;
   const stop = new Promise<void>((resolve) => { stopReading = resolve; });
+  const abort = () => { killTree(child.pid); stopReading(); };
+  signal?.addEventListener("abort", abort, { once: true });
   const timer = setTimeout(() => { timedOut = true; killTree(child.pid); stopReading(); }, timeoutMs);
   // a flag that answered and exited may have left a child holding its output: what it printed is
   // read for a moment more, then the reading stops, and the child is ended below
   let grace: ReturnType<typeof setTimeout> | undefined;
-  const exited = child.exited.then((code) => { grace = setTimeout(stopReading, EXIT_GRACE_MS); return code; });
+  const exited = child.exited.then((code) => { if (!signal?.aborted) grace = setTimeout(stopReading, EXIT_GRACE_MS); return code; });
   try {
     const [stdout, stderr, exitCode] = await Promise.all([readBounded(child.stdout, stop), readBounded(child.stderr, stop), Promise.race([exited, stop.then(() => null)])]);
     return { stdout, stderr, exitCode, timedOut };
   } finally {
+    signal?.removeEventListener("abort", abort);
     clearTimeout(timer);
     clearTimeout(grace);
     // a version flag that answered may still have left a child behind: nothing it started outlives the read
@@ -193,6 +197,7 @@ export class AgentDetector {
   readonly #running = new Map<string, Promise<Kept>>();
   #active = 0;
   readonly #waiting: (() => void)[] = [];
+  readonly #lifetime = new AbortController();
 
   readonly #now: () => number;
   readonly #home: string;
@@ -205,6 +210,12 @@ export class AgentDetector {
     this.#now = options.now ?? Date.now;
     this.#home = options.home ?? homedir();
     this.#env = options.env ?? process.env;
+  }
+
+  /** End active process groups and release queued reads without starting more version flags. */
+  close(): void {
+    this.#lifetime.abort();
+    for (const resolve of this.#waiting.splice(0)) resolve();
   }
 
   /** `binary` in one of the installer's folders (detect.install_dirs), as an executable file, or null. */
@@ -220,7 +231,7 @@ export class AgentDetector {
   }
 
   async #slot<T>(work: () => Promise<T>): Promise<T> {
-    if (this.#active >= PARALLEL_RUNS) await new Promise<void>((resolve) => this.#waiting.push(resolve));
+    if (!this.#lifetime.signal.aborted && this.#active >= PARALLEL_RUNS) await new Promise<void>((resolve) => this.#waiting.push(resolve));
     this.#active++;
     try {
       return await work();
@@ -237,7 +248,8 @@ export class AgentDetector {
     if (running) return running;
     const read = this.#slot(async (): Promise<Kept> => {
       try {
-        const run = await this.#run(executable, args, timeoutMs, path);
+        if (this.#lifetime.signal.aborted) return { fingerprint, version: null, error: "failed", retryAt: null };
+        const run = await this.#run(executable, args, timeoutMs, path, this.#lifetime.signal);
         if (run.timedOut) return { fingerprint, version: null, error: "timeout", retryAt: this.#now() + TIMEOUT_KEPT_MS };
         // a flag that failed proves the agent does not run: its error (a wrapper's missing target,
         // with Node's version in the path) is never read for a version. A failure is asked again
