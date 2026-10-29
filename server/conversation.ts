@@ -882,16 +882,27 @@ export async function paneRunsOmo(paneId: string, known?: KnownProcesses): Promi
 const programName = (word: string): string => nodePath.posix.basename(word.replace(/\\/g, "/")).replace(/\.(?:exe|cmd|js|mjs|cjs)$/i, "");
 
 /**
+ * The script an agent's npm package runs as its `bin`, which bunx and npx start under bun or node: omp's is
+ * dist/cli.js in @oh-my-pi/pi-coding-agent (18.13.2 package.json `bin`), whose name is not omp (#2280).
+ */
+const NPM_ENTRIES: Partial<Record<string, RegExp>> = {
+  omp: /(^|[\\/])node_modules[\\/]@oh-my-pi[\\/]pi-coding-agent[\\/]dist[\\/]cli\.js$/i,
+};
+
+/**
  * The foreground processes that are `agent` itself: its native binary first, then an interpreter (node, bun,
- * python) running the agent's script; for omo, its own process (isOmoProcess). Never the shell that started
- * it. paneProcessRoots and the command outcomes' process binding both pick from here, so they cannot drift.
+ * python) running the agent's script or its npm package's entry point (NPM_ENTRIES); for omo, its own process
+ * (isOmoProcess). Never the shell that started it. paneProcessRoots and the command outcomes' process binding
+ * both pick from here, so they cannot drift.
  */
 export function agentProcesses<T extends { argv?: readonly string[] | null; argv0?: string | null; name?: string | null }>(processes: readonly T[], agent: string): T[] {
   const native = processes.filter((entry) => programName(entry.argv?.[0] ?? entry.argv0 ?? entry.name ?? "") === agent);
   const interpreted = processes.filter((entry) => {
     const argv = entry.argv ?? [];
     if (agent === "omo") return isOmoProcess(argv);
-    return ["node", "bun", "python", "python3"].includes(programName(argv[0] ?? "")) && programName(argv[1] ?? "") === agent;
+    const runtime = programName(argv[0] ?? "");
+    return ["node", "bun", "python", "python3"].includes(runtime) && programName(argv[1] ?? "") === agent
+      || ["node", "bun"].includes(runtime) && NPM_ENTRIES[agent]?.test(argv[1] ?? "") === true;
   });
   return [...native, ...interpreted.filter((entry) => !native.includes(entry))];
 }
