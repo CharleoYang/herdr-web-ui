@@ -26,6 +26,8 @@ import { handleTasksRequest } from "./tasks-routes.ts";
 import { handlePlanRequest } from "./plan-routes.ts";
 import { ShellAgentLocator } from "./shell-agent.ts";
 import { handleAgentsRequest } from "./agents-routes.ts";
+import { AgentDetector, catalogLocator, defaultLoginProbe } from "./agent-catalog-detect.ts";
+import { handleAgentCatalogRequest } from "./agent-catalog-routes.ts";
 import { forgetPageMedia } from "./file-view.ts";
 import { handleFileRequest } from "./file-routes.ts";
 import { BACKGROUND_AGENT_PATH, handleBackgroundAgentRequest, type BackgroundAgentDeps } from "./background-agent.ts";
@@ -205,6 +207,8 @@ export function createServer(
     sidecar?: boolean | (() => boolean);
     /** where omo and gjc are found for the offer and the start (server/shell-agent.ts); unset, this server's PATH alone. The real entrypoints (this file's and remote-entry.ts) add their user's login shell; tests pass a fixture one. */
     shellAgents?: ShellAgentLocator;
+    /** what GET /api/agent-catalog finds installed; unset, the agents' binaries on this server's PATH alone. The real entrypoints (this file's and remote-entry.ts) add their user's login shell's PATH, where installers put agents. */
+    agentDetector?: AgentDetector;
   } = {},
 ): ServerInstance {
   /**
@@ -246,6 +250,7 @@ export function createServer(
   const portalGuards = () => ({ tokenSet: token !== "", serveOnly });
 
   const shellAgents = options.shellAgents ?? new ShellAgentLocator({ probe: null });
+  const agentDetector = options.agentDetector ?? new AgentDetector({ locate: catalogLocator({ probe: null }) });
   const openCodeState = new OpenCodePromptState();
   const draftTimer = setInterval(() => openCodeState.prune(), 60_000);
   draftTimer.unref();
@@ -298,7 +303,7 @@ export function createServer(
       // custom header (update-api.ts), and whoever holds the token already drives every pane here. Only those two
       // requests, each by its own method and with no query: the token opens nothing else of these routes (#2054)
       const bridgeUpdatePath = url.search === "" && (pathname === "/api/updates" ? request.method === "GET" : pathname === "/api/updates/install" && request.method === "POST");
-      const bridgePath = pathname === "/api/bridge" || pathname === "/api/session" || pathname === SESSION_HISTORY_PATH || pathname === SESSION_RESUME_PATH || pathname === "/api/agents" || pathname === "/api/agent/rename" || pathname === "/api/agent/commands" || pathname === "/api/integrations" || pathname === "/api/plugins/actions" || pathname === "/api/plugin/action" || pathname.startsWith("/api/pane/") || pathname.startsWith("/api/workspace/") || pathname.startsWith("/api/worktree/") || pathname.startsWith("/api/tab/") || pathname === "/api/layout/ratio" || pathname.startsWith("/api/fs/") || pathname === "/ws" || bridgeUpdatePath;
+      const bridgePath = pathname === "/api/bridge" || pathname === "/api/session" || pathname === SESSION_HISTORY_PATH || pathname === SESSION_RESUME_PATH || pathname === "/api/agents" || pathname === "/api/agent-catalog" || pathname === "/api/agent/rename" || pathname === "/api/agent/commands" || pathname === "/api/integrations" || pathname === "/api/plugins/actions" || pathname === "/api/plugin/action" || pathname.startsWith("/api/pane/") || pathname.startsWith("/api/workspace/") || pathname.startsWith("/api/worktree/") || pathname.startsWith("/api/tab/") || pathname === "/api/layout/ratio" || pathname.startsWith("/api/fs/") || pathname === "/ws" || bridgeUpdatePath;
       const ip = bunServer.requestIP(request);
       const loopback = ip !== null && isLoopbackAddress(ip.address);
       const forwarded = cameThroughProxy(request.headers);
@@ -406,7 +411,7 @@ export function createServer(
         if (pathname.startsWith("/api/machines/local/")) {
           if (!sameOrigin(request) || (request.method !== "GET" && request.headers.get("x-herdr-machine") !== "1")) return jsonResponse({ error: { code: "invalid_origin", message: "Use PC controls from this app" } }, 403);
           pathname = pathname.replace("/api/machines/local/", "/api/");
-          if (!/^\/api\/(session|agents|integrations|pane\/|workspace\/|worktree\/|tab\/|layout\/ratio$|agent\/(?:rename|commands)$|plugins\/actions$|plugin\/action$|sessions\/(?:history|resume)$)/.test(pathname)) return badRequest("invalid_route", "Unknown PC endpoint");
+          if (!/^\/api\/(session|agents|agent-catalog$|integrations|pane\/|workspace\/|worktree\/|tab\/|layout\/ratio$|agent\/(?:rename|commands)$|plugins\/actions$|plugin\/action$|sessions\/(?:history|resume)$)/.test(pathname)) return badRequest("invalid_route", "Unknown PC endpoint");
           url.pathname = pathname;
         } else {
           // a worktree made with an agent waits on git and then agent.start, up to 150 s on the PC, and a
@@ -582,6 +587,9 @@ export function createServer(
       const agentsResponse = await handleAgentsRequest(request, pathname, shellAgents);
       if (agentsResponse) return agentsResponse;
 
+      const catalogResponse = await handleAgentCatalogRequest(request, pathname, agentDetector);
+      if (catalogResponse) return catalogResponse;
+
       const integrationsResponse = await handleIntegrationsRequest(request, pathname);
       if (integrationsResponse) return integrationsResponse;
 
@@ -716,7 +724,7 @@ if (import.meta.main) {
   const portal = new PortalService({ stateDir });
   let instance: ReturnType<typeof createServer>;
   try {
-    instance = createServer({ updates, herdrUpdate: new HerdrUpdater(), portal, telemetry, registerBridge: true, herdrProfiles: readHerdrProfiles, shellAgents: new ShellAgentLocator(), stateDir, siblingStateDir: siblingStateDir(stateDir) });
+    instance = createServer({ updates, herdrUpdate: new HerdrUpdater(), portal, telemetry, registerBridge: true, herdrProfiles: readHerdrProfiles, shellAgents: new ShellAgentLocator(), agentDetector: new AgentDetector({ locate: catalogLocator({ probe: defaultLoginProbe() }) }), stateDir, siblingStateDir: siblingStateDir(stateDir) });
   } catch (err) {
     const { code, syscall } = err as { code?: string; syscall?: string };
     // only the bind itself: a permission error reading a state file keeps its own message and path

@@ -145,6 +145,11 @@ export type { DevicePairedEvent, Machine, MachineEvent, MachineRoster, PaneTarge
  *         kinds `agent.start` accepts, plus omo and gjc when they are on this server's PATH,
  *         each with `installed`: whether its command is on this server's PATH; for the
  *         new-session dialog)
+ *  GET    /api/agent-catalog             -> AgentCatalogResponse (shared/agent-catalog.ts: every agent
+ *         Ovis can install, with this PC's platform's official commands and whether each is
+ *         installed here, at which version, read by running its version flag (5 s limit; kept until
+ *         the executable file changes). Read only, no-store; a watch device may read it. A remote PC
+ *         from before the endpoint answers 404 through /api/machines/<id>/agent-catalog)
  *  GET    /api/integrations              -> IntegrationsResponse (herdr's `integration.list`, in
  *         herdr's order; read only: nothing here installs or removes one, Settings shows the
  *         `herdr integration install` command instead)
