@@ -12,6 +12,7 @@ import { dirname, join } from "node:path";
 import { rm } from "node:fs/promises";
 
 import { claudeProcessSession, forgetClaudeSessions, processClaudeConfigDir } from "./claude-store.ts";
+import { agentStartArgs } from "./claude-settings-file.ts";
 import { Database } from "bun:sqlite";
 
 import { codexRolloutPath, directoryKey, sameDirectory, storedCwdCondition } from "./codex.ts";
@@ -386,4 +387,40 @@ it.skipIf(!onWindows)("finds a Claude's own store from the start it records, whi
     if (serverConfigDir !== undefined) process.env["CLAUDE_CONFIG_DIR"] = serverConfigDir;
     rmSync(home, { recursive: true, force: true });
   }
+}, 30_000);
+
+it.skipIf(!onWindows)("gives Claude Code a settings file whose path an npm install's PowerShell shim passes on intact, where the JSON loses its quotes (#2232)", async () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "ovis-claude-settings-native-")));
+  try {
+    const json = JSON.stringify({ ultracode: true });
+    // a space in the folder, as a profile's %LOCALAPPDATA% can have
+    const dir = join(root, "claude settings");
+    const started = agentStartArgs("claude", ["--settings", json], { platform: "win32", dir });
+    expect(started[0]).toBe("--settings");
+    const path = started[1]!;
+    expect(dirname(path)).toBe(dir);
+    expect(readFileSync(path, "utf8")).toBe(json);
+    expect(agentStartArgs("claude", ["--settings", json], { platform: "win32", dir })).toEqual(started);
+    // npm's claude.ps1 in small: Windows PowerShell hands its $args to a native program, here this Bun
+    // writing down the argv it got
+    const seen = join(root, "argv.jsonl");
+    const program = join(root, "argv.ts");
+    writeFileSync(program, `import { appendFileSync } from "node:fs";\nappendFileSync(${JSON.stringify(seen)}, JSON.stringify(process.argv.slice(2)) + "\\n");\n`);
+    const shim = join(root, "claude.ps1");
+    // with a BOM, or Windows PowerShell reads a path outside ASCII in the ANSI code page
+    writeFileSync(shim, `\uFEFF& ${psQuote(process.execPath)} ${psQuote(program)} $args\n`);
+    // herdr's launch of a PowerShell script, once with the file's path and once with the JSON itself
+    const script = [path, json].map((value) => `& ${psQuote(shim)} '--settings' ${psQuote(value)}`).join("\n");
+    // as in the bundle install case: started from PowerShell 7, its module path would come along
+    const env = Object.fromEntries(Object.entries(process.env).filter(([name]) => name.toLowerCase() !== "psmodulepath"));
+    const child = Bun.spawn(["powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-EncodedCommand", Buffer.from(script, "utf16le").toString("base64")], { stdout: "ignore", stderr: "pipe", env });
+    const [stderr, code] = await Promise.all([new Response(child.stderr).text(), child.exited]);
+    if (code !== 0) throw new Error(stderr);
+    const runs = readFileSync(seen, "utf8").trim().split(/\r?\n/).map((line) => JSON.parse(line) as string[]);
+    expect(runs).toHaveLength(2);
+    expect(runs[0]).toEqual(["--settings", path]);
+    // the reason for the file: the JSON arrives without its quotes, which Claude Code refuses as invalid
+    expect(runs[1]![0]).toBe("--settings");
+    expect(runs[1]![1]).not.toBe(json);
+  } finally { rmSync(root, { recursive: true, force: true }); }
 }, 30_000);

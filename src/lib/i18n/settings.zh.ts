@@ -32,6 +32,7 @@ export const SETTINGS_ZH: Record<string, string> = {
   "Catppuccin": "Catppuccin",
   "Catppuccin Latte": "Catppuccin Latte",
   "Tokyo Night": "Tokyo Night",
+  "Black": "黑色",
   "Tokyo Night Day": "Tokyo Night Day",
   "Gruvbox": "Gruvbox",
   "Gruvbox Light": "Gruvbox Light",

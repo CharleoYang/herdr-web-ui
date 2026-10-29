@@ -57,6 +57,7 @@ import { HerdrSidebarConfig, herdrConfigPath, snapshotWithoutHiddenTokens } from
 import { readHerdrUi } from "./herdr-ui.ts";
 import { closeCodexDaemonSources } from "./codex-daemon.ts";
 import { holdOpenCodeNative } from "./opencode-native.ts";
+import { holdFilePool } from "./file-pool.ts";
 import { MachineRelay } from "./machine-relay.ts";
 import { sameOrigin } from "./machine-security.ts";
 import { handlePluginRequest } from "./plugin-routes.ts";
@@ -378,7 +379,10 @@ export function createServer(
       // where a plugin action's run stands carries what its command printed when it failed, asked for by a
       // log id: only the device that started the run (a POST, which a watching device cannot send) asks it
       const pluginRun = /^\/api\/(?:machines\/[^/]+\/)?plugin\/action$/.test(pathname);
-      if (readOnly && (fileRead || directoryListing || repositoryDiff || sessionHistory || commandRows || paneFiles || pluginRun || mutating && !ownPreferences)) {
+      // a repository's checkouts are its folders' paths and branches, those not open in herdr too; the worktree
+      // dialog that lists them is a drive feature, and the sidebar names a branch only for a driving device (#2250)
+      const worktreeList = /^\/api\/(?:machines\/[^/]+\/)?worktree\/list$/.test(pathname);
+      if (readOnly && (fileRead || directoryListing || repositoryDiff || sessionHistory || commandRows || paneFiles || pluginRun || worktreeList || mutating && !ownPreferences)) {
         setRequestRoute("watch-refusal");
         return jsonResponse({ error: { code: "read_only", message: "this device can only watch" } }, 403);
       }
@@ -670,6 +674,8 @@ export function createServer(
 
   // OpenCode's stream and watches are shared by every server in this process: the last one to stop resets them
   const releaseOpenCodeNative = holdOpenCodeNative();
+  // the file threads are shared by every server in this process too: the last one to stop ends them
+  const releaseFilePool = holdFilePool();
   core.start();
 
   return {
@@ -694,6 +700,7 @@ export function createServer(
       });
       void shellAgents.stop();
       server.stop(true);
+      releaseFilePool();
       requestLog.close();
     },
   };

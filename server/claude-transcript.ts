@@ -25,6 +25,12 @@ function localCommandOutput(content: unknown): string {
   return capNotice((taggedStreams(content, "local-command") ?? []).map(({ text }) => text.trim()).filter((text) => text.length > 0).join("\n"));
 }
 
+/** What a slash command printed to stdout, terminal controls stripped, when the whole entry is its output. */
+export function localCommandStdout(content: unknown): string | null {
+  const streams = taggedStreams(content, "local-command");
+  return streams === null ? null : streams.filter(({ stream }) => stream === "stdout").map(({ text }) => text.trim()).join("\n");
+}
+
 /** Bash payloads are opaque: only an unambiguous boundary identifies stderr. */
 function bashStreams(content: string): { stream: "stdout" | "stderr"; text: string }[] | null {
   const envelope = content.trim();

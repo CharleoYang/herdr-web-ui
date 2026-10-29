@@ -42,6 +42,17 @@ const RESUME_FLAGS: Record<SessionHistoryAgent, string[]> = {
 export const SESSION_HISTORY_AGENTS = Object.keys(RESUME_FLAGS) as SessionHistoryAgent[];
 
 /**
+ * The session a launch's arguments resume: the agent's own resume flags, then the id, as its history
+ * rows give them (`claude --resume <id>`, `codex resume <id>`); any other arguments resume none.
+ */
+export function resumedSession(agent: string | null, args: unknown): string | null {
+  if (agent === null || !(SESSION_HISTORY_AGENTS as string[]).includes(agent) || !Array.isArray(args)) return null;
+  const flags = RESUME_FLAGS[agent as SessionHistoryAgent];
+  const id: unknown = args[flags.length];
+  return args.length === flags.length + 1 && flags.every((flag, index) => args[index] === flag) && typeof id === "string" ? id : null;
+}
+
+/**
  * Web push on the demo: the fictional workstation's key, and two subscriptions its push service has
  * already answered for, so the alerts notice has something to show. The public demo has no
  * PushManager, so only a browser script that lends it one (scripts/push-health-demo-regression.ts)
