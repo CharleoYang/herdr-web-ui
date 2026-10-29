@@ -658,7 +658,7 @@ describe("connection-owned pending input", () => {
     } finally { session.mockRestore(); }
   }, 30_000);
 
-  it("commits a message whose hookless Claude session cannot be read only after its own paste is in (control #2125)", async () => {
+  it("leaves a message uncertain, without its Enter, when its hookless Claude session cannot be read after its own paste (#2279)", async () => {
     const f = await setup("claude-session-unread-after-paste");
     // the recorder runs as `claude`; its PID record is supplied, and can no longer be read once the bridge pasted
     const session = spyOn(claudeStore, "claudeForegroundSession").mockImplementation(async (processes) =>
@@ -668,9 +668,12 @@ describe("connection-owned pending input", () => {
       const settled = f.socket.event((frame) => frame.messages.some((entry) => entry.id === message.id && (entry.state === "held" || entry.state === "uncertain"))
         || frame.removed?.some((entry) => entry.id === message.id) === true);
       await f.state("idle");
-      expect((await settled).removed ?? []).toContainEqual({ id: message.id, outcome: "sent" }); // neither held nor left uncertain
-      await f.waitBytes("\r");
-      expect(f.bytes()).toBe(`${paste(message.text)}\r`); // Enter follows its own paste, once
+      // an Enter could commit the paste in another session: the row is left for the user to check
+      expect((await settled).messages).toContainEqual(expect.objectContaining({
+        id: message.id, state: "uncertain", error: expect.objectContaining({ code: "submit_changed" }),
+      }));
+      await f.waitBytes(paste(message.text));
+      expect(f.bytes()).toBe(paste(message.text)); // the paste only: settled without its Enter
     } finally { session.mockRestore(); }
   }, 30_000);
 
