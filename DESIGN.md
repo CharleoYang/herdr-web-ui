@@ -1126,7 +1126,9 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   workspace list has the rest. The Agents heading stays outside its scroll area and shows its
   count only while folded. A list that is cut fades out at its lower edge. An empty or folded
   Agents list gives its space back; PC and workspace folds do not hide agent rows. In the drawer
-  (`max-width: 768px`) the list starts folded. Until the PCs are in and every connected PC's
+  (`max-width: 768px`) the list starts folded. The reader's fold is kept on this device
+  (`ovis:agents-collapsed`, like a PC's fold) and wins over that default on the next launch; a
+  filter's fold is not kept. Until the PCs are in and every connected PC's
   panes have come, an empty list says **Loading agents…**, never "No agents running".
 - A PC's header is the head of its workspaces, and the caret beside its `+` is the one fold over
   them. The roster has no label or fold of its own.
