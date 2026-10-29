@@ -387,15 +387,26 @@ function holderRuns(token: string): boolean {
  * that interleave could leave settings.json running a wrapper the other just deleted. The lock is
  * published whole (built aside with its owner, then renamed into place, which replaces only an empty
  * directory: no change ever holds one), names its holder, is taken
- * over only from a holder that is gone, and is released only by its own holder. A live holder is
- * never overruled: a lock left by a crashed server whose pid another process now has stays until
- * removed by hand, which the refusal names.
+ * over only from a holder that is gone, and is released only by its own holder. Taking one over is
+ * itself one at a time: only the change that made the breaker directory (a plain mkdir, which fails
+ * when it is there) reads the owner and removes the lock, and nothing else removes or replaces a held
+ * lock meanwhile, so the lock it removes is the one it judged abandoned. A lock is removed, by its
+ * holder or a takeover, by first moving it to a name of its own: deleting it in place would leave an
+ * empty directory for a moment, which a new lock could be published over and then deleted with it. A live holder is never
+ * overruled: a lock left by a crashed server whose pid another process now has stays until removed
+ * by hand, which the refusal names.
  */
 function locked<T>(configDir: string, change: () => T): T {
   const lock = join(configDir, ".herdr-statusline.lock");
   const ownerOf = (dir: string): string | null => { try { return readFileSync(join(dir, "owner"), "utf8"); } catch { return null; } };
   const token = `${process.pid}:${randomUUID()}`;
-  const busy = () => new StatuslineInstallError(`another change to Claude's status line is in progress; try again in a moment (if none is, delete ${lock})`);
+  const breaker = `${lock}.break`;
+  const discard = (dir: string) => {
+    const aside = `${lock}.${process.pid}.${randomUUID()}.old`;
+    renameSync(dir, aside);
+    rmSync(aside, { recursive: true, force: true });
+  };
+  const busy = () => new StatuslineInstallError(`another change to Claude's status line is in progress; try again in a moment (if none is, delete ${lock} and ${breaker})`);
   const take = (): boolean => {
     const built = `${lock}.${process.pid}.${randomUUID()}.new`;
     mkdirSync(built);
@@ -409,24 +420,28 @@ function locked<T>(configDir: string, change: () => T): T {
     }
   };
   if (!take()) {
-    const entry = lstatSync(lock, { throwIfNoEntry: false });
-    const seen = ownerOf(lock);
-    // a token is whole once published; anything else (a link, no owner, a holder still running) is busy
-    if (!entry?.isDirectory() || seen === null || !/^\d+:[0-9a-f-]{36}$/.test(seen) || holderRuns(seen)) throw busy();
-    // moved aside, then checked: only the lock judged abandoned is removed, never one taken since
-    const aside = `${lock}.${process.pid}.${randomUUID()}.old`;
-    try { renameSync(lock, aside); } catch { throw busy(); }
-    if (ownerOf(aside) !== seen) {
-      try { renameSync(aside, lock); } catch { /* a third change holds it now; the moved one stays aside */ }
-      throw busy();
+    try { mkdirSync(breaker); } catch (error) { if (isCode(error, "EEXIST")) throw busy(); throw error; }
+    try {
+      const entry = lstatSync(lock, { throwIfNoEntry: false });
+      if (entry !== undefined) {
+        const seen = ownerOf(lock);
+        // a token is whole once published; anything else (a link, no owner, a holder still running) is busy
+        if (!entry.isDirectory() || seen === null || !/^\d+:[0-9a-f-]{36}$/.test(seen) || holderRuns(seen)) throw busy();
+        // still that owner's once it is gone: it never released it, and nothing else can release or
+        // replace a held lock, so this is the abandoned one and not one taken since it let go
+        if (ownerOf(lock) !== seen) throw busy();
+        discard(lock);
+      }
+      if (!take()) throw busy();
+    } finally {
+      // a breaker left behind only makes later takeovers refuse, naming it; the lock taken stays released properly
+      try { rmSync(breaker, { recursive: true, force: true }); } catch { /* see above */ }
     }
-    rmSync(aside, { recursive: true, force: true });
-    if (!take()) throw busy();
   }
   try {
     return change();
   } finally {
-    if (ownerOf(lock) === token) rmSync(lock, { recursive: true, force: true });
+    if (ownerOf(lock) === token) discard(lock);
   }
 }
 
