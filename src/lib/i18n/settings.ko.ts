@@ -32,6 +32,7 @@ export const SETTINGS_KO: Record<string, string> = {
   "Catppuccin": "Catppuccin",
   "Catppuccin Latte": "Catppuccin Latte",
   "Tokyo Night": "Tokyo Night",
+  "Black": "검정",
   "Tokyo Night Day": "Tokyo Night Day",
   "Gruvbox": "Gruvbox",
   "Gruvbox Light": "Gruvbox Light",
