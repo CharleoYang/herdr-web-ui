@@ -1086,8 +1086,9 @@ ol.markdown-list {
 
 .chat-inline-error { color: var(--status-blocked); }
 
-/* a sent message the agent has not written as a turn yet: the user's bubble where the turn will be,
-   quieter, and what it waits for under it, as the Claude app shows a message at once on Send */
+/* a sent message the agent has not written as a turn yet (SentWaiting.tsx): the user's own bubble,
+   its words faded to --text-dim (still 4.5:1), so the turn that replaces it reads as the same bubble
+   coming up to full strength. A late one's clock sits where the turn's time will be */
 .chat-sent-waiting-list {
   display: flex;
   flex-direction: column;
@@ -1095,31 +1096,24 @@ ol.markdown-list {
   gap: var(--space-2);
 }
 
-.chat-sent-waiting {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-end;
-  align-self: stretch;
-  gap: var(--space-1);
-  margin: 0;
-}
-
-.chat-sent-waiting-text {
-  max-width: 80%;
-  padding: var(--space-3) var(--space-4);
-  border: var(--hairline) dashed var(--bubble-border);
-  border-radius: var(--radius-lg);
-  background: var(--bg-elevated);
+.chat-turn-waiting .chat-bubble {
   color: var(--text-dim);
-  font-size: var(--chat-fs-body);
-  line-height: var(--lh-prose);
   white-space: pre-wrap;
-  overflow-wrap: anywhere;
 }
 
-.chat-sent-waiting-label {
+.chat-turn-waiting .chat-turn-meta {
+  opacity: 1;
+}
+
+.chat-sent-late {
+  display: inline-flex;
   color: var(--text-dim);
   font-size: var(--chat-fs-xs);
+}
+
+.chat-sent-late svg {
+  width: 1em;
+  height: 1em;
 }
 
 /* a read that failed (ChatView.tsx FailureLine): the one line, Try again beside it where it is the

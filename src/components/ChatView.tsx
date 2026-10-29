@@ -43,6 +43,7 @@ import { useMediaQuery } from "../lib/useMediaQuery.ts";
 import { statusEdgeRead } from "../lib/status.ts";
 import { askedQuestions } from "../../shared/askQuestions.ts";
 import { currentWaitingSends, settleWaitingSends, subscribeWaitingSends, waitingKey } from "../lib/sentWaiting.ts";
+import { SentWaitingList } from "./SentWaiting.tsx";
 import { ConversationRefresh } from "../lib/conversationRefresh.ts";
 import { teammateMessageParts, type TeammateMessage } from "../lib/teammateMessage.ts";
 import { usePageVisible } from "../lib/visibility.ts";
@@ -2249,17 +2250,7 @@ export const ChatView = memo(function ChatView({ paneId, presentationKey, finish
   const retryRead = useCallback(() => { setFailures(0); conversationRefresh.refresh(); }, [conversationRefresh]);
   const footer = <>
       <p className={waitWords === null ? "visually-hidden" : "chat-inline-state"} role="status">{waitWords}</p>
-      {/* sent, and the agent has not started its turn for it yet: the user's own words where their
-          turn will be, quieter, and what they wait for under them */}
-      {sentWaiting.length > 0 && state.source === "conversation" && <div className="chat-sent-waiting-list" role="status">
-        {sentWaiting.map((send) => {
-          const chars = Array.from(send.text);
-          return <p key={send.id} className="chat-sent-waiting">
-            <span className="chat-sent-waiting-text">{chars.length > 160 ? `${chars.slice(0, 160).join("")}…` : send.text}</span>
-            <span className="chat-sent-waiting-label">{t("Sent · waiting for the agent's next turn")}</span>
-          </p>;
-        })}
-      </div>}
+      {sentWaiting.length > 0 && state.source === "conversation" && <SentWaitingList sends={sentWaiting} />}
       {error !== null && !waiting && (errorStatus === 401
         ? <p className="chat-inline-state chat-inline-error" role="alert">{t("locked — the token gate is asking again")}</p>
         : <FailureLine action={t("Couldn't load the conversation")} failure={error} onRetry={retryRead} />)}

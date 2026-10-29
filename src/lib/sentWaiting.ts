@@ -34,6 +34,13 @@ type Turn = Pick<ConversationTurn, "role" | "parts" | "ts">;
 export const WAITING_SEND_MS = 60_000;
 
 /**
+ * How long a send may wait before its bubble gets a clock. An idle Claude writes the turn within half
+ * a second of Send and a slow PC within a few seconds, so a clock sooner would flash on most sends;
+ * past this something holds it (a turn still running, a PC far away), well before WAITING_SEND_MS.
+ */
+export const WAITING_HINT_MS = 5_000;
+
+/**
  * Only what the terminal is known to do to a sent message: CRLF line ends, a space closing a final
  * @mention (server/core/composer.ts closeMention), whitespace at the ends of lines and around it.
  * Spaces inside a line stay: "change a b" and "change ab" are two messages.
