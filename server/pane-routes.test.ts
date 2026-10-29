@@ -396,13 +396,13 @@ it("lists OpenCode's skills for a folder with no pane in the form its installed 
 });
 
 /** an OpenCode pane (herdr labels it opencode) in a project with one skill, under a HOME and state dir of the test's own */
-async function openCodePane(run: (f: { state: string; skill(): Promise<{ trigger?: string; provenance?: { verified?: boolean } } | undefined> }) => Promise<void>, session?: string): Promise<void> {
+async function openCodePane(run: (f: { state: string; skill(): Promise<{ trigger?: string; provenance?: { verified?: boolean } } | undefined> }) => Promise<void>, session?: string, argv = ["opencode"]): Promise<void> {
   const homeBefore = process.env["HOME"];
   process.env["HOME"] = mkdtempSync(join(tmpdir(), "ovis-pane-routes-home-"));
   mkdirSync(join(root, ".opencode", "skills", "effect"), { recursive: true });
   writeFileSync(join(root, ".opencode", "skills", "effect", "SKILL.md"), "---\nname: effect\ndescription: Apply Effect.\n---\nBody.\n");
   const state = mkdtempSync(join(root, "opencode-state-"));
-  panes["w:p1"] = { agent: "opencode", ...(session ? { session } : {}), process: [{ pid: 2147483644, argv: ["opencode"], cwd: root }] };
+  panes["w:p1"] = { agent: "opencode", ...(session ? { session } : {}), process: [{ pid: 2147483644, argv, cwd: root }] };
   openCodeServiceOptions.stateDir = join(root, "elsewhere");
   try {
     await run({
@@ -433,6 +433,26 @@ it("offers a session-less OpenCode pane's skill in the form its installed versio
     expect(v2?.trigger).toBe("@");
     expect(v2?.provenance?.verified).toBe(false);
   });
+});
+
+it("offers a session-less OpenCode pane started with --standalone or --server its skill with @, unverified (#1551)", async () => {
+  // OpenCode 2's own flags: such a TUI runs without the background service, so no service file names its version
+  for (const argv of [["opencode", "--standalone"], ["opencode", "--server", "http://127.0.0.1:9"], ["opencode", "--server=http://127.0.0.1:9"]]) {
+    await openCodePane(async ({ skill }) => {
+      const v2 = await skill();
+      expect(v2?.trigger).toBe("@");
+      expect(v2?.provenance?.verified).toBe(false);
+    }, undefined, argv);
+  }
+  // a pane with a session it cannot read may be an OpenCode 1 one: the flag alone does not decide it;
+  // and a word after `--` is a directory, not a flag
+  for (const [session, argv] of [["ses_paneRoutesUnread", ["opencode", "--standalone"]], [undefined, ["opencode", "--", "--standalone"]]] as const) {
+    await openCodePane(async ({ skill }) => {
+      const row = await skill();
+      expect(row).toBeDefined();
+      expect(row?.trigger).toBeUndefined();
+    }, session, [...argv]);
+  }
 });
 
 it("does not give a pane with an OpenCode session it cannot read the service file's version", async () => {

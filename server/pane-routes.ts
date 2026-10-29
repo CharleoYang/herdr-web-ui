@@ -11,7 +11,7 @@ import { paneFiles } from "./files.ts";
 import { badRequest, conflictResponse, errorResponse, isCount, isJsonObject, jsonResponse, readJsonObject, requestIdContext, setRequestRoute } from "./http.ts";
 import { conversationImage, ConversationReadPending, ConversationUnavailable, forgetPaneTranscriptState, HistoryChanged, paneConversation, paneProcessRoots, paneTranscript, toolOutput } from "./conversation.ts";
 import { OPENCODE_TOOL_REF } from "./opencode.ts";
-import { openCodeInstalledVersion } from "./opencode-service.ts";
+import { openCodeFlagVersion, openCodeInstalledVersion } from "./opencode-service.ts";
 import { DevinHistoryChanged } from "./devin.ts";
 import { agentRename, HerdrError, layoutSetSplitRatio, paneClear, paneClose, paneFind, paneFocus, paneRead, paneRename, paneResize, paneScroll, paneScrollInfo, paneSelectionRead, paneSendKeys, paneSendText, paneSplit, paneSwap, paneSwapWith, paneZoom } from "./herdr/client.ts";
 import { paneContext, resolveAgent, versionSourceOf } from "./pane-context.ts";
@@ -108,8 +108,10 @@ export async function handlePaneRequest(request: Request, url: URL, pathname: st
         const { version: stored } = resolveAgent(context.pane, roots, store);
         // a pane with no session yet has no stored version: OpenCode's service file still says how it types its skills
         // (syntax only: the catalog's pin stays unverified, since only the store or a verified service may verify it).
-        // A pane with a session whose transcript is unreadable gets none: that session may be an OpenCode 1 one
-        const version = stored ?? (agent === "opencode" && !context.pane.agent_session ? openCodeInstalledVersion(options.openCodeStateDir) : null);
+        // A pane with a session whose transcript is unreadable gets none: that session may be an OpenCode 1 one.
+        // A TUI started without the service (--standalone, --server) has no service file: its own flags say v2 (#1551)
+        const argv = roots.processes?.foreground_processes?.find((entry) => entry.pid === roots.pid)?.argv;
+        const version = stored ?? (agent === "opencode" && !context.pane.agent_session ? openCodeInstalledVersion(options.openCodeStateDir) ?? openCodeFlagVersion(argv) : null);
         // on a file thread: a skill folder on a slow mount stalls only this request (#2254)
         const scanned = await scanPaneCommands(agent, context.cwd, { ...roots.omo, environ: roots.environ }, version, request.signal, began);
         const commands = await mergeCatalogSources(agent, context.pane, context.cwd, scanned, undefined, { codexHome: options.codexHome, openCodeStateDir: options.openCodeStateDir });
