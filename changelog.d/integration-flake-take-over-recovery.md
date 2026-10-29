@@ -1,4 +1,3 @@
 ### Maintenance
-- The take-over integration test for an ordinary failed attach now holds its first bytes long
-  enough that a busy runner never takes the failing attempt's last line for an attach before its
-  exit arrives.
+- Two take-over integration tests lengthen the attach hold, so a busy runner never passes on a
+  failing or displaced attach's last line before its exit arrives.
