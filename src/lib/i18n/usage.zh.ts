@@ -25,7 +25,6 @@ export const USAGE_ZH: Record<string, string> = {
   "Provider": "提供商",
   "Connection": "连接",
   "Method": "方式",
-  "Sign in": "登录",
   "Account setup": "账号设置",
   "On this PC": "本机",
   "Official CLI in a new tab": "在新标签页中使用官方 CLI",

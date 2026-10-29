@@ -25,7 +25,6 @@ export const USAGE_KO: Record<string, string> = {
   "Provider": "제공업체",
   "Connection": "연결",
   "Method": "방식",
-  "Sign in": "로그인",
   "Account setup": "계정 설정",
   "On this PC": "이 PC",
   "Official CLI in a new tab": "새 탭에서 공식 CLI로 로그인",

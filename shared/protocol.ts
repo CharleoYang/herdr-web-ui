@@ -150,6 +150,20 @@ export type { DevicePairedEvent, Machine, MachineEvent, MachineRoster, PaneTarge
  *         installed here, at which version, read by running its version flag (5 s limit; kept until
  *         the executable file changes). Read only, no-store; a watch device may read it. A remote PC
  *         from before the endpoint answers 404 through /api/machines/<id>/agent-catalog)
+ *  POST   /api/agent-catalog/install { agent, alternative? } -> { pane_id, workspace_id, command,
+ *         shell } (opens a tab and types that agent's official command for this PC's platform into its
+ *         shell: the catalog's primary, or alternatives[alternative]; the request never carries a
+ *         command. 400 unknown_agent / invalid_alternative / unknown_field (any other field); 409
+ *         no_install_command, command_refused, shell_mismatch (Windows: the method's shell is not the
+ *         tab's), shell_unknown (Windows: herdr names no PowerShell or cmd.exe in the tab within 10 s);
+ *         both type nothing and close the tab, as any failure after the tab opened does;
+ *         install_running (one install per agent per PC while its installer runs in its tab: until
+ *         the tab is back at its shell, the tab closes, no installer was seen within 2 min, or 30
+ *         min pass; finding the agent installed does not end it), platform_unsupported)
+ *  POST   /api/agent-catalog/sign-in { agent } -> the same (a tab running the agent's own sign-in
+ *         command, or the agent itself when it signs in inside; 400 unknown_field; 409 no_sign_in,
+ *         not_installed, shell_unknown). Both
+ *         are mutations: a watch device gets 403 read_only; another PC's go through the PC proxy
  *  GET    /api/integrations              -> IntegrationsResponse (herdr's `integration.list`, in
  *         herdr's order; read only: nothing here installs or removes one, Settings shows the
  *         `herdr integration install` command instead)

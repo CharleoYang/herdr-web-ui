@@ -25,7 +25,6 @@ export const USAGE_JA: Record<string, string> = {
   "Provider": "プロバイダー",
   "Connection": "接続",
   "Method": "方法",
-  "Sign in": "ログイン",
   "Account setup": "アカウント設定",
   "On this PC": "このPC",
   "Official CLI in a new tab": "新しいタブで公式CLIにログイン",
