@@ -57,6 +57,7 @@ import { HerdrSidebarConfig, herdrConfigPath, snapshotWithoutHiddenTokens } from
 import { readHerdrUi } from "./herdr-ui.ts";
 import { closeCodexDaemonSources } from "./codex-daemon.ts";
 import { holdOpenCodeNative } from "./opencode-native.ts";
+import { holdFilePool } from "./file-pool.ts";
 import { MachineRelay } from "./machine-relay.ts";
 import { sameOrigin } from "./machine-security.ts";
 import { handlePluginRequest } from "./plugin-routes.ts";
@@ -670,6 +671,8 @@ export function createServer(
 
   // OpenCode's stream and watches are shared by every server in this process: the last one to stop resets them
   const releaseOpenCodeNative = holdOpenCodeNative();
+  // the file threads are shared by every server in this process too: the last one to stop ends them
+  const releaseFilePool = holdFilePool();
   core.start();
 
   return {
@@ -694,6 +697,7 @@ export function createServer(
       });
       void shellAgents.stop();
       server.stop(true);
+      releaseFilePool();
       requestLog.close();
     },
   };

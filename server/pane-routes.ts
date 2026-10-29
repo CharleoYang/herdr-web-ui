@@ -8,7 +8,7 @@ import type { AgentRenameRequest, PaneDirection, PaneResized, PaneSplit, PaneSwa
 import { mergeCatalogSources } from "./catalog-sources.ts";
 import { paneCommands, rememberPaneCommands } from "./commands.ts";
 import { paneFiles } from "./files.ts";
-import { badRequest, conflictResponse, errorResponse, isCount, isJsonObject, jsonResponse, readJsonObject, setRequestRoute } from "./http.ts";
+import { badRequest, conflictResponse, errorResponse, isCount, isJsonObject, jsonResponse, readJsonObject, requestIdContext, setRequestRoute } from "./http.ts";
 import { conversationImage, ConversationReadPending, ConversationUnavailable, forgetPaneTranscriptState, HistoryChanged, paneConversation, paneProcessRoots, paneTranscript, toolOutput } from "./conversation.ts";
 import { OPENCODE_TOOL_REF } from "./opencode.ts";
 import { openCodeInstalledVersion } from "./opencode-service.ts";
@@ -20,6 +20,9 @@ import { PasteImageError, readImageBody, savePaneImage } from "./paste.ts";
 import { CLAUDE_REWIND_OPEN_MESSAGE } from "./dialogs/claude.ts";
 import { claudeRewindOpen } from "./prompt.ts";
 import { expandedDirectory } from "./workspace-routes.ts";
+import { ConversationDiagnostics } from "./conversation-diagnostics.ts";
+
+const conversationDiagnostics = new ConversationDiagnostics();
 
 /** the native stores createServer was given; unset, each reader finds its own */
 export type PaneStores = { codexHome?: string; grokHome?: string; museData?: string; opencodeDb?: string; devinDbPath?: string; hermesHome?: string; openCodeStateDir?: string };
@@ -261,6 +264,7 @@ export async function handlePaneRequest(request: Request, url: URL, pathname: st
     };
     try {
       const { version, ...conversation } = await paneConversation(paneId, options.codexHome, page, options.devinDbPath, options.opencodeDb, options.hermesHome, options.grokHome, options.museData);
+      conversationDiagnostics.recovered(paneId, requestIdContext.getStore()?.id);
       // omp's transcript counts the tokens a request filled but never names the window; its own
       // status bar does (server/omp-status.ts), so the chat's ring gets a percent from there
       const screenContext = conversation.source === "omp-transcript" ? await ompScreenContext(paneId) : null;
@@ -275,11 +279,17 @@ export async function handlePaneRequest(request: Request, url: URL, pathname: st
       return jsonResponse(answer, 200, headers);
     } catch (error) {
       if (error instanceof HistoryChanged || error instanceof DevinHistoryChanged) return jsonResponse({ error: { code: "history_changed", message: error.message } }, 409);
-      if (error instanceof ConversationReadPending) return jsonResponse({ error: { code: "conversation_read_pending", message: error.message } }, 503, { "cache-control": "no-store" });
+      if (error instanceof ConversationReadPending) {
+        conversationDiagnostics.unavailable(paneId, error, requestIdContext.getStore()?.id);
+        return jsonResponse({ error: { code: "conversation_read_pending", message: error.message } }, 503, { "cache-control": "no-store" });
+      }
       // an unrecognized pane is not an error: the client falls back to the
       // scrollback transcript, exactly like chatmux's terminal fallback. Its metadata is only
       // ever what the agent's own status line states
-      if (error instanceof ConversationUnavailable) return jsonResponse({ source: "scrollback", turns: [], ...(error.screen ? { metadata: error.screen, screen: true } : {}) });
+      if (error instanceof ConversationUnavailable) {
+        conversationDiagnostics.unavailable(paneId, error, requestIdContext.getStore()?.id);
+        return jsonResponse({ source: "scrollback", turns: [], ...(error.screen ? { metadata: error.screen, screen: true } : {}) });
+      }
       return errorResponse(error);
     }
   }

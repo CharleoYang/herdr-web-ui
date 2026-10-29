@@ -76,6 +76,20 @@ export function readScreen(buffer: IBuffer, cols: number, rows: number): ScreenS
   return { cols, rows: out };
 }
 
+/** The live screen as logical lines, preserving spaces across xterm wraps (as in useTerminalMount). */
+export function readScreenLines(buffer: IBuffer, rows: number): string[] | null {
+  const lines: string[] = [];
+  for (let y = 0; y < rows; y++) {
+    const line = buffer.getLine(buffer.baseY + y);
+    // A clipped first line or missing row cannot prove what the screen says.
+    if (!line || (y === 0 && line.isWrapped)) return null;
+    const text = line.translateToString(y === rows - 1 || !buffer.getLine(buffer.baseY + y + 1)?.isWrapped);
+    if (line.isWrapped && lines.length) lines[lines.length - 1] += text;
+    else lines.push(text);
+  }
+  return lines;
+}
+
 /** a full-width rule of pi's TUI and its family */
 const RULE = /^─{10,}$/;
 const blank = (cell: ScreenCell): boolean => cell.char.trim() === "";

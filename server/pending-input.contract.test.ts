@@ -459,6 +459,9 @@ describe("connection-owned pending input", () => {
     { agent: "omp", text: "/model", expected: "/switch" },
     { agent: "codex", text: "/model", expected: "/model" },
     { agent: "omp", text: "/model x", expected: "/model x" },
+    // Claude Code reads `\` + Enter as a new line: a space lets its Enter send (#2277)
+    { agent: "claude", text: "see C:\\temp\\", expected: "see C:\\temp\\ " },
+    { agent: "codex", text: "see C:\\temp\\", expected: "see C:\\temp\\" },
   ])("delivers queued $text as $expected to $agent", async ({ agent, text, expected }) => {
     // Given a command queued while the agent is working.
     const f = await setup("queued-model", agent, "");
@@ -652,6 +655,22 @@ describe("connection-owned pending input", () => {
         await f.waitBytes("\r");
         expect(f.bytes()).toBe(`${paste(message.text)}\r`); // control: delivered once
       }
+    } finally { session.mockRestore(); }
+  }, 30_000);
+
+  it("commits a message whose hookless Claude session cannot be read only after its own paste is in (control #2125)", async () => {
+    const f = await setup("claude-session-unread-after-paste");
+    // the recorder runs as `claude`; its PID record is supplied, and can no longer be read once the bridge pasted
+    const session = spyOn(claudeStore, "claudeForegroundSession").mockImplementation(async (processes) =>
+      processes.some((entry) => entry.name === "claude") && !herdrWrites.includes(`text ${f.pane}`) ? "11111111-1111-4111-8111-111111111111" : null);
+    try {
+      const message = await f.queue(2125, "for the session read before the paste");
+      const settled = f.socket.event((frame) => frame.messages.some((entry) => entry.id === message.id && (entry.state === "held" || entry.state === "uncertain"))
+        || frame.removed?.some((entry) => entry.id === message.id) === true);
+      await f.state("idle");
+      expect((await settled).removed ?? []).toContainEqual({ id: message.id, outcome: "sent" }); // neither held nor left uncertain
+      await f.waitBytes("\r");
+      expect(f.bytes()).toBe(`${paste(message.text)}\r`); // Enter follows its own paste, once
     } finally { session.mockRestore(); }
   }, 30_000);
 
