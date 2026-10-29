@@ -1070,11 +1070,13 @@ export class UsageService {
     // a local reading as recent as the endpoint's own cache stands for it; an older one only when the
     // endpoint cannot answer (an expired token, a refusal, a blocked network), with its own time
     if (local && now - (local.checkedAt ?? now) < FRESH_MS) return fromLocal(local);
-    if (signIn.expiresAt !== null && signIn.expiresAt <= now) return local ? fromLocal(local) : keep("expired", signIn.plan ?? null, RETRY_MS);
+    // a fallback never replaces a newer endpoint answer kept from before: that one stays, named by the problem
+    const fallback = local !== null && !(kept?.checked_at && Date.parse(kept.checked_at) > (local.checkedAt ?? now)) ? local : null;
+    if (signIn.expiresAt !== null && signIn.expiresAt <= now) return fallback ? fromLocal(fallback) : keep("expired", signIn.plan ?? null, RETRY_MS);
     // a 429 holds for the account, not the place: a sign-in moved or copied elsewhere waits too
     const backoff = found.account ? `${provider.id}:${found.account.id}` : `${provider.id}#${createHash("sha256").update(signIn.token).digest("hex")}`;
     const until = this.backoffs.get(backoff);
-    if (until !== undefined && now < until) return local ? fromLocal(local) : keep("rate_limited", signIn.plan ?? null, until - now);
+    if (until !== undefined && now < until) return fallback ? fromLocal(fallback) : keep("rate_limited", signIn.plan ?? null, until - now);
     this.backoffs.delete(backoff);
     try {
       const reading = await provider.read(this.ctx, signIn);
@@ -1085,7 +1087,7 @@ export class UsageService {
     } catch (error) {
       const wait = Math.max(RETRY_MS, error instanceof UsageHttpError ? error.retryAfterMs ?? FRESH_MS : 0);
       if (error instanceof UsageHttpError && error.status === 429) this.backoffs.set(backoff, now + wait);
-      if (local) return fromLocal(local);
+      if (fallback) return fromLocal(fallback);
       if (error instanceof UsageHttpError && (error.status === 401 || error.status === 403)) return keep("expired", signIn.plan ?? null, RETRY_MS);
       if (error instanceof UsageHttpError && error.status === 429) return keep("rate_limited", signIn.plan ?? null, wait);
       console.warn(`usage: ${provider.id} could not be read: ${error instanceof Error ? error.message : String(error)}`);

@@ -199,12 +199,10 @@ function wrapper(previous: string | null, capture: string): string {
     "# The x keeps the payload's trailing newlines, which $( ) would strip.",
     "payload=$(cat; printf x)",
     "payload=${payload%x}",
-    "# The capture runs beside the status line, so a render takes the longer of the two rather than",
-    "# both; it is waited for so it is not cut off with the status line's own processes.",
+    "# The capture runs on its own, so the line is drawn and the wrapper ends without waiting for it.",
     `(umask 077; printf '%s' "$payload" | ${shellQuote(process.execPath)} ${shellQuote(capture)}) >/dev/null 2>&1 &`,
   ];
-  if (previous === null) lines.push("wait");
-  else lines.push(`printf '%s' "$payload" | sh -c ${shellQuote(previous)}`, "drawn=$?", "wait", "exit $drawn");
+  if (previous !== null) lines.push(`printf '%s' "$payload" | sh -c ${shellQuote(previous)}`);
   return `${lines.join("\n")}\n`;
 }
 
@@ -238,7 +236,7 @@ function install(): string {
 function remove(): string {
   const where = locations();
   if (!existsSync(where.record)) return `nothing to remove: ${where.record} is not there`;
-  if (!lstatSync(where.record).isFile()) throw new Error(`${where.record} is not a file this installer wrote`);
+  if (!lstatSync(where.own).isDirectory() || !lstatSync(where.record).isFile()) throw new Error(`${where.own} is not the directory this installer made (a link?); move it away first`);
   const record = JSON.parse(readFileSync(where.record, "utf8")) as InstallRecord;
   const { text, value } = readSettings(where.settings);
   let outcome: string;

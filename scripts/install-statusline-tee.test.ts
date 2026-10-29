@@ -20,8 +20,13 @@ function install(...args: string[]) {
   expect(result.stderr.toString()).toBe("");
   expect(result.exitCode).toBe(0);
 }
+/**
+ * The capture runs in the background: fd 3, a copy of stdout it inherits, keeps stdout open until it
+ * has written, so the spawn's read to the end waits for the capture rather than a guessed delay.
+ */
+const finished = (script: string): string[] => ["sh", "-c", `sh "$0" 3>&1`, script];
 function draw(payload: string, configDir?: string) {
-  const result = Bun.spawnSync(["sh", tee(configDir)], { env: env(configDir), stdin: Buffer.from(payload), timeout: 10_000 });
+  const result = Bun.spawnSync(finished(tee(configDir)), { env: env(configDir), stdin: Buffer.from(payload), timeout: 10_000 });
   expect(result.exitCode).toBe(0);
   return result.stdout.toString();
 }
@@ -173,6 +178,32 @@ describe("statusline installer and capture", () => {
     expect(existsSync(tee())).toBe(false);
   });
 
+  it("--remove deletes nothing through a linked directory", () => {
+    install();
+    const outside = join(home, "outside");
+    mkdirSync(outside);
+    for (const name of ["install.json", "statusline-tee.sh", "statusline-capture.ts"]) writeFileSync(join(outside, name), readFileSync(join(own(), name)));
+    rmSync(own(), { recursive: true });
+    symlinkSync(outside, own());
+    expect(run(["--remove"]).exitCode).toBe(1);
+    expect(existsSync(join(outside, "statusline-tee.sh"))).toBe(true);
+    expect(existsSync(join(outside, "install.json"))).toBe(true);
+  });
+
+  it("draws the line and ends without waiting for the capture", () => {
+    writeFileSync(settings(), JSON.stringify({ statusLine: { type: "command", command: "printf drawn" } }));
+    install();
+    const gate = join(home, "gate");
+    expect(Bun.spawnSync(["mkfifo", gate]).exitCode).toBe(0);
+    // the capture blocks until the test opens the gate, after the wrapper has already ended
+    writeFileSync(join(own(), "statusline-capture.ts"), `require("node:fs").readFileSync(${JSON.stringify(gate)});\n`);
+    const result = Bun.spawnSync(["sh", tee()], { env: env(), stdin: Buffer.from("{}"), timeout: 10_000 });
+    writeFileSync(gate, "go");
+    expect(result.signalCode ?? null).toBeNull();
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout.toString()).toBe("drawn");
+  });
+
   it("clears what a killed install left behind instead of refusing the next one", () => {
     mkdirSync(own());
     const leftover = join(own(), ".install.json.4242.0b0e7f5c-8a1d-4c3e-9f2a-7d6b5c4a3e21.tmp");
@@ -233,7 +264,7 @@ describe("statusline installer and capture", () => {
     chmodSync(join(home, ".herdr"), 0o755);
     install();
     const payload = JSON.stringify({ rate_limits: { seven_day: { used_percentage: 23 } } });
-    const result = Bun.spawnSync(["sh", "-c", 'umask 022; exec sh "$0"', tee()], { env: env(), stdin: Buffer.from(payload) });
+    const result = Bun.spawnSync(["sh", "-c", 'umask 022; exec sh "$0" 3>&1', tee()], { env: env(), stdin: Buffer.from(payload), timeout: 10_000 });
     expect(result.exitCode).toBe(0);
     expect(result.stdout.toString()).toBe(payload);
     expect(statSync(join(home, ".herdr")).mode & 0o777).toBe(0o700);
@@ -247,7 +278,7 @@ describe("statusline installer and capture", () => {
     mkdirSync(configDir);
     writeFileSync(join(home, ".claude.json"), JSON.stringify({ oauthAccount: { accountUuid: "personal" } }));
     writeFileSync(join(configDir, ".claude.json"), JSON.stringify({ oauthAccount: { accountUuid: "work", emailAddress: "work@example.com" } }));
-    const result = Bun.spawnSync(["sh", tee()], { env: env(configDir), stdin: Buffer.from(JSON.stringify({ rate_limits: { five_hour: { used_percentage: 12 } } })) });
+    const result = Bun.spawnSync(finished(tee()), { env: env(configDir), stdin: Buffer.from(JSON.stringify({ rate_limits: { five_hour: { used_percentage: 12 } } })), timeout: 10_000 });
     expect(result.exitCode).toBe(0);
     writeFileSync(join(configDir, ".claude.json"), JSON.stringify({ oauthAccount: { accountUuid: "other" } }));
     expect(readStatusline(home)?.account).toEqual({ id: "work", label: "work@example.com" });
