@@ -2,8 +2,7 @@ import { type CSSProperties, type ReactNode, useCallback, useEffect, useMemo, us
 import { Bell, Ellipsis, FolderOpen, Link, Menu, MessageSquare, PanelLeft, Search, SquareTerminal, X } from "lucide-react";
 
 import type { HerdrPane } from "../shared/protocol.ts";
-import { authenticate, createTab, moveTabToWorkspace, pairDevice, shareSeen, signOut, splitPane, swapPaneWith, zoomPane } from "./lib/api.ts";
-import { deviceLabel } from "./lib/phone.ts";
+import { authenticate, createTab, moveTabToWorkspace, shareSeen, signOut, splitPane, swapPaneWith, zoomPane } from "./lib/api.ts";
 import { displayPaneTitle } from "./components/Sidebar.tsx";
 import { PaneCanvas } from "./components/PaneCanvas.tsx";
 import { MachineSessionsProvider } from "./lib/machineSessionContext.tsx";
@@ -64,7 +63,7 @@ import { WebPanel } from "./components/WebPanel.tsx";
 import { WebPanelContext } from "./lib/webPanel.ts";
 import { RepoDiffViewer } from "./components/RepoDiffViewer.tsx";
 import { OpenFileContext } from "./lib/filePaths.ts";
-import { useAccessState, useLockedRef } from "./lib/useAccess.ts";
+import { useAccessState, useLockedRef, usePairFromAddress } from "./lib/useAccess.ts";
 import { useLocalHealth } from "./lib/useLocalHealth.ts";
 import { useMachinesRef, useRecentFolderMemory, useRefetchTimer, useRosterError, useRosterEvents, useRosterLoader, useRosterState } from "./lib/useMachineRoster.ts";
 import { useMachineDialog } from "./lib/useMachineDialog.ts";
@@ -177,13 +176,8 @@ export function App() {
   const { health, localFreshness, shownHealth, readLocalHealth } = useLocalHealth();
   const { error, setError } = useRosterError();
   const { layoutNotice, setLayoutNotice } = useLayoutNotice();
-  const { locked, setLocked, lockReason, pairCode, auth, canSignOut, pairedFromAddress, security, readBridgeHealth } = useAccessState();
+  const { locked, setLocked, lockReason, pairCode, consumePairCode, pairingUnconfirmed, onPaired, auth, canSignOut, security, readBridgeHealth } = useAccessState();
   const { pairedNotices, setPairedNotices, dismissPairedNotice } = usePairedNotices();
-  useEffect(() => {
-    if (locked !== false || pairCode === "" || pairedFromAddress.current || auth?.via === "device") return;
-    pairedFromAddress.current = true;
-    pairDevice(pairCode, deviceLabel(navigator.userAgent, navigator.maxTouchPoints ?? 0)).then(() => loadHealth()).catch(() => { /* the gate, if any, reports it */ });
-  }, [locked, pairCode, auth]); // eslint-disable-line react-hooks/exhaustive-deps
   const updates = useUpdates(locked === false);
   const { selectedPaneId, setSelectedPaneId, notificationViewTarget, setNotificationViewTarget, terminalPeek, setTerminalPeek, endPeek, pendingLink, linkLanded, setLinkLanded, rosterSeq, linkSince, selectionSince, rosterTick, setRosterTick, linkTick, setLinkTick } = useSelectionState({ initialLink });
   const { otherRecheck, otherRosterTick, setOtherRosterTick } = useSplitRecheck();
@@ -225,6 +219,7 @@ export function App() {
     await readBridgeHealth();
     await readLocalHealth();
   }, []);
+  usePairFromAddress({ locked, pairCode, auth, consumePairCode, onPaired, loadHealth });
   const { snapshotRequests, reorderCoordinator, load, scheduleRefetch } = useRosterLoader({ rosterIn, setMachines, setMachineRosterLoaded, setError, setLocked, loadHealth, lockedRef, refetchTimer });
 
   const { dropIn, chime, onRoster, onPaneStatus, onPaneExited } = useAlertSignals({ settings, selectionRef, drawerOpenRef, splitRef, splitShownRef, machinesRef, alertsRef, alertsOnRef, pushOnRef, statusRef, turnStartRef, lastTurnRef, alertInAppRef, alertSoundRef });
@@ -582,7 +577,7 @@ export function App() {
       </div>
     );
   }
-  if (locked) return <AccessGate reason={lockReason} initialCode={pairCode} onUnlocked={unlock} />;
+  if (locked) return <AccessGate reason={lockReason} initialCode={pairCode} consumePairCode={consumePairCode} pairingUnconfirmed={pairingUnconfirmed} onPaired={onPaired} onUnlocked={unlock} />;
 
   return (
     <MachineSessionsProvider machineIds={machines.map((machine) => machine.id)}><MachineContext.Provider value={selectedMachineId}><div className={`app${sidebarCollapsed ? " sidebar-collapsed" : ""}`} style={sidebarWidth === null && filePanelWidth === null ? undefined : {
