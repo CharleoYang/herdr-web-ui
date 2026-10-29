@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
 
-import { currentWaitingSends, expireWaitingSends, forgetWaitingSends, rememberWaitingSend, settleWaitingSends, WAITING_SEND_MS, waitingBaseline, waitingKey } from "./sentWaiting.ts";
+import { currentWaitingSends, expireWaitingSends, forgetMachineWaitingSends, forgetWaitingSends, rememberWaitingSend, settleWaitingSends, WAITING_SEND_MS, waitingBaseline, waitingKey } from "./sentWaiting.ts";
 import type { ConversationTurn } from "../../shared/protocol.ts";
 import type { Machine } from "../../shared/machines.ts";
 import { paneLifetimes } from "./paneLifetime.ts";
@@ -255,6 +255,25 @@ describe("waitingText", () => {
       settleWaitingSends(key, [user("earlier", 1_000), user("next", 2_000)], 2_700, true);
       expect(currentWaitingSends(key)).toEqual([]);
     } finally { forgetWaitingSends(key); }
+  });
+
+  it("settles a whole-second turn for a send made before the chat's first read", () => {
+    const key = waitingKey("local", "whole-seconds-first-read");
+    const at = Date.parse("2026-10-29T10:00:02.500Z");
+    try {
+      rememberWaitingSend(key, "next", at, waitingBaseline(key));
+      settleWaitingSends(key, [user("next", Date.parse("2026-10-29T10:00:02Z"))], at + 300, true);
+      expect(currentWaitingSends(key)).toEqual([]);
+    } finally { forgetWaitingSends(key); }
+  });
+
+  it("drops every waiting send of a PC whose connection went, and only that PC's", () => {
+    const here = waitingKey("local", "w1:p1"), other = waitingKey("local", "w2:p1"), away = waitingKey("remote", "w1:p1");
+    try {
+      for (const key of [here, other, away]) rememberWaitingSend(key, "deploy it", Date.now());
+      forgetMachineWaitingSends("local");
+      expect([currentWaitingSends(here), currentWaitingSends(other), currentWaitingSends(away).length]).toEqual([[], [], 1]);
+    } finally { for (const key of [here, other, away]) forgetWaitingSends(key); }
   });
 
   it("records no baseline for a chat that has not read its transcript", () => {

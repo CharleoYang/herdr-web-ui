@@ -1,8 +1,21 @@
-import { useEffect, useState } from "react";
+import { useEffect, useLayoutEffect, useState, useSyncExternalStore } from "react";
 import { Clock } from "lucide-react";
 
 import { useT } from "../lib/i18n.ts";
-import { WAITING_HINT_MS, type WaitingSend } from "../lib/sentWaiting.ts";
+import { currentWaitingSends, forgetMachineWaitingSends, subscribeWaitingSends, WAITING_HINT_MS, waitingKey, type WaitingSend } from "../lib/sentWaiting.ts";
+
+/**
+ * The sends this browser made to a pane that its transcript does not hold yet. A lost connection
+ * lets the PC's go, before paint: what became of them is the transcript's to say once it is read
+ * again, and nothing is sent again.
+ */
+export function useWaitingSends(machineId: string, paneId: string, connected: boolean): readonly WaitingSend[] {
+  const key = waitingKey(machineId, paneId);
+  useLayoutEffect(() => {
+    if (!connected) forgetMachineWaitingSends(machineId);
+  }, [connected, machineId]);
+  return useSyncExternalStore(subscribeWaitingSends, () => currentWaitingSends(key));
+}
 
 /**
  * Sent, and the agent has not written it as a turn yet: the user's bubble where the turn will be,
@@ -23,7 +36,8 @@ export function SentWaitingList({ sends }: { sends: readonly WaitingSend[] }) {
     return () => clearTimeout(timer);
   }, [nextHint]);
   const late = t("Sent · waiting for the agent's next turn");
-  return <div className="chat-sent-waiting-list" role="status">
+  // no live region of its own: the chat footer has one, and the user's own words need no announcing
+  return <div className="chat-sent-waiting-list">
     {sends.map((send) => {
       const chars = Array.from(send.text);
       return <div key={send.id} className="chat-turn chat-turn-user chat-turn-waiting">

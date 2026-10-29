@@ -54,12 +54,12 @@ const turnTime = (turn: Turn): number => turn.ts === null ? Number.NaN : Date.pa
 
 function newerThanSend(send: WaitingSend, at: number, key: string): boolean {
   const after = send.after;
-  if (after === null) return at >= send.at;
-  if (after.keys.has(key)) return false;
-  // written before the send, though the chat had not shown it yet: older than the send by any clock.
-  // Strictly later: the send's own turn is written after its `at`, which is taken before submitting;
-  // a transcript that keeps whole seconds (Grok's) may record it up to a second early
+  // the send's own turn is written after its `at`, which is taken before submitting; a transcript
+  // that keeps whole seconds (Grok's) may record it up to a second early, with or without a baseline
   const coarse = at % 1000 === 0 ? 1000 : 0;
+  if (after === null) return coarse > 0 ? at + coarse > send.at : at >= send.at;
+  if (after.keys.has(key)) return false;
+  // written before the send, though the chat had not shown it yet: older than the send by any clock
   return after.latest === null || (at >= after.latest && at + coarse + (after.takenAt - after.latest) > send.at);
 }
 
@@ -165,9 +165,11 @@ export function forgetWaitingSends(key: string): void {
 
 // herdr gives pane ids out again once it is replaced (lib/paneLifetime.ts): the earlier herdr's
 // sends never reach the new panes, so a PC's waiting lines go with its herdr
-paneLifetimes.onRetire((machineId) => {
+export function forgetMachineWaitingSends(machineId: string): void {
   for (const key of [...waiting.keys(), ...shown.keys()]) if (key.startsWith(`${machineId}:`)) forgetWaitingSends(key);
-});
+}
+
+paneLifetimes.onRetire(forgetMachineWaitingSends);
 
 export function subscribeWaitingSends(listener: () => void): () => void {
   listeners.add(listener);

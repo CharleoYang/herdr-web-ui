@@ -1,4 +1,4 @@
-import { createContext, memo, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ComponentType } from "react";
+import { createContext, memo, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type ComponentType } from "react";
 import { createPortal } from "react-dom";
 import {
   ArrowDown, BookOpen, Check, ChevronDown, ChevronRight, Circle, CircleAlert, CircleCheck, CircleDot, CircleQuestionMark, CircleSlash, CircleX, Copy, Layers, SquareTerminal, Target, Undo2,
@@ -42,8 +42,8 @@ import { followGlides } from "../lib/followScroll.ts";
 import { useMediaQuery } from "../lib/useMediaQuery.ts";
 import { statusEdgeRead } from "../lib/status.ts";
 import { askedQuestions } from "../../shared/askQuestions.ts";
-import { currentWaitingSends, settleWaitingSends, subscribeWaitingSends, waitingKey } from "../lib/sentWaiting.ts";
-import { SentWaitingList } from "./SentWaiting.tsx";
+import { settleWaitingSends, waitingKey } from "../lib/sentWaiting.ts";
+import { SentWaitingList, useWaitingSends } from "./SentWaiting.tsx";
 import { ConversationRefresh } from "../lib/conversationRefresh.ts";
 import { teammateMessageParts, type TeammateMessage } from "../lib/teammateMessage.ts";
 import { usePageVisible } from "../lib/visibility.ts";
@@ -2239,7 +2239,7 @@ export const ChatView = memo(function ChatView({ paneId, presentationKey, finish
   // turn only when its next turn starts, so without this the chat would show nothing at all. The
   // queue lives in the store, so a reader who goes to another tab and comes back still sees it.
   const waitKey = waitingKey(machineId, paneId);
-  const sentWaiting = useSyncExternalStore(subscribeWaitingSends, () => currentWaitingSends(waitKey));
+  const sentWaiting = useWaitingSends(machineId, paneId, connected);
   // before paint: a frame never shows a send's turn and its waiting bubble together. Only a
   // conversation read that answered says what the chat holds: a failed read leaves it unknown
   const turnsRead = loaded && error === null && state.source === "conversation";
