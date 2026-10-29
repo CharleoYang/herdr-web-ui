@@ -1,6 +1,6 @@
-import { afterEach, describe, expect, it, spyOn } from "bun:test";
+import { describe, expect, it, spyOn } from "bun:test";
 
-import { forgetOmpScreenContext, ompScreenContext, ompStatusContext } from "./omp-status.ts";
+import { ompScreenContext, ompStatusContext } from "./omp-status.ts";
 import * as herdr from "./herdr/client.ts";
 
 // a pane's bottom rows, as `pane.read?format=text` answers them
@@ -32,7 +32,6 @@ describe("ompStatusContext", () => {
 
 describe("ompScreenContext", () => {
   const pane = "statusline-test-pane";
-  afterEach(() => { forgetOmpScreenContext(pane); });
 
   it("requires a stable bottom viewport before and after reading, including cache hits", async () => {
     let offset = 0;

@@ -40,10 +40,8 @@ export async function ompScreenContext(paneId: string, now: number = Date.now())
   const after = screen === "" ? null : await paneScrollInfo(paneId).catch(() => null);
   if (after?.offset_from_bottom !== 0 || after.max_offset_from_bottom !== before.max_offset_from_bottom) return null;
   const context = ompStatusContext(screen);
+  // a closed pane's entry goes with the next read of any pane, so the cache holds live panes only
+  for (const [id, entry] of cache) if (now - entry.at >= TTL_MS) cache.delete(id);
   cache.set(paneId, { at: now, history: before.max_offset_from_bottom, context });
   return context;
-}
-
-export function forgetOmpScreenContext(paneId: string): void {
-  cache.delete(paneId);
 }
