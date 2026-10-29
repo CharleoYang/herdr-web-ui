@@ -21,9 +21,6 @@ describe("parseStatusline", () => {
     const reading = parseStatusline(payload, 1000)!;
     expect(reading.fiveHour).toEqual({ usedPercent: 17, resetsAt: new Date(1793190600 * 1000).toISOString() });
     expect(reading.sevenDay).toEqual({ usedPercent: 64, resetsAt: new Date(1793343600 * 1000).toISOString() });
-    expect(reading.model).toBe("Opus 5.5");
-    expect(reading.sessionId).toBe("1f029056-ac98-41b6-a111-125fd71c2c0e");
-    expect(reading.context).toEqual({ usedPercent: 32, window: 1000000 });
   });
 
   it("keeps one window when the other is missing, and names no reset when it has none", () => {
@@ -56,14 +53,13 @@ describe("readStatusline", () => {
     expect(readStatusline(home)).toBeNull();
   });
 
-  it("drops windows at their reset while retaining unexpired windows and context", () => {
+  it("drops windows at their reset while retaining unexpired windows", () => {
     write(payload);
     const now = payload.rate_limits.five_hour.resets_at * 1000;
     utimesSync(path, new Date(now - 60_000), new Date(now - 60_000));
     const reading = readStatusline(home, now)!;
     expect(reading.fiveHour).toBeNull();
     expect(reading.sevenDay?.usedPercent).toBe(64);
-    expect(reading.context?.usedPercent).toBe(32);
     write({ rate_limits: { five_hour: { used_percentage: 17, resets_at: now / 1000 - 1 } } });
     utimesSync(path, new Date(now), new Date(now));
     expect(readStatusline(home, now)?.fiveHour).toBeNull();

@@ -2,28 +2,25 @@ import { readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 
 /**
- * What Claude Code pipes to its status line, kept by `~/.herdr/statusline-tee.sh` (the statusLine
- * command it wraps). Read here instead of asking Anthropic: this is the same payload Claude's own
- * line draws from, it needs no token, and it never leaves the machine — the usage endpoint answers
+ * The limits Claude Code hands its status line, kept by the wrapper that
+ * scripts/install-statusline-tee.ts installs when the user opts in. Read here instead of asking
+ * Anthropic: these are the numbers Claude's own line draws from, they need no token, and they
+ * never leave the machine — the usage endpoint answers
  * 403 from some networks, where this file still holds the numbers.
  *
- * The payload's shape, as Claude Code 2.1.308 writes it:
+ * The capture keeps only these fields (as Claude Code 2.1.308 writes them), and adds
+ * `_herdr.account`, the account of the CLI that drew it:
  *   rate_limits.five_hour  { used_percentage, resets_at }   resets_at in epoch SECONDS
  *   rate_limits.seven_day  { used_percentage, resets_at }
- *   context_window         { used_percentage, remaining_percentage, context_window_size, ... }
- *   model { id, display_name }  session_id  cost.total_cost_usd  version
  */
 export interface StatuslinePayload {
   /** when the file was last written: the status line renders on activity, so an idle pane's is old */
   readAt: number;
-  sessionId: string | null;
   /** Captured from the rendering CLI's config; absent in older or unidentifiable captures. */
   account: { id: string; label: string | null } | null;
-  model: string | null;
-  /** percent used, or null when the payload names none */
+  /** null when the payload names none */
   fiveHour: StatuslineWindow | null;
   sevenDay: StatuslineWindow | null;
-  context: { usedPercent: number | null; window: number | null } | null;
 }
 
 export interface StatuslineWindow {
@@ -58,22 +55,11 @@ export function parseStatusline(payload: unknown, readAt: number): StatuslinePay
   const limits = record(body["rate_limits"]);
   const fiveHour = window(limits["five_hour"]);
   const sevenDay = window(limits["seven_day"]);
-  const contextWindow = record(body["context_window"]);
-  const contextUsed = percent(contextWindow["used_percentage"]);
-  const contextSize = typeof contextWindow["context_window_size"] === "number" ? contextWindow["context_window_size"] : null;
   const account = record(record(body["_herdr"])["account"]);
   const accountId = text(account["id"]);
   // a payload with nothing this reader shows is not a reading (an older Claude Code, a stub)
-  if (fiveHour === null && sevenDay === null && contextUsed === null) return null;
-  return {
-    account: accountId === null ? null : { id: accountId, label: text(account["label"]) },
-    readAt,
-    sessionId: text(body["session_id"]),
-    model: text(record(body["model"])["display_name"]) ?? text(record(body["model"])["id"]),
-    fiveHour,
-    sevenDay,
-    context: contextUsed === null ? null : { usedPercent: contextUsed, window: contextSize },
-  };
+  if (fiveHour === null && sevenDay === null) return null;
+  return { account: accountId === null ? null : { id: accountId, label: text(account["label"]) }, readAt, fiveHour, sevenDay };
 }
 
 /** The newest payload under `home`, with reset windows removed even while the file is fresh. */
