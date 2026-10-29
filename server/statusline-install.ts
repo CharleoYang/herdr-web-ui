@@ -289,50 +289,54 @@ export function statuslineInstallState(options: StatuslineInstallOptions): Statu
 
 const CAPTURE_SOURCE = (): string => readFileSync(new URL("./statusline-capture.ts", import.meta.url), "utf8");
 
-/**
- * A lock whose holder is gone is taken over at once; one whose holder still runs only after this long,
- * which no change takes (it is milliseconds), so its pid has been reused by another process.
- */
-const ABANDONED_LOCK_MS = 10 * 60_000;
-
 const isCode = (error: unknown, code: string): boolean => error !== null && typeof error === "object" && "code" in error && error.code === code;
 
 /** Whether the process a lock's owner token (`<pid>:<uuid>`) names still runs on this PC. */
 function holderRuns(token: string): boolean {
   const pid = Number(token.split(":")[0]);
-  if (!Number.isInteger(pid) || pid <= 0) return false;
   try { process.kill(pid, 0); return true; } catch (error) { return isCode(error, "EPERM"); }
 }
 
 /**
  * One change at a time, across processes too (two servers on one home): an install and a removal
- * that interleave could leave settings.json running a wrapper the other just deleted. The lock names
- * its holder; a change takes it over only from a holder that is gone, and releases only its own.
+ * that interleave could leave settings.json running a wrapper the other just deleted. The lock is
+ * published whole (built aside with its owner, then renamed into place, which replaces only an empty
+ * directory: no change ever holds one), names its holder, is taken
+ * over only from a holder that is gone, and is released only by its own holder. A live holder is
+ * never overruled: a lock left by a crashed server whose pid another process now has stays until
+ * removed by hand, which the refusal names.
  */
 function locked<T>(configDir: string, change: () => T): T {
   const lock = join(configDir, ".herdr-statusline.lock");
   const ownerOf = (dir: string): string | null => { try { return readFileSync(join(dir, "owner"), "utf8"); } catch { return null; } };
   const token = `${process.pid}:${randomUUID()}`;
-  const busy = () => new StatuslineInstallError("another change to Claude's status line is in progress; try again in a moment");
-  const take = () => { mkdirSync(lock); writeFileSync(join(lock, "owner"), token, { mode: 0o600 }); };
-  try {
-    take();
-  } catch (error) {
-    if (!isCode(error, "EEXIST")) throw error;
+  const busy = () => new StatuslineInstallError(`another change to Claude's status line is in progress; try again in a moment (if none is, delete ${lock})`);
+  const take = (): boolean => {
+    const built = `${lock}.${process.pid}.${randomUUID()}.new`;
+    mkdirSync(built);
+    writeFileSync(join(built, "owner"), token, { mode: 0o600 });
+    try { renameSync(built, lock); return true; }
+    catch (error) {
+      rmSync(built, { recursive: true, force: true });
+      // held (a lock with its owner), or not a directory this can replace (a link): either way, not ours
+      if (isCode(error, "EEXIST") || isCode(error, "ENOTEMPTY") || isCode(error, "ENOTDIR")) return false;
+      throw error;
+    }
+  };
+  if (!take()) {
+    const entry = lstatSync(lock, { throwIfNoEntry: false });
     const seen = ownerOf(lock);
-    const age = Date.now() - (lstatSync(lock, { throwIfNoEntry: false })?.mtimeMs ?? Date.now());
-    // no owner yet: another change is between its mkdir and its owner file, unless it died there long ago
-    const abandoned = age >= ABANDONED_LOCK_MS || (seen !== null && !holderRuns(seen));
-    if (!abandoned || lstatSync(lock).isSymbolicLink()) throw busy();
+    // a token is whole once published; anything else (a link, no owner, a holder still running) is busy
+    if (!entry?.isDirectory() || seen === null || !/^\d+:[0-9a-f-]{36}$/.test(seen) || holderRuns(seen)) throw busy();
     // moved aside, then checked: only the lock judged abandoned is removed, never one taken since
-    const aside = `${lock}.${process.pid}.${randomUUID()}`;
+    const aside = `${lock}.${process.pid}.${randomUUID()}.old`;
     try { renameSync(lock, aside); } catch { throw busy(); }
     if (ownerOf(aside) !== seen) {
       try { renameSync(aside, lock); } catch { /* a third change holds it now; the moved one stays aside */ }
       throw busy();
     }
     rmSync(aside, { recursive: true, force: true });
-    try { take(); } catch { throw busy(); }
+    if (!take()) throw busy();
   }
   try {
     return change();

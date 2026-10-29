@@ -253,6 +253,14 @@ describe("providers", () => {
     expect(switched).toMatchObject({ problem: "expired", statusline_offer: true });
   });
 
+  it("takes a CLAUDE_CONFIG_DIR named default as a path, not as the default ~/.claude", async () => {
+    write(join(home, ".claude", ".credentials.json"), { claudeAiOauth: { accessToken: "k", expiresAt: NOW + HOUR } });
+    replies.set("https://api.anthropic.com/api/oauth/usage", { status: 403, body: { error: { message: "Request not allowed" } } });
+    const [usage] = (await new UsageService({ ...context(), env: { ...context().env, CLAUDE_CONFIG_DIR: "default" } }, only("claude")).report()).providers;
+    expect(usage).toMatchObject({ problem: "expired" });
+    expect(usage).not.toHaveProperty("statusline_offer");
+  });
+
   it("offers the status line when CLAUDE_CONFIG_DIR names the default ~/.claude, however it is spelled", async () => {
     write(join(home, ".claude", ".credentials.json"), { claudeAiOauth: { accessToken: "k", expiresAt: NOW + HOUR } });
     replies.set("https://api.anthropic.com/api/oauth/usage", { status: 403, body: { error: { message: "Request not allowed" } } });

@@ -387,18 +387,24 @@ describe("status-line switch and capture", () => {
     expect(readFileSync(tee(), "utf8")).toBe("#!/bin/sh\necho mine\n");
   });
 
-  it("takes one change at a time across processes, and takes over a lock its holder left long ago", () => {
+  it("takes one change at a time across processes, and leaves a lock it cannot vouch for to be removed by hand", () => {
     const lock = join(home, ".claude", ".herdr-statusline.lock");
     const before = readFileSync(settings(), "utf8");
+    // a lock is published with its owner: an empty one holds no change, and is replaced
     mkdirSync(lock);
+    install();
+    expect(existsSync(lock)).toBe(false);
+    install("--remove");
+    // one that names no holder it can check is refused, saying what to delete when nothing holds it
+    mkdirSync(lock);
+    writeFileSync(join(lock, "owner"), "not a token");
     const refused = run([]);
     expect(refused.exitCode).toBe(1);
     expect(refused.stderr).toContain("in progress");
+    expect(refused.stderr).toContain(lock);
     expect(readFileSync(settings(), "utf8")).toBe(before);
-    const old = new Date(Date.now() - 10 * 60_000);
-    utimesSync(lock, old, old);
+    rmSync(lock, { recursive: true });
     install();
-    expect(existsSync(lock)).toBe(false);
     install("--remove");
     expect(readFileSync(settings(), "utf8")).toBe(before);
   });
@@ -410,31 +416,44 @@ describe("status-line switch and capture", () => {
     expect(readFileSync(join(own(), "statusline-capture.ts"), "utf8")).toBe("console.log('mine');\n");
   });
 
-  it("waits for a lock whose holder still runs, and takes over one whose holder is gone", () => {
+  it("waits for a lock whose holder still runs however old it is, and takes over one whose holder is gone", () => {
     const lock = join(home, ".claude", ".herdr-statusline.lock");
     const before = readFileSync(settings(), "utf8");
+    const held = `${process.pid}:${crypto.randomUUID()}`;
     mkdirSync(lock);
-    writeFileSync(join(lock, "owner"), `${process.pid}:held`);
+    writeFileSync(join(lock, "owner"), held);
+    const old = new Date(Date.now() - 60 * 60_000);
+    utimesSync(lock, old, old);
     expect(run([]).stderr).toContain("in progress");
-    expect(readFileSync(join(lock, "owner"), "utf8")).toBe(`${process.pid}:held`);
+    expect(readFileSync(join(lock, "owner"), "utf8")).toBe(held);
     const gone = Bun.spawnSync(["true"]).pid;
-    writeFileSync(join(lock, "owner"), `${gone}:died`);
+    writeFileSync(join(lock, "owner"), `${gone}:${crypto.randomUUID()}`);
     install();
     expect(existsSync(lock)).toBe(false);
     install("--remove");
     expect(readFileSync(settings(), "utf8")).toBe(before);
   });
 
+  it("never reads an owner file being written as a holder that is gone", () => {
+    const lock = join(home, ".claude", ".herdr-statusline.lock");
+    mkdirSync(lock);
+    writeFileSync(join(lock, "owner"), "");
+    expect(run([]).stderr).toContain("in progress");
+    writeFileSync(join(lock, "owner"), "12");
+    expect(run([]).stderr).toContain("in progress");
+    expect(existsSync(own())).toBe(false);
+  });
+
   it("never takes over a lock that is a link, whatever it points at", () => {
     const elsewhere = join(home, "elsewhere");
     mkdirSync(elsewhere);
     const gone = Bun.spawnSync(["true"]).pid;
-    writeFileSync(join(elsewhere, "owner"), `${gone}:died`);
+    writeFileSync(join(elsewhere, "owner"), `${gone}:${crypto.randomUUID()}`);
     symlinkSync(elsewhere, join(home, ".claude", ".herdr-statusline.lock"));
     const old = new Date(Date.now() - 60 * 60_000);
     utimesSync(elsewhere, old, old);
     expect(run([]).stderr).toContain("in progress");
-    expect(readFileSync(join(elsewhere, "owner"), "utf8")).toBe(`${gone}:died`);
+    expect(readFileSync(join(elsewhere, "owner"), "utf8")).toStartWith(`${gone}:`);
     expect(lstatSync(join(home, ".claude", ".herdr-statusline.lock")).isSymbolicLink()).toBe(true);
   });
 });

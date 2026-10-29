@@ -984,8 +984,9 @@ export class UsageService {
   private switchesConfigOf(source: string): boolean {
     const configured = this.ctx.env["CLAUDE_CONFIG_DIR"]?.trim();
     // "default" is ~/.claude: the same sign-in found there and under CLAUDE_CONFIG_DIR is kept once, as "default"
-    const dir = (place: string) => resolve(place === "default" ? join(this.ctx.home, ".claude") : place);
-    return dir(source) === dir(configured || "default");
+    const defaultDir = join(this.ctx.home, ".claude");
+    // the label "default" is a source's only: a configured directory is a path, whatever its name
+    return resolve(source === "default" ? defaultDir : source) === resolve(configured || defaultDir);
   }
 
   private statuslineOptions() {
