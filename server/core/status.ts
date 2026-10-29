@@ -524,6 +524,8 @@ export function createStatusHub<Owner, Lease>({ options, devices, preferences, c
       push.resync(panes.map((pane) => ({ ...pane, agent_status: alertStatus(settled(pane), waits.waiting(pane.pane_id)) })), newer);
     },
     onPaneEnded: (paneId) => {
+      omo.ended(paneId);
+      gjc.ended(paneId);
       options.openCodeState?.forget(paneId);
       releaseOpenCodePane(paneId);
       finishes.ended(paneId);

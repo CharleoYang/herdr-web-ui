@@ -13,7 +13,7 @@ import { PendingInputs } from "../pending-input.ts";
 import { connectionData, type Client } from "./connections.ts";
 
 // herdr's status events come from the test, as the collector would hand them over
-type Handlers = { onStatus: (paneId: string, status: string, agent: string, replay?: { before: string; agent: string }) => void; onBaseline: (panes: unknown[]) => void; herdrLive?: { identity: () => string | null; onChange: (identity: string | null) => void } };
+type Handlers = { onStatus: (paneId: string, status: string, agent: string, replay?: { before: string; agent: string }) => void; onBaseline: (panes: unknown[]) => void; onPaneEnded: (paneId: string) => void; herdrLive?: { identity: () => string | null; onChange: (identity: string | null) => void } };
 export let handlers: Handlers;
 export let collectorSnapshot: () => Promise<{ panes: HerdrPane[] }>;
 const originalCollector = collector.startStatusCollector;

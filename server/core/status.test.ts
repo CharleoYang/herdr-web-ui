@@ -1,11 +1,56 @@
 import { afterEach, describe, expect, it, setSystemTime, spyOn } from "bun:test";
 import { appendFileSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import type { HerdrPane } from "../../shared/protocol.ts";
 import * as herdr from "../herdr/client.ts";
+import * as gjc from "../gjc-status.ts";
+import * as omo from "../omo.ts";
+import * as records from "../omo-records.ts";
 import { noteSubmitted } from "../prompt.ts";
 import { connectionData, type Client } from "./connections.ts";
 import { createPendingDelivery } from "./pending.ts";
 import { at, claude, collectorSnapshot, handlers, hub, line, opencode, root, workingClaude } from "./status.fake.ts";
+
+describe("pane end during native transcript replay", () => {
+  for (const agent of ["omo", "gjc"] as const) {
+    it(`drops a suspended ${agent} replay when the collector reports pane end`, async () => {
+      // Given a real cooperative replay suspended after its first record.
+      const h = hub();
+      const pane: HerdrPane = { ...claude, agent, agent_status: "idle", agent_session: null, focused: false, revision: 0, terminal_id: "test" };
+      const path = join(root, `${agent}-ended.jsonl`);
+      writeFileSync(path, line({ type: "message", message: { role: "user" } })
+        + line({ type: "message", message: { role: "toolResult", content: [{ type: "text", text: "x".repeat(2 * 1024 * 1024) }] } }));
+      const started = Promise.withResolvers<void>();
+      const read = records.readOmoLinesCooperatively;
+      let reduced = 0;
+      const reader = spyOn(records, "readOmoLinesCooperatively").mockImplementation((fd, from, size, each, current) =>
+        read(fd, from, size, (entry) => { each(entry); reduced++; started.resolve(); }, current));
+      const discovery = agent === "omo"
+        ? spyOn(omo, "omoPanes").mockResolvedValue(new Map([[pane.pane_id, { path, startedAt: null }]]))
+        : spyOn(gjc, "gjcPanes").mockResolvedValue(new Map([[pane.pane_id, { path, startedAt: null }]]));
+      const tracker = h.status[agent];
+      const replay = tracker.refresh([pane]);
+      try {
+        await started.promise;
+        expect(reduced).toBe(1);
+        expect(h.last().status).toBeUndefined();
+        // When the actual production lifecycle callback runs before replay resumes.
+        handlers.onPaneEnded(pane.pane_id);
+        await replay;
+        // Then no stale status or alert resurrects the ended pane.
+        expect(h.last().status).toBeUndefined();
+        expect(h.alerts).toEqual([]);
+        expect(tracker.runs(pane.pane_id)).toBe(false);
+        expect(reduced).toBe(1);
+      } finally {
+        tracker.stop();
+        await replay;
+        reader.mockRestore();
+        discovery.mockRestore();
+      }
+    }, 5000);
+  }
+});
 
 describe("the status hub's OpenCode subagents", () => {
   it("holds an OpenCode turn after Claude Code's on its subagent though its session is found after the turn, and calls its finish off", async () => {
