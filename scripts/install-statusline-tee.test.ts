@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { readStatusline } from "../server/statusline.ts";
@@ -21,10 +21,11 @@ function install(...args: string[]) {
   expect(result.exitCode).toBe(0);
 }
 function draw(payload: string, configDir?: string) {
-  const result = Bun.spawnSync(["sh", tee(configDir)], { env: env(configDir), stdin: Buffer.from(payload) });
+  const result = Bun.spawnSync(["sh", tee(configDir)], { env: env(configDir), stdin: Buffer.from(payload), timeout: 10_000 });
   expect(result.exitCode).toBe(0);
   return result.stdout.toString();
 }
+const settingsCommand = (configDir?: string): string => readSettings(configDir).statusLine.command;
 beforeEach(() => {
   home = mkdtempSync(join(tmpdir(), "ovis-statusline-install-"));
   mkdirSync(join(home, ".claude"));
@@ -113,6 +114,85 @@ describe("statusline installer and capture", () => {
     expect(run(["--remove"], configDir).exitCode).toBe(0);
     expect(readFileSync(settings(configDir), "utf8")).toBe(original);
     expect(existsSync(own(configDir))).toBe(false);
+  });
+
+  it("never wraps its own wrapper, however the config dir or the command is spelled", () => {
+    const real = join(home, ".claude-real");
+    const link = join(home, ".claude-link");
+    mkdirSync(real);
+    symlinkSync(real, link);
+    const original = JSON.stringify({ statusLine: { type: "command", command: "printf orig" } });
+    writeFileSync(settings(real), original);
+    expect(run([], real).exitCode).toBe(0);
+    const again = run([], link);
+    expect(again.exitCode).toBe(0);
+    expect(again.stdout.toString()).toStartWith("already installed");
+    expect(draw("{}", link)).toBe("orig");
+    writeFileSync(settings(real), JSON.stringify({ statusLine: { type: "command", command: `sh ${settingsCommand(real)}` } }));
+    const wrapped = readFileSync(settings(real), "utf8");
+    expect(run([], real).exitCode).toBe(1);
+    writeFileSync(settings(), JSON.stringify({ statusLine: { type: "command", command: settingsCommand(real) } }));
+    const other = readFileSync(settings(), "utf8");
+    expect(run([]).exitCode).toBe(1);
+    expect(readFileSync(settings(), "utf8")).toBe(other);
+    expect(readFileSync(settings(real), "utf8")).toBe(wrapped);
+    expect(run(["--remove"], link).exitCode).toBe(0);
+    expect(readSettings(real).statusLine.command).toBe("printf orig");
+  });
+
+  it("a wrapper run inside itself draws nothing instead of running forever", () => {
+    install();
+    const result = Bun.spawnSync(["sh", tee()], { env: { ...env(), HERDR_STATUSLINE_TEE: "1" }, stdin: Buffer.from("{}"), timeout: 10_000 });
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout.toString()).toBe("");
+  });
+
+  it("hands the original command the payload byte for byte, trailing newline included", () => {
+    writeFileSync(settings(), JSON.stringify({ statusLine: { type: "command", command: "IFS= read -r payload && printf OK" } }));
+    install();
+    expect(draw("{}\n")).toBe("OK");
+  });
+
+  it("writes nothing through a link in its directory and leaves the user's files there alone", () => {
+    mkdirSync(own());
+    writeFileSync(join(home, "outside.txt"), "keep");
+    symlinkSync(join(home, "outside.txt"), join(own(), "statusline-capture.ts"));
+    const before = readFileSync(settings(), "utf8");
+    expect(run([]).exitCode).toBe(1);
+    expect(readFileSync(join(home, "outside.txt"), "utf8")).toBe("keep");
+    expect(readFileSync(settings(), "utf8")).toBe(before);
+    rmSync(own(), { recursive: true });
+    install();
+    writeFileSync(join(own(), "user-notes.txt"), "keep");
+    install("--remove");
+    expect(readFileSync(settings(), "utf8")).toBe(before);
+    expect(readFileSync(join(own(), "user-notes.txt"), "utf8")).toBe("keep");
+    expect(existsSync(tee())).toBe(false);
+  });
+
+  it("keeps settings.json whole when a write fails, so a later --remove still recovers it", () => {
+    const before = readFileSync(settings(), "utf8");
+    install();
+    const installed = readFileSync(settings(), "utf8");
+    const failed = Bun.spawnSync(["sh", "-c", 'ulimit -f 0; exec "$0" "$1" --remove', process.execPath, installer], { env: env() });
+    expect(failed.exitCode).not.toBe(0);
+    expect(readFileSync(settings(), "utf8")).toBe(installed);
+    install("--remove");
+    expect(readFileSync(settings(), "utf8")).toBe(before);
+  });
+
+  it("rewrites the file a linked settings.json points at and keeps the link", () => {
+    const dotfiles = join(home, "dotfiles-settings.json");
+    const original = JSON.stringify({ statusLine: { type: "command", command: "printf linked" } });
+    writeFileSync(dotfiles, original);
+    rmSync(settings());
+    symlinkSync(dotfiles, settings());
+    install();
+    expect(lstatSync(settings()).isSymbolicLink()).toBe(true);
+    expect(draw("{}")).toBe("linked");
+    install("--remove");
+    expect(lstatSync(settings()).isSymbolicLink()).toBe(true);
+    expect(readFileSync(dotfiles, "utf8")).toBe(original);
   });
 
   it("refuses an unknown argument without touching settings", () => {
