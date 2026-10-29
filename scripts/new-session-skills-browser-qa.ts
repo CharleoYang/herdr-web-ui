@@ -60,6 +60,37 @@ async function openDialog(page: Page, via: "composer" | "tab-menu" = "composer")
   return dialog;
 }
 
+/**
+ * Claude Code's launch choices as drawn: Model and Effort share one row, and Ultracode is one line under them (the
+ * switch, its name and a short note, no taller than the switch), its whole sentence, version included, read with the
+ * switch and shown as the line's tooltip.
+ */
+async function assertUltracodeLine(dialog: ReturnType<Page["getByRole"]>, width: number): Promise<void> {
+  const drawn = await dialog.evaluate((node) => {
+    const box = (element: Element | null | undefined) => { const rect = element!.getBoundingClientRect(); return { top: rect.top, bottom: rect.bottom, left: rect.left, right: rect.right, height: rect.height }; };
+    const toggle = node.querySelector("#new-session-ultracode")!;
+    const line = node.querySelector(".new-session-ultracode")!;
+    const lineHeight = (element: Element) => parseFloat(getComputedStyle(element).lineHeight) || parseFloat(getComputedStyle(element).fontSize) * 1.5;
+    const label = node.querySelector("label[for='new-session-ultracode']")!;
+    const note = node.querySelector(".new-session-ultracode-note");
+    return {
+      model: box(node.querySelector("#new-session-model")!.closest(".field")), effort: box(node.querySelector("#new-session-effort")!.closest(".field")),
+      line: box(line), toggle: box(toggle), label: box(label), labelLine: lineHeight(label),
+      note: note ? { ...box(note), text: note.textContent ?? "", lineHeight: lineHeight(note) } : null,
+      described: node.querySelector(`#${toggle.getAttribute("aria-describedby")}`)?.textContent ?? "",
+      title: line.getAttribute("title") ?? "",
+    };
+  });
+  const at = `at ${width}: ${JSON.stringify(drawn)}`;
+  assert.ok(Math.abs(drawn.model.top - drawn.effort.top) < 1 && drawn.effort.left > drawn.model.right, `Model and Effort share one row ${at}`);
+  assert.ok(drawn.line.top >= Math.max(drawn.model.bottom, drawn.effort.bottom) - 1, `Ultracode is under Model and Effort, not beside them ${at}`);
+  assert.ok(drawn.line.height <= drawn.toggle.height + 1, `Ultracode's line is no taller than its switch ${at}`);
+  assert.ok(drawn.label.height < drawn.labelLine * 1.5 && drawn.label.top >= drawn.line.top - 1 && drawn.label.bottom <= drawn.line.bottom + 1, `its name is one line, on the switch's line ${at}`);
+  assert.ok(drawn.note !== null && drawn.note.height < drawn.note.lineHeight * 1.5 && drawn.note.right <= drawn.line.right + 1, `its note is one line on the same line ${at}`);
+  for (const [where, text] of [["note", drawn.note?.text ?? ""], ["description", drawn.described], ["tooltip", drawn.title]] as const) assert.match(text, /2\.1\.284/, `the version Ultracode needs is in its ${where} ${at}`);
+  assert.match(drawn.described, /Dynamic workflows/, `the switch's description says what it does ${at}`);
+}
+
 /** An agent by its label: a row's name starts with its mark's word ("omp Oh My Pi"), and one whose launch takes a model and an effort says so after the label ("Codex: model, effort"). */
 async function pickAgent(page: Page, dialog: ReturnType<Page["getByRole"]>, label: string): Promise<void> {
   await dialog.locator(".agent-picker-trigger").click();
@@ -247,7 +278,7 @@ try {
         assert.equal(await ultracode.getAttribute("aria-checked"), "false", "Ultracode starts off: Claude Code's own setting");
         // its hint is read with it, as Model's and Effort's are, and its visible label is a label: a click on it flips the switch
         assert.equal(await ultracode.getAttribute("aria-describedby"), "new-session-ultracode-hint");
-        assert.ok((await dialog.locator("#new-session-ultracode-hint").innerText()).trim().length > 0);
+        await assertUltracodeLine(dialog, 1280);
         await dialog.locator("label[for='new-session-ultracode']").click();
         assert.equal(await ultracode.getAttribute("aria-checked"), "true");
         await dialog.getByLabel("First message").fill("Plan the config file");
@@ -454,15 +485,20 @@ try {
           const ultracode = claude.getByRole("switch", { name: "Ultracode", exact: true });
           await ultracode.click();
           assert.equal(await ultracode.getAttribute("aria-checked"), "true");
-          // the switch, its label and its hint stay inside the dialog's width: on Effort's row at a desk, wrapped
-          // under the other two on a phone
-          const effortField = claude.locator(".new-session-launch > .field", { has: page.locator("#new-session-effort") });
-          const [field, effortBox, frame] = await Promise.all([claude.locator(".new-session-ultracode").boundingBox(), effortField.boundingBox(), claude.boundingBox()]);
-          assert.ok(field !== null && effortBox !== null && frame !== null, `the Ultracode and Effort fields are laid out (${name})`);
+          // the switch, its name and its note stay inside the dialog's width, on one line under Model and Effort,
+          // which share a row at a desk and on a phone alike
+          const [field, frame] = await Promise.all([claude.locator(".new-session-ultracode").boundingBox(), claude.boundingBox()]);
+          assert.ok(field !== null && frame !== null, `the Ultracode line is laid out (${name})`);
           assert.ok(field.x >= frame.x && field.x + field.width <= frame.x + frame.width, `Ultracode inside the dialog (${name})`);
-          if (make === phone) assert.ok(field.y >= effortBox.y + effortBox.height, `Ultracode wraps under Effort on a phone: ${JSON.stringify({ field, effortBox })}`);
-          else assert.ok(Math.abs(field.y - effortBox.y) < 1 && field.x >= effortBox.x + effortBox.width, `Ultracode on Effort's row, after it, at a desk: ${JSON.stringify({ field, effortBox })}`);
+          await assertUltracodeLine(claude, make === phone ? 390 : 1280);
           assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true, `no horizontal scroll with Claude Code (${name})`);
+          if (make === phone) {
+            // the narrowest phone too: two shrunk columns rather than a stack, and the note gives way, never the line
+            await page.setViewportSize({ width: 320, height: 844 });
+            await assertUltracodeLine(claude, 320);
+            assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true, `no horizontal scroll at 320 (${name})`);
+            await page.setViewportSize({ width: 390, height: 844 });
+          }
           await settled(page);
           await page.screenshot({ path: join(evidence, `${name}-claude-ultracode.png`) });
         } finally { await context.close(); }

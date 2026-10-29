@@ -1474,13 +1474,17 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   whose empty value is the agent's own and whose datalist offers the aliases the agent documents
   (`sonnet`, `opus`, `haiku`), **Effort**, a `.select` of the agent's documented levels after
   **Agent default** (Claude Code's: low, medium, high, xhigh, max), and, for Claude Code alone,
-  **Ultracode** after Effort: Settings' own `Toggle` (`role="switch"`, `.settings-toggle`) under an
-  uppercase field `<label>` tied to it as Model's and Effort's are, its track pulled to the fields'
-  left edge (`.new-session-ultracode`), with the hint "Dynamic workflows at any effort level. Needs
-  Claude Code 2.1.284 or later." (`aria-describedby`). The label is Claude Code's own term and
-  stays English in every language. The fields sit side by side (`.new-session-launch`) and wrap
-  where a column would fall under 9rem: one row at desktop width, while on a phone Ultracode wraps
-  to a row of its own under Model and Effort. Ultracode is off at every opening, and off adds
+  **Ultracode** on one line under Model and Effort (`.new-session-ultracode`): Settings' own
+  `Toggle` (`role="switch"`, `.settings-toggle`), its track pulled to the fields' left edge, then a
+  `<label>` tied to it and a dim note "Claude Code 2.1.284 or later" that ellipsizes first. The
+  whole sentence, "Dynamic workflows at any effort level. Needs Claude Code 2.1.284 or later.", is
+  the switch's description (`aria-describedby`, visually hidden) and the line's `title`, so the
+  line stays as tall as the switch at every width; a field-sized column with a three-line hint
+  took too much of the dialog (the owner's review of #2266; @fivetaku's #2282 suggested the
+  compact line). The name sits beside the switch, as in a Settings row, rather than above it as a
+  field label; it is Claude Code's own term and stays English in every language. Model and Effort
+  sit side by side (`.new-session-launch`) at every width: a column is 9rem at least, or half the
+  row on a phone narrower than two of those (320px). Ultracode is off at every opening, and off adds
   nothing to the launch, so Claude Code's own settings decide, as Agent default does; on adds
   `--settings '{"ultracode":true}'` after `--effort`, which keeps the level picked. A model that is
   not one word, or a model or effort the picked agent's launch does not take, disables Start and

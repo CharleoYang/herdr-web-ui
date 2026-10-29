@@ -9,7 +9,7 @@
  * nothing is guessed for the rest. The bridge checks them again by the same rules
  * (shared/launch-rules.ts).
  */
-import { argumentText, CLAUDE_EFFORTS, CODEX_EFFORTS, MODEL_NAME } from "../../shared/launch-rules.ts";
+import { argumentText, CLAUDE_EFFORTS, CLAUDE_ULTRACODE_SETTINGS, CODEX_EFFORTS, MODEL_NAME } from "../../shared/launch-rules.ts";
 
 export { CLAUDE_EFFORTS, CODEX_EFFORTS };
 
@@ -103,9 +103,6 @@ export interface LaunchChoices {
   prompt?: string;
 }
 
-/** Ultracode's one `--settings` value: the switch on for this session, every other setting left as the agent has it */
-const ULTRACODE_SETTINGS = JSON.stringify({ ultracode: true });
-
 /**
  * Why `choices` cannot start `kind`: the first choice the launch does not take, or null when it takes them
  * all. The dialog disables what this would refuse; the launch itself refuses it again.
@@ -145,7 +142,7 @@ export function launchArgs(kind: string, modes: { claudeLaunchMode: ClaudeLaunch
     args.push(...(kind === "codex" ? ["-c", `model_reasoning_effort=${choices.effort}`] : ["--effort", choices.effort]));
   }
   // after the effort, which it keeps: off adds nothing, so the agent's own settings decide, as "Agent default" does
-  if (choices.ultracode && can.ultracode) args.push("--settings", ULTRACODE_SETTINGS);
+  if (choices.ultracode && can.ultracode) args.push("--settings", CLAUDE_ULTRACODE_SETTINGS);
   // the prompt last, after the end-of-options separator: nothing it says can be a flag or a subcommand there
   if (firstPromptDelivery(kind, choices.prompt) === "positional") args.push("--", choices.prompt!.trim());
   return args.length === 0 ? undefined : args;

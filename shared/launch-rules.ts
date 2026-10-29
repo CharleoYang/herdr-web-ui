@@ -21,6 +21,12 @@ export const CLAUDE_EFFORTS = ["low", "medium", "high", "xhigh", "max"] as const
  */
 const CLAUDE_EFFORT_ARGS: readonly string[] = [...CLAUDE_EFFORTS, "ultracode"];
 /**
+ * `--settings` for a Claude Code session with Ultracode on: "set `"ultracode": true` in a settings
+ * file, with `--settings`" (code.claude.com/docs/en/model-config). The key "doesn't change the
+ * session's effort level" (code.claude.com/docs/en/settings-reference#ultracode, read 2026-10-28).
+ */
+export const CLAUDE_ULTRACODE_SETTINGS = '{"ultracode":true}';
+/**
  * Codex's `model_reasoning_effort` levels: "such as low, medium, high, xhigh, max, or ultra. Available
  * levels depend on the model and client." (developers.openai.com/codex/config-reference, read 2026-10-20)
  */

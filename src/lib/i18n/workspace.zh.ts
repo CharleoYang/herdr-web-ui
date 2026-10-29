@@ -62,6 +62,7 @@ export const WORKSPACE_ZH: Record<string, string> = {
   "Effort": "推理强度",
   "Levels depend on the model.": "可选的级别取决于模型。",
   "Ultracode": "Ultracode",
+  "Claude Code 2.1.284 or later": "Claude Code 2.1.284 或更高版本",
   "Dynamic workflows at any effort level. Needs Claude Code 2.1.284 or later.": "在任意推理强度下运行动态工作流。需要 Claude Code 2.1.284 或更高版本。",
   "First message": "第一条消息",
   "Optional": "可选",

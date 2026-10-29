@@ -391,7 +391,7 @@ export function NewSessionDialog({ open, defaultCwd, tab = null, onClose, onCrea
             <span className="field-hint">{t(tab ? "Tab name (optional)" : "Optional workspace label")}</span>
           </label>
           {/* the launch's own choices, only where the agent's command line takes them (lib/agentLaunchMode.ts) */}
-          {(can.model || can.efforts.length > 0 || can.ultracode) && <div className="new-session-launch">
+          {(can.model || can.efforts.length > 0) && <div className="new-session-launch">
             {can.model && <div className="field">
               <label className="field-label" htmlFor="new-session-model">{t("Model")}</label>
               <input
@@ -421,12 +421,14 @@ export function NewSessionDialog({ open, defaultCwd, tab = null, onClose, onCrea
               </select>
               <span id="new-session-effort-hint" className="field-hint">{t("Levels depend on the model.")}</span>
             </div>}
-            {/* Claude Code's own term, a setting beside the level rather than one of them; off adds nothing */}
-            {can.ultracode && <div className="field new-session-ultracode">
-              <label className="field-label" htmlFor="new-session-ultracode">{t("Ultracode")}</label>
-              <Toggle id="new-session-ultracode" checked={ultracode} label={t("Ultracode")} disabled={fieldsDisabled} describedBy="new-session-ultracode-hint" onChange={setUltracode} />
-              <span id="new-session-ultracode-hint" className="field-hint">{t("Dynamic workflows at any effort level. Needs Claude Code 2.1.284 or later.")}</span>
-            </div>}
+          </div>}
+          {/* Claude Code's own term, a setting beside the level rather than one of them, on one line under Model and
+              Effort; the whole sentence is the switch's description and the line's tooltip; off adds nothing */}
+          {can.ultracode && <div className="new-session-ultracode" title={t("Dynamic workflows at any effort level. Needs Claude Code 2.1.284 or later.")}>
+            <Toggle id="new-session-ultracode" checked={ultracode} label={t("Ultracode")} disabled={fieldsDisabled} describedBy="new-session-ultracode-hint" onChange={setUltracode} />
+            <label className="new-session-ultracode-label" htmlFor="new-session-ultracode">{t("Ultracode")}</label>
+            <span className="new-session-ultracode-note" aria-hidden="true">{t("Claude Code 2.1.284 or later")}</span>
+            <span id="new-session-ultracode-hint" className="visually-hidden">{t("Dynamic workflows at any effort level. Needs Claude Code 2.1.284 or later.")}</span>
           </div>}
           {agentKind !== "" && <div className="field">
             <label className="field-label" htmlFor="new-session-prompt">{t("First message")}</label>

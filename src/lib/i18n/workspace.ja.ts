@@ -62,6 +62,7 @@ export const WORKSPACE_JA: Record<string, string> = {
   "Effort": "推論レベル",
   "Levels depend on the model.": "選べるレベルはモデルによって異なります。",
   "Ultracode": "Ultracode",
+  "Claude Code 2.1.284 or later": "Claude Code 2.1.284 以降",
   "Dynamic workflows at any effort level. Needs Claude Code 2.1.284 or later.": "どの推論レベルでも動的ワークフローを実行します。Claude Code 2.1.284 以降が必要です。",
   "First message": "最初のメッセージ",
   "Optional": "任意",

@@ -62,6 +62,7 @@ export const WORKSPACE_KO: Record<string, string> = {
   "Effort": "노력 수준",
   "Levels depend on the model.": "고를 수 있는 수준은 모델에 따라 다릅니다.",
   "Ultracode": "Ultracode",
+  "Claude Code 2.1.284 or later": "Claude Code 2.1.284 이상",
   "Dynamic workflows at any effort level. Needs Claude Code 2.1.284 or later.": "어느 노력 수준에서든 동적 워크플로를 실행합니다. Claude Code 2.1.284 이상이 필요합니다.",
   "First message": "첫 메시지",
   "Optional": "선택",

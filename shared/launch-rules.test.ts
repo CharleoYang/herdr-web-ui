@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
 
-import { CLAUDE_EFFORTS, firstMessageFault, launchArgsFault, MODEL_NAME } from "./launch-rules.ts";
+import { CLAUDE_EFFORTS, CLAUDE_ULTRACODE_SETTINGS, firstMessageFault, launchArgsFault, MODEL_NAME } from "./launch-rules.ts";
 
 describe("an agent's launch arguments", () => {
   it("refuses a control character in any argument, a tab and a line break included", () => {
@@ -31,7 +31,9 @@ describe("an agent's launch arguments", () => {
     expect(launchArgsFault("claude", ["--effort", "ultra"])).toBe("agent.args --effort must be one of low, medium, high, xhigh, max, ultracode");
   });
   it("passes Ultracode's --settings as the agent's own flag, after an effort or on its own", () => {
-    expect(launchArgsFault("claude", ["--effort", "medium", "--settings", "{\"ultracode\":true}"])).toBeNull();
+    // the one settings object the dialog's switch passes: Ultracode on, nothing else
+    expect(JSON.parse(CLAUDE_ULTRACODE_SETTINGS)).toEqual({ ultracode: true });
+    expect(launchArgsFault("claude", ["--effort", "medium", "--settings", CLAUDE_ULTRACODE_SETTINGS])).toBeNull();
     expect(launchArgsFault("claude", ["--permission-mode", "plan", "--model", "opus", "--effort", "high", "--settings", "{\"ultracode\":true}"])).toBeNull();
     expect(launchArgsFault("claude", ["--settings", "{\"ultracode\":true}"])).toBeNull();
     // the effort beside it is still checked
