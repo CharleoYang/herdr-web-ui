@@ -210,6 +210,23 @@ describe("providers", () => {
     expect(requests).toEqual([]);
   });
 
+  it("asks the endpoint over a capture older than five minutes, and falls back to it with its own time", async () => {
+    write(join(home, ".claude", ".credentials.json"), { claudeAiOauth: { accessToken: "k", expiresAt: NOW + HOUR } });
+    write(join(home, ".claude.json"), { oauthAccount: { accountUuid: "a" } });
+    const path = join(home, ".herdr", "statusline-last.json");
+    write(path, { _herdr: { account: { id: "a" } }, rate_limits: { five_hour: { used_percentage: 17 } } });
+    const taken = NOW - 10 * 60_000;
+    utimesSync(path, new Date(taken), new Date(taken));
+    replies.set("https://api.anthropic.com/api/oauth/usage", { body: { five_hour: { utilization: 42 } } });
+    const [answered] = (await new UsageService(context(), only("claude")).report()).providers;
+    expect(answered).toMatchObject({ problem: null, checked_at: new Date(NOW).toISOString(), windows: [{ used_percent: 42 }] });
+    expect(requests).toHaveLength(1);
+    replies.set("https://api.anthropic.com/api/oauth/usage", { status: 403, body: { error: { message: "Request not allowed" } } });
+    const [refused] = (await new UsageService(context(), only("claude")).report()).providers;
+    expect(refused).toMatchObject({ problem: null, checked_at: new Date(taken).toISOString(), windows: [{ used_percent: 17 }] });
+    expect(requests).toHaveLength(2);
+  });
+
   it("keeps the local-only HTTP report off every credential, command and endpoint path", async () => {
     let touches = 0;
     const fail = () => { touches++; throw new Error("local-only report touched a provider"); };

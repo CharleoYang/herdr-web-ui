@@ -86,6 +86,8 @@ interface Reading {
   windows: UsageWindow[];
   /** whose numbers these are, when the answer says and the sign-in did not */
   account?: Account | null;
+  /** when a local reading was taken (epoch ms); an endpoint's answer is taken now */
+  checkedAt?: number;
 }
 
 export interface UsageProvider {
@@ -329,7 +331,7 @@ const claude: UsageProvider = {
     const local = readStatusline(ctx.home, ctx.now());
     if (!local?.account || local.account.id !== signIn.account?.id) return null;
     const windows = claudeStatuslineWindows(local);
-    return windows.length > 0 ? { plan: signIn.plan ?? null, windows } : null;
+    return windows.length > 0 ? { plan: signIn.plan ?? null, windows, checkedAt: local.readAt } : null;
   },
   async read(ctx, signIn) {
     const body = await requestJson(ctx, "https://api.anthropic.com/api/oauth/usage", {
@@ -1059,17 +1061,20 @@ export class UsageService {
     }, wait);
     if ("locked" in found) return keep("locked", null, FRESH_MS);
     const signIn: SignIn = found;
-    const local = provider.readLocal?.(this.ctx, signIn);
-    if (local) {
-      const resets = local.windows.flatMap((window) => window.resets_at === null ? [] : [Date.parse(window.resets_at)]);
-      return settle({ id: provider.id, ...identity(local.account), plan: local.plan ?? signIn.plan ?? null,
-        windows: local.windows, problem: null, checked_at: new Date(now).toISOString() }, Math.min(FRESH_MS, ...resets.map((reset) => reset - now)));
-    }
-    if (signIn.expiresAt !== null && signIn.expiresAt <= now) return keep("expired", signIn.plan ?? null, RETRY_MS);
+    const local = provider.readLocal?.(this.ctx, signIn) ?? null;
+    const fromLocal = (reading: Reading): Entry => {
+      const resets = reading.windows.flatMap((window) => window.resets_at === null ? [] : [Date.parse(window.resets_at)]);
+      return settle({ id: provider.id, ...identity(reading.account), plan: reading.plan ?? signIn.plan ?? null,
+        windows: reading.windows, problem: null, checked_at: new Date(reading.checkedAt ?? now).toISOString() }, Math.min(FRESH_MS, ...resets.map((reset) => reset - now)));
+    };
+    // a local reading as recent as the endpoint's own cache stands for it; an older one only when the
+    // endpoint cannot answer (an expired token, a refusal, a blocked network), with its own time
+    if (local && now - (local.checkedAt ?? now) < FRESH_MS) return fromLocal(local);
+    if (signIn.expiresAt !== null && signIn.expiresAt <= now) return local ? fromLocal(local) : keep("expired", signIn.plan ?? null, RETRY_MS);
     // a 429 holds for the account, not the place: a sign-in moved or copied elsewhere waits too
     const backoff = found.account ? `${provider.id}:${found.account.id}` : `${provider.id}#${createHash("sha256").update(signIn.token).digest("hex")}`;
     const until = this.backoffs.get(backoff);
-    if (until !== undefined && now < until) return keep("rate_limited", signIn.plan ?? null, until - now);
+    if (until !== undefined && now < until) return local ? fromLocal(local) : keep("rate_limited", signIn.plan ?? null, until - now);
     this.backoffs.delete(backoff);
     try {
       const reading = await provider.read(this.ctx, signIn);
@@ -1078,12 +1083,11 @@ export class UsageService {
         id: provider.id, ...identity(reading.account), plan: reading.plan ?? signIn.plan ?? null, windows: reading.windows, problem: null, checked_at: new Date(now).toISOString(),
       }, FRESH_MS);
     } catch (error) {
+      const wait = Math.max(RETRY_MS, error instanceof UsageHttpError ? error.retryAfterMs ?? FRESH_MS : 0);
+      if (error instanceof UsageHttpError && error.status === 429) this.backoffs.set(backoff, now + wait);
+      if (local) return fromLocal(local);
       if (error instanceof UsageHttpError && (error.status === 401 || error.status === 403)) return keep("expired", signIn.plan ?? null, RETRY_MS);
-      if (error instanceof UsageHttpError && error.status === 429) {
-        const wait = Math.max(RETRY_MS, error.retryAfterMs ?? FRESH_MS);
-        this.backoffs.set(backoff, now + wait);
-        return keep("rate_limited", signIn.plan ?? null, wait);
-      }
+      if (error instanceof UsageHttpError && error.status === 429) return keep("rate_limited", signIn.plan ?? null, wait);
       console.warn(`usage: ${provider.id} could not be read: ${error instanceof Error ? error.message : String(error)}`);
       return keep("failed", signIn.plan ?? null, RETRY_MS);
     }
