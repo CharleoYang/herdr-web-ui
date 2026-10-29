@@ -116,8 +116,11 @@ copies (`src/lib/themes.generated.ts`, the DESIGN.md region between the `GENERAT
 markers, the `theme-color` tag in `index.html`, the colors in `public/manifest.webmanifest`); run
 `bun run generate:themes` after a color change.
 The case folding a typed answer compares option names with (`src/lib/caseFolding.generated.ts`) is
-generated from Unicode's CaseFolding.txt for the version pinned in `scripts/generate-case-folding.ts`;
-never edit it, run `bun run generate:case-folding` after raising that version.
+generated from Unicode's CaseFolding.txt for the version pinned in `scripts/generate-case-folding.ts`,
+and the letters drawn like Latin ones (`src/lib/confusables.generated.ts`) from that version's
+confusables.txt by `scripts/generate-confusables.ts`. Each script refuses a source whose SHA-256 is not
+the one it pins. Never edit the tables: after raising the version, review both files, set their
+digests, and run `bun run generate:case-folding` and `bun run generate:confusables`.
 Admission is serialized briefly on port 41745. After taking a candidate slot, the run checks all
 eight slots again for its checkout and counts every active holder against its requested limit,
 including holders above its candidate range. A busy admission port refuses rather than waits.
@@ -763,8 +766,9 @@ The [CI workflow](../.github/workflows/ci.yml) runs on every PR and `main` push:
 
   `scripts/windows-terminal-browser-qa.ts` needs native Windows, so the browser lane leaves it out
   (it is on that list) and `windows-terminal-qa.yml` runs it on a GitHub-hosted Windows runner: on pull requests
-  that touch the mirror, the terminal's viewport code or the xterm patch, weekly on main, and on
-  a manual dispatch (**Actions → Windows terminal QA**). It is not a required check. To run it on
+  that touch the mirror, the terminal's viewport code or the xterm patch (on the pull request's
+  merge with main, so a branch cut before a fix to the script runs the fixed one), weekly on
+  main, and on a manual dispatch (**Actions → Windows terminal QA**). It is not a required check. To run it on
   a Windows PC: `bun install --frozen-lockfile`, `bun run build`, then
   `bun scripts/windows-terminal-browser-qa.ts` with herdr on PATH and Chromium installed.
 

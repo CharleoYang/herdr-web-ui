@@ -223,7 +223,12 @@ function projectRoot(cwd: string | null | undefined, home: string): string | nul
 }
 
 function discover(ctx: AgentCommandContext): SlashCommand[] {
-  const environ = environRecord(ctx.env);
+  // A Windows pane's environment cannot be read (no /proc), so its Hermes home would resolve under
+  // <profile>\AppData\Local while transcripts use the server's %LOCALAPPDATA% (#2247): an unread one
+  // takes only that variable from the server. Not HERMES_HOME: the server's profile is not the pane's.
+  // a copy of the server's environment is a plain object, and Windows names are case-insensitive
+  const serverLocalAppData = Object.entries(ctx.serverEnv ?? process.env).find(([key]) => key.toUpperCase() === "LOCALAPPDATA")?.[1];
+  const environ = ctx.env ? environRecord(ctx.env) : serverLocalAppData ? { LOCALAPPDATA: serverLocalAppData } : {};
   const env = new Map(Object.entries(environ));
   const hermesHome = resolveHermesHome(ctx.home, environ);
   const expand = (entry: string): string => entry.replace(/\$\{([^}]+)\}|\$([A-Za-z_][A-Za-z0-9_]*)/g, (token, braced: string | undefined, bare: string | undefined) => env.get(braced ?? bare ?? "") ?? token).replace(/^~(?=\/|$)/, ctx.home);

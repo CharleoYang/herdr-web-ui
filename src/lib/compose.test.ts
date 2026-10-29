@@ -1,7 +1,7 @@
 import { describe, expect, it } from "bun:test";
 
 import { skillSyntax } from "../../shared/skill-syntax.ts";
-import { agentDisplayLabel, claudeMainAtRest, composerDelivery, composerMessage, composerSendShown, composerPayload, composerModelDraw, composerStatusCompact, composerStatusHint, composerStatusWord, COMPOSER_STATUS_COMPACT_BELOW, contextLeftPercent, formatTokens, imageMention, insertLeadingMention, insertNote, MAX_COMPOSER_CHARS, QUEUE_READY_STATUS, rankSlashCommands, submitNote, submitNotTyped, submitRefusal, sameMessage, pendingActionUncertain } from "./compose.ts";
+import { agentDisplayLabel, claudeMainAtRest, composerDelivery, composerMessage, composerSendShown, composerPayload, composerModelDraw, composerStatusCompact, composerStatusHint, composerStatusWord, COMPOSER_STATUS_COMPACT_BELOW, contextLeftPercent, formatTokens, imageMention, insertLeadingMention, insertNote, MAX_COMPOSER_CHARS, QUEUE_READY_STATUS, rankSlashCommands, submitNote, submitNotTyped, submitRefusal, sameMessage, pendingActionUncertain, draftSendNote } from "./compose.ts";
 import { briefDescription, COMMAND_GROUPS, commandGroup, commandsForTrigger, slashCommandReplacement, terminalCommand, typedTerminalCommand } from "./compose.ts";
 import type { SlashCommand } from "../../shared/protocol.ts";
 import { activeTrigger, applyCompletion, type ActiveTrigger } from "./mentions.ts";
@@ -185,6 +185,18 @@ describe("composerMessage and submitNote", () => {
     // bash mode, a clipped box or an older bridge name none: the note alone
     expect(submitRefusal("input_draft", "x")).toBe(submitNote("input_draft", "x"));
     expect(submitRefusal("agent_blocked", "x", "ㅔ")).toBe(submitNote("agent_blocked", "x"));
+  });
+
+  it("names the draft after a Send it that did not go, and offers another draft's buttons", () => {
+    const other = submitRefusal("input_draft", "x", "other draft");
+    expect(draftSendNote(other, "fix the tests")).toBe(other);
+    // cleared and not confirmed, refused, or a box shown with no draft named: the reason, then the draft
+    for (const result of [submitNote("submit_partial", "x"), submitNote("agent_not_ready", "x"), submitRefusal("input_draft", "x", undefined, "! ls")]) {
+      const note = draftSendNote(result, "fix the tests");
+      expect(typeof note).toBe("string");
+      expect(note as string).toStartWith(`${typeof result === "string" ? result : submitNote("input_draft", "x")}\n`);
+      expect(note as string).toContain("fix the tests");
+    }
   });
 
   it("offers to send anyway only when the server showed the box and named no draft", () => {

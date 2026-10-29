@@ -3,15 +3,18 @@
  * (`/api/health?scope=bridge`, probed every few milliseconds from another process) and the server's
  * event-loop lag while file requests run, and those requests' own latency (#790).
  *
- *   bun scripts/bench-file-access.ts [--runs 7] [--slow-root <folder on a slow mount>] [--json <out>]
+ *   bun scripts/bench-file-access.ts [--runs 7] [--slow-root <folder on a slow mount>] [--cases <regex>] [--json <out>]
  *
  * The server runs in a child process (`createServer`, port 0, a mkdtemp state folder, no token)
  * against a stand-in herdr socket that answers `pane.get` alone, so nothing touches a real herdr.
  * `--slow-root` names a folder on a mount that answers slowly (a FUSE passthrough that waits
  * before each call) holding `notes`, a 2 MB `clip.bin` and a `tree/` of folders; with it, the
- * stat, name-lookup, project-icon and streaming cases also run there.
+ * stat, name-lookup, project-icon and streaming cases also run there. A `project/` there with a
+ * `.claude/skills` and `.claude/commands` adds a commands case (#2254): a Claude pane in that project
+ * whose home's `.claude/skills` and `.claude/commands` link to the project's, so its scan walks the
+ * slow folders twice, as the reporter's did. `--cases` runs only the cases whose name matches.
  */
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -73,9 +76,20 @@ async function bench(): Promise<void> {
   const runs = Number(flag("--runs") ?? 7);
   const slowRoot = flag("--slow-root");
   const out = flag("--json");
+  const only = flag("--cases");
   const root = mkdtempSync(join(tmpdir(), "ovis-bench-files-"));
   const fixtures = makeFixtures(root);
   const cwds = new Map<string, string>();
+  /** panes that run an agent (the commands case), by pane id */
+  const agents = new Map<string, string>();
+  // the server's home: its `.claude` folders link into the slow project, when there is one
+  const home = join(root, "home");
+  mkdirSync(join(home, ".claude"), { recursive: true });
+  const slowProject = slowRoot === null ? null : join(slowRoot, "project");
+  if (slowProject !== null && existsSync(join(slowProject, ".claude", "skills"))) {
+    symlinkSync(join(slowProject, ".claude", "skills"), join(home, ".claude", "skills"));
+    symlinkSync(join(slowProject, ".claude", "commands"), join(home, ".claude", "commands"));
+  }
   let lookup = 0;
   /** a pane whose folder is `folder` under a name no lookup used before, so the 5 s listing cache never answers */
   const paneIn = (folder: string) => {
@@ -94,11 +108,11 @@ async function bench(): Promise<void> {
         const cwd = method === "pane.get" ? cwds.get(params.pane_id ?? "") : undefined;
         sock.end(`${JSON.stringify(cwd === undefined
           ? { id, error: { code: "unsupported", message: `bench herdr answers pane.get alone, not ${method}` } }
-          : { id, result: { pane: { pane_id: params.pane_id, workspace_id: "w1", tab_id: "w1:t1", cwd, agent_status: "idle" } } })}\n`);
+          : { id, result: { pane: { pane_id: params.pane_id, workspace_id: "w1", tab_id: "w1:t1", cwd, agent_status: "idle", ...(agents.has(params.pane_id ?? "") ? { agent: agents.get(params.pane_id ?? "") } : {}) } } })}\n`);
       },
     },
   });
-  const child = Bun.spawn([process.execPath, import.meta.path, "--serve"], { stdout: "pipe", stderr: "ignore", env: { ...process.env, HERDR_SOCKET: socket } });
+  const child = Bun.spawn([process.execPath, import.meta.path, "--serve"], { stdout: "pipe", stderr: "ignore", env: { ...process.env, HERDR_SOCKET: socket, HOME: home } });
   const [port, lagPort] = await childPorts(child.stdout);
   const base = `http://127.0.0.1:${port}`;
   const q = encodeURIComponent;
@@ -114,6 +128,15 @@ async function bench(): Promise<void> {
     cases.push({ name: "look for a project icon on a slow mount", concurrency: 2, url: () => `/api/fs/favicon?root=${q(join(slowRoot, "tree"))}` });
     cases.push({ name: "stream a 2 MB file on a slow mount", concurrency: 2, url: () => `/api/fs/file?path=${q(join(slowRoot, "clip.bin"))}` });
   }
+  if (slowProject !== null && existsSync(join(slowProject, ".claude", "skills"))) {
+    cases.push({ name: "list a Claude pane's commands, skills on a slow mount", concurrency: 1, url: () => {
+      const pane = `w1:p${lookup++}`;
+      cwds.set(pane, slowProject);
+      agents.set(pane, "claude");
+      return `/api/pane/commands?pane_id=${q(pane)}`;
+    } });
+  }
+  if (only !== null) cases.splice(0, cases.length, ...cases.filter((item) => new RegExp(only).test(item.name)));
   const report: Record<string, Sample[]> = {};
   const prober = new Worker(import.meta.url);
   try {

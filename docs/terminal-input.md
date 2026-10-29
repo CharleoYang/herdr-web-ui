@@ -381,6 +381,24 @@ one DEL. The iPad simulator's on-screen keyboard already composed.
 `scripts/terminal-ipad-ime-regression.ts` replays the trace under an iPhone user agent and
 platform with `keyCode` 0.
 
+#### The iOS app: a web view without "Safari" in its user agent
+
+Updated: 2026-10-29
+
+In the iOS 27.0 simulator (iPhone 18 Pro, on-screen Korean 2-set keyboard driven by
+WebDriverAgent taps, `scripts/terminal-ime-diagnostic.ts`), typing 안녕 then Space sent `안녕 `
+from a Safari tab and from the page added to the Home Screen, but `ㅇㅏㄴㄴㅕㅇ ` from the Ovis
+iOS app. The DOM events were the same in all three; only the user agent differed. The app's
+WKWebView reports `… AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148`, with no `Version/`
+or `Safari/`, and the xterm patch's replacement path was gated on xterm's `isSafari`. So each
+jamo went out on its keypress, while iOS still composed it in the field. (The Mac app appends
+`Safari/` to its user agent itself, `app/mac/Sources/OvisMac/WebPage.swift`; the iOS app did not.)
+The path now runs on a Mac, iPad or iPhone for Safari and for any page whose user agent names
+`AppleWebKit/` and neither Chrome nor Android: the iOS app, other iOS web views, and Mac WebKit
+web views. Chrome, Edge and Opera on a Mac still say Chrome and stay out.
+This applies to installed apps as soon as the PC's Ovis is updated, with no new app build. The
+replay runs the same trace under the app's recorded user agent.
+
 ### Native Linux check: a candidate picked with a digit (#1649)
 
 Updated: 2026-10-22

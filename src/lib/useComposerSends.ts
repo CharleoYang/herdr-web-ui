@@ -1,7 +1,7 @@
 import { useCallback, useMemo, type MutableRefObject } from "react";
 import { ApiError } from "./api.ts";
 import { answerFromText, answerRefusal, needsConfirmation, type TypedAnswer } from "./promptAnswer.ts";
-import { composerDelivery, pendingActionUncertain, submitNotTyped, submitRefusal, type DraftRefusal } from "./compose.ts";
+import { composerDelivery, pendingActionUncertain, submitNote, submitNotTyped, submitRefusal, type DraftRefusal } from "./compose.ts";
 import type { PaneSubmitRetention } from "./paneSubmitRetention.ts";
 import { pendingMessages, UNCONFIRMED_SEND } from "./pendingMessages.ts";
 import { paneStorageId } from "../../shared/machines.ts";
@@ -90,6 +90,10 @@ export function useComposerSends(deps: ComposerSendsDeps) {
       if (pane !== null && heldByOpenQueue) {
         return t("Codex has a question open in the terminal: answer it above, or close it there (alt+↓) to message Codex.");
       }
+      // Send it: the draft a refusal named goes as the message, over itself (the server clears it, then
+      // sends the same text). A menu opened since would take it as a choice, so it is never an answer
+      const asDraft = clearDraft !== undefined && text === clearDraft;
+      if (pane !== null && asDraft && answering !== null) return submitNote("agent_blocked", "");
       if (pane !== null && answering !== null) {
         // never typed into the agent's menu: only as one of its options, or its own reply row
         const choice = answerFromText(answering, text);
@@ -120,8 +124,9 @@ export function useComposerSends(deps: ComposerSendsDeps) {
       const settled = composerDelivery(agent, agentStatus);
       const queued = settled === "queue" && inputAtRest?.() === true ? "immediate" : settled;
       const delivery: SubmitDelivery = queued === "queue" && !settings.autoSendQueued ? "hold" : queued;
-      // Send anyway answered a box seen at once: an agent that started working since would queue it unchecked
-      if (sendAnyway && delivery !== "immediate") return t("Not sent: the agent started working since. Check the terminal, then send again.");
+      // Send anyway answered a box seen at once: an agent that started working since would queue it unchecked.
+      // Send it too: queued, the draft's text could go again after the draft itself was sent in the terminal
+      if ((sendAnyway || asDraft) && delivery !== "immediate") return t("Not sent: the agent started working since. Check the terminal, then send again.");
       const known = knownOutcomes(pane);
       const seen = inputRowNow() === "ready";
       // before the receipt is awaited: navigation while it is on its way cancels the follow

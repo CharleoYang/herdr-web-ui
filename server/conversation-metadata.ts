@@ -76,6 +76,24 @@ function claudeCommandSetting(entry: RecordValue): { model: string | null; effor
   return effort && (command === null || command === "effort") ? { model: null, effort: effort[1]! } : none;
 }
 
+/**
+ * The model and effort one Claude record sets, as parseConversationMetadata reads it: an answer names
+ * what it ran at (any answer names its model; one that records an effort names that too, even an
+ * empty one), and a /model or /effort answer what it set (claudeCommandSetting). An absent field
+ * leaves the value as it was.
+ */
+export function claudeSetting(value: unknown): { model?: string; effort?: string | null } {
+  const entry = record(value);
+  const set: { model?: string; effort?: string | null } = {};
+  const model = entry.type === "assistant" ? label(record(entry.message).model) : null;
+  if (model) set.model = model;
+  if (entry.type === "assistant" && "effort" in entry) set.effort = label(entry.effort);
+  const command = claudeCommandSetting(entry);
+  if (command.model) set.model = command.model;
+  if (command.effort) set.effort = command.effort;
+  return set;
+}
+
 /** Read recorded settings, never infer effort from the presence of thinking text.
  * Codex turn_context is a snapshot; omp/omo setting changes are separate events.
  * `piAgentDir` is the agent directory of the pi process that writes the transcript (contextOf). */
@@ -84,6 +102,8 @@ export function parseConversationMetadata(text: string, source: ConversationResp
   const metadata: ConversationMetadata = before ? { ...before } : { model: null, reasoning_effort: null };
   // Agy's exported rows do not attest the selected model or reasoning effort.
   if (source === "agy-transcript") return metadata;
+  // Letta's transcript names no model or effort
+  if (source === "letta-transcript") return metadata;
   if (source === "copilot-transcript") {
     for (const { type, data } of copilotRecords(text)) {
       const model = type === "session.start" ? label(data.selectedModel)
@@ -171,17 +191,14 @@ export function parseConversationMetadata(text: string, source: ConversationResp
       }
     } else if (source === "claude-transcript") {
       const message = record(entry.message);
-      if (entry.type === "assistant" && label(message.model)) metadata.model = label(message.model);
+      const set = claudeSetting(entry);
+      if (set.model !== undefined) metadata.model = set.model;
+      if (set.effort !== undefined) metadata.reasoning_effort = set.effort;
       // a subagent's request fills its own context, not this one's
       if (entry.type === "assistant" && entry.isSidechain !== true && label(message.model)) {
         const usage = record(message.usage);
         metadata.context = contextOf(count(usage.input_tokens) + count(usage.cache_creation_input_tokens) + count(usage.cache_read_input_tokens), metadata.model, null, metadata.context);
       }
-      // Claude Code records the effort each response ran at; versions before it record none
-      if (entry.type === "assistant" && "effort" in entry) metadata.reasoning_effort = label(entry.effort);
-      const set = claudeCommandSetting(entry);
-      if (set.model) metadata.model = set.model;
-      if (set.effort) metadata.reasoning_effort = set.effort;
     }
   }
   return metadata;

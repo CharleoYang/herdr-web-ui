@@ -12,6 +12,7 @@ import { paneLifetimes } from "./paneLifetime.ts";
 import { useComposerSends, type ComposerSendsDeps } from "./useComposerSends.ts";
 import type { HerdrSocket, SubmitDelivery, SubmitResult } from "./ws.ts";
 import { currentWaitingSends, forgetWaitingSends, settleWaitingSends, waitingKey } from "./sentWaiting.ts";
+import type { InteractivePrompt } from "../../shared/protocol.ts";
 
 // A bridge without `submit` takes a message as raw input and sends no receipt (ws.ts `unconfirmed`):
 // nothing says the pane got it, so its text must not go as if it had (#1591).
@@ -186,4 +187,34 @@ it("timestamps a send before the receipt so a turn written during the request se
     settleWaitingSends(key, [{ role: "user", ts: new Date(2000).toISOString(), parts: [{ kind: "text", text: "written before receipt" }] }]);
     expect(currentWaitingSends(key)).toEqual([]);
   } finally { clock.mockRestore(); forgetWaitingSends(key); }
+});
+
+it("Send it sends the named draft over itself, only at once and never as an answer", async () => {
+  const calls: Array<[string, SubmitDelivery, string | undefined]> = [], shown: string[] = [];
+  const t = (text: string) => text;
+  const submitComposerMessage = (text: string, delivery: SubmitDelivery, clearDraft?: string) => {
+    calls.push([text, delivery, clearDraft]);
+    return Promise.resolve({ ok: true } as const);
+  };
+  const prompt: InteractivePrompt = {
+    id: "menu", agent: "claude", kind: "question", title: "Question", question: "?", body: null,
+    options: [{ label: "Yes", description: null }], multi_select: false, custom_option_index: null,
+  };
+  // at rest: the draft's text goes at once, with the clear of that same draft before it
+  expect(await sends("send-it", { ok: true }, shown, { t, agentStatus: "idle", submitComposerMessage }).composerSend("fix the tests", "fix the tests")).toBe(true);
+  expect(calls).toEqual([["fix the tests", "immediate", "fix the tests"]]);
+  // a turn started since: queued, the text could go again after the draft itself was sent in the terminal
+  const working = await sends("send-it", { ok: true }, shown, { t, agentStatus: "working", inputAtRest: () => false, submitComposerMessage })
+    .composerSend("fix the tests", "fix the tests");
+  expect(typeof working).toBe("string");
+  expect(calls).toHaveLength(1);
+  // a menu opened since: the draft is never taken for one of its choices
+  const blocked = await sends("send-it", { ok: true }, shown, { t, answering: prompt, submitComposerMessage })
+    .composerSend("1", "1");
+  expect(typeof blocked).toBe("string");
+  expect(calls).toHaveLength(1);
+  // Clear it and send of other text still queues behind a turn, as before
+  expect(await sends("send-it", { ok: true }, shown, { t, agentStatus: "working", inputAtRest: () => false, submitComposerMessage })
+    .composerSend("my new message", "fix the tests")).toBe(true);
+  expect(calls).toEqual([["fix the tests", "immediate", "fix the tests"], ["my new message", "hold", undefined]]);
 });

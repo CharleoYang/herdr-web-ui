@@ -219,10 +219,10 @@ index 9ebc55d96f328720dcb87cc31147c6d5a76ebebe..208ea825de87d30677b559760469ba95
    compositionstart(): void;
    compositionupdate(ev: CompositionEvent): void;
 diff --git a/src/browser/input/CompositionHelper.ts b/src/browser/input/CompositionHelper.ts
-index 7542969a62fa6b5e84471a3bdecdc4bec82de542..0300804f3f4d1ccefbe14169576bcfdd92c36316 100644
+index 7542969a62fa6b5e84471a3bdecdc4bec82de542..87cf781638decd78af64e3b750f4be5d156179d8 100644
 --- a/src/browser/input/CompositionHelper.ts
 +++ b/src/browser/input/CompositionHelper.ts
-@@ -6,6 +6,11 @@
+@@ -6,6 +6,19 @@
  import { IRenderService } from 'browser/services/Services';
  import { IBufferService, ICoreService, IOptionsService } from 'common/services/Services';
  import { C0 } from 'common/data/EscapeSequences';
@@ -231,10 +231,18 @@ index 7542969a62fa6b5e84471a3bdecdc4bec82de542..0300804f3f4d1ccefbe14169576bcfdd
 +/** Hangul jamo and syllables: a key or an edit that a Korean input method composes. */
 +const HANGUL_KEY = /^[ᄀ-ᇿ㄰-㆏가-힯]$/;
 +const HANGUL_TEXT = /^[ᄀ-ᇿ㄰-㆏가-힯]+$/;
++
++/**
++ * Safari's editor on a Mac, iPad or iPhone, including a web view that reports no "Safari" in its
++ * user agent: the Ovis iOS app's WKWebView edits Hangul exactly as Safari does (2026-10-29).
++ */
++const userAgent = typeof navigator === 'undefined' ? '' : navigator.userAgent;
++const isAppleWebKit = (isMac || isIpad || isIphone)
++  && (isSafari || (/AppleWebKit\//.test(userAgent) && !/chrome|android/i.test(userAgent)));
  
  interface IPosition {
    start: number;
-@@ -30,11 +35,19 @@ export class CompositionHelper {
+@@ -30,11 +43,19 @@ export class CompositionHelper {
     */
    private _compositionPosition: IPosition;
  
@@ -259,7 +267,7 @@ index 7542969a62fa6b5e84471a3bdecdc4bec82de542..0300804f3f4d1ccefbe14169576bcfdd
  
    /**
     * Data already sent due to keydown event.
-@@ -50,17 +63,158 @@ export class CompositionHelper {
+@@ -50,17 +71,158 @@ export class CompositionHelper {
      @IRenderService private readonly _renderService: IRenderService
    ) {
      this._isComposing = false;
@@ -327,7 +335,7 @@ index 7542969a62fa6b5e84471a3bdecdc4bec82de542..0300804f3f4d1ccefbe14169576bcfdd
 +  /** Safari #432: beforeinput supplies the pre-edit range; keydown 229 arrives AFTER input. */
 +  public beforeinput(ev: InputEvent, keyDownSeen = false): void {
 +    if (!this._replacementComposition) this._editAwaitingKey = false;
-+    if (!(isMac || isIpad || isIphone) || !isSafari || ev.isComposing || this._optionsService.rawOptions.screenReaderMode
++    if (!isAppleWebKit || ev.isComposing || this._optionsService.rawOptions.screenReaderMode
 +      || (this._isComposing && !this._replacementComposition)) return;
 +    if (this._replacementComposition && (ev.inputType === 'insertReplacementText'
 +      || ev.inputType === 'deleteContentBackward' || ev.inputType === 'deleteContentForward')) return;
@@ -363,7 +371,7 @@ index 7542969a62fa6b5e84471a3bdecdc4bec82de542..0300804f3f4d1ccefbe14169576bcfdd
 +   * replacement preedit, which the next other key, paste or blur commits.
 +   */
 +  public passHangulKey(ev: KeyboardEvent): boolean {
-+    if (!isSafari || !(isMac || isIpad || isIphone) || ev.keyCode === 229 || ev.isComposing || ev.ctrlKey || ev.altKey || ev.metaKey
++    if (!isAppleWebKit || ev.keyCode === 229 || ev.isComposing || ev.ctrlKey || ev.altKey || ev.metaKey
 +      || this._optionsService.rawOptions.screenReaderMode || (this._isComposing && !this._replacementComposition)
 +      || !HANGUL_KEY.test(ev.key)) return false;
 +    this._editAwaitingKey = false;
@@ -420,7 +428,7 @@ index 7542969a62fa6b5e84471a3bdecdc4bec82de542..0300804f3f4d1ccefbe14169576bcfdd
      this._compositionView.textContent = '';
      this._dataAlreadySent = '';
      this._compositionView.classList.add('active');
-@@ -71,9 +225,12 @@ export class CompositionHelper {
+@@ -71,9 +233,12 @@ export class CompositionHelper {
     * @param ev The event.
     */
    public compositionupdate(ev: Pick<CompositionEvent, 'data'>): void {
@@ -433,7 +441,7 @@ index 7542969a62fa6b5e84471a3bdecdc4bec82de542..0300804f3f4d1ccefbe14169576bcfdd
        this._compositionPosition.end = this._textarea.value.length;
      }, 0);
    }
-@@ -83,6 +240,7 @@ export class CompositionHelper {
+@@ -83,6 +248,7 @@ export class CompositionHelper {
     * the handler.
     */
    public compositionend(): void {
@@ -441,7 +449,7 @@ index 7542969a62fa6b5e84471a3bdecdc4bec82de542..0300804f3f4d1ccefbe14169576bcfdd
      this._finalizeComposition(true);
    }
  
-@@ -92,7 +250,24 @@ export class CompositionHelper {
+@@ -92,7 +258,24 @@ export class CompositionHelper {
     * @returns Whether the Terminal should continue processing the keydown event.
     */
    public keydown(ev: KeyboardEvent): boolean {
@@ -467,7 +475,7 @@ index 7542969a62fa6b5e84471a3bdecdc4bec82de542..0300804f3f4d1ccefbe14169576bcfdd
        if (ev.keyCode === 229) {
          // Continue composing if the keyCode is the "composition character"
          return false;
-@@ -125,56 +300,46 @@ export class CompositionHelper {
+@@ -125,56 +308,46 @@ export class CompositionHelper {
     *   the command is executed.
     */
    private _finalizeComposition(waitForPropagation: boolean): void {
@@ -552,7 +560,7 @@ index 7542969a62fa6b5e84471a3bdecdc4bec82de542..0300804f3f4d1ccefbe14169576bcfdd
    /**
     * Apply any changes made to the textarea after the current event chain is allowed to complete.
     * This should be called when not currently composing but a keydown event with the "composition
-@@ -183,7 +348,9 @@ export class CompositionHelper {
+@@ -183,7 +356,9 @@ export class CompositionHelper {
     */
    private _handleAnyTextareaChanges(): void {
      const oldValue = this._textarea.value;
@@ -562,7 +570,7 @@ index 7542969a62fa6b5e84471a3bdecdc4bec82de542..0300804f3f4d1ccefbe14169576bcfdd
        // Ignore if a composition has started since the timeout
        if (!this._isComposing) {
          const newValue = this._textarea.value;
-@@ -216,25 +383,44 @@ export class CompositionHelper {
+@@ -216,25 +391,44 @@ export class CompositionHelper {
      }
  
      if (this._bufferService.buffer.isCursorInViewport) {

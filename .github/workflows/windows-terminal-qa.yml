@@ -52,9 +52,11 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 20
     steps:
+      # a pull request's merge with main, as in ci.yml: its head alone would run the QA script as it was
+      # when the branch was cut, which fails against current code once main fixes the script (#2243)
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          ref: ${{ github.sha }}
           persist-credentials: false
       - uses: ./.github/actions/setup-ci
       # herdr's own installer takes its newest release; CI tests against 0.9.3 everywhere else

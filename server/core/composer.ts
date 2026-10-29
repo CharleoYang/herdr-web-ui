@@ -411,6 +411,11 @@ export function createSubmitText({ options, lastTyped, attachments, terminalAtta
             }
           };
           if (clearDraft !== undefined) await clearScreenReady();
+          // Send it names the terminal's draft as the message itself. An empty box can mean it
+          // was already sent there; only Clear it and send of different text may continue.
+          if (clearDraft !== undefined && text === clearDraft && claudeInputEmpty(...reads)) {
+            throw new HerdrError("agent_not_ready", "The named draft is no longer in Claude Code's input box; nothing was cleared or sent");
+          }
           if (claudeInputDraft(...reads)) {
             // only the draft the user was shown goes, never what has since replaced it
             const draft = claudeClearableDraft(...reads);

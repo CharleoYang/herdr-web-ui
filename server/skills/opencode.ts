@@ -87,7 +87,8 @@ const V2_BUILTINS: readonly Builtin[] = [
 ];
 
 const majorMinor = (version: string): string => version.split(".").slice(0, 2).join(".");
-const isV2 = (version: string | null | undefined): boolean => Number(/^(\d+)\./.exec(version ?? "")?.[1] ?? 1) >= 2;
+// a bare major ("2") is a version known only by its major: a v2-only flag of the pane's process
+const isV2 = (version: string | null | undefined): boolean => Number(/^(\d+)(?:\.|$)/.exec(version ?? "")?.[1] ?? 1) >= 2;
 const canonical = (path: string): string => { try { return realpathSync(path); } catch { return path; /* unresolvable: keep the path */ } };
 
 function configCommands(path: string, source: "user" | "project", key: string): SlashCommand[] {
