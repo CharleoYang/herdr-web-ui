@@ -6,7 +6,7 @@
  */
 import type { AgentRenameRequest, PaneDirection, PaneResized, PaneSplit, PaneSwapped, PaneZoomed, ReadFormat, ReadSource } from "../shared/protocol.ts";
 import { mergeCatalogSources } from "./catalog-sources.ts";
-import { paneCommands, rememberPaneCommands } from "./commands.ts";
+import { rememberPaneCommands, scanPaneCommands } from "./commands.ts";
 import { paneFiles } from "./files.ts";
 import { badRequest, conflictResponse, errorResponse, isCount, isJsonObject, jsonResponse, readJsonObject, requestIdContext, setRequestRoute } from "./http.ts";
 import { conversationImage, ConversationReadPending, ConversationUnavailable, forgetPaneTranscriptState, HistoryChanged, paneConversation, paneProcessRoots, paneTranscript, toolOutput } from "./conversation.ts";
@@ -83,13 +83,15 @@ export async function handlePaneRequest(request: Request, url: URL, pathname: st
     if (directory !== "" && cwd === null) return badRequest("invalid_cwd", "cwd must be an existing directory");
     try {
       // OpenCode types its skills one way per version: before any pane runs it, its service file says which
-      return jsonResponse({ commands: paneCommands(agent, cwd, undefined, undefined, agent === "opencode" ? openCodeInstalledVersion(options.openCodeStateDir) : undefined) });
+      return jsonResponse({ commands: await scanPaneCommands(agent, cwd, undefined, agent === "opencode" ? openCodeInstalledVersion(options.openCodeStateDir) : undefined, request.signal) });
     } catch (error) {
       return errorResponse(error);
     }
   }
 
   if (pathname === "/api/pane/commands" || pathname === "/api/pane/files") {
+    // the commands scan's wait counts from here, its herdr lookups included (`scanPaneCommands`)
+    const began = performance.now();
     setRequestRoute(pathname);
     if (request.method !== "GET") return badRequest("method_not_allowed", "use GET");
     const paneId = url.searchParams.get("pane_id");
@@ -108,7 +110,8 @@ export async function handlePaneRequest(request: Request, url: URL, pathname: st
         // (syntax only: the catalog's pin stays unverified, since only the store or a verified service may verify it).
         // A pane with a session whose transcript is unreadable gets none: that session may be an OpenCode 1 one
         const version = stored ?? (agent === "opencode" && !context.pane.agent_session ? openCodeInstalledVersion(options.openCodeStateDir) : null);
-        const scanned = paneCommands(agent, context.cwd, undefined, { ...roots.omo, environ: roots.environ }, version);
+        // on a file thread: a skill folder on a slow mount stalls only this request (#2254)
+        const scanned = await scanPaneCommands(agent, context.cwd, { ...roots.omo, environ: roots.environ }, version, request.signal, began);
         const commands = await mergeCatalogSources(agent, context.pane, context.cwd, scanned, undefined, { codexHome: options.codexHome, openCodeStateDir: options.openCodeStateDir });
         rememberPaneCommands(context.pane, agent, commands);
         return jsonResponse({ commands });

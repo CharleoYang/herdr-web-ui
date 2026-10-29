@@ -28,6 +28,8 @@ const remote = Bun.serve({
     }
     if (path === "/api/pane/commands" || path === "/api/agent/commands") {
       commandsAsked.push(path);
+      // a PC whose skill folders are too slow to scan in time (#2254)
+      if (new URL(request.url).searchParams.get("pane_id") === "busy") return Response.json({ error: { code: "file_busy", message: "the skill folders did not answer in time" } }, { status: 503, headers: { "retry-after": "1" } });
       return Response.json({ commands: [{ name: "deploy", description: "SECRET", source: "custom", id: "/work/.commandcode/commands/deploy.md" }] });
     }
     if (path === "/api/pane/files" || path === "/api/plugin/action") {
@@ -115,6 +117,13 @@ it("never asks a PC for a pane's or a folder's command rows for a watching devic
   expect(driven.status).toBe(200);
   expect(JSON.stringify(await driven.json())).toContain("SECRET");
   expect(commandsAsked).toEqual(["/api/pane/commands"]);
+});
+
+it("passes on a PC's 503 with its Retry-After, so the menu knows to ask again (#2254)", async () => {
+  const busy = await handleMachineRequest(new Request("http://127.0.0.1/api/machines/pc1/pane/commands?pane_id=busy"), manager);
+  expect(busy.status).toBe(503);
+  expect(busy.headers.get("retry-after")).toBe("1");
+  expect(((await busy.json()) as { error: { code: string } }).error.code).toBe("file_busy");
 });
 
 it("never asks a PC for the paths under a pane's folder or a plugin run's output for a watching device (#2244)", async () => {

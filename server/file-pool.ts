@@ -25,6 +25,13 @@ export const FILE_TASK_DEADLINE_MS = 3_000;
  * slow). It may take longer.
  */
 export const FILE_LONG_TASK_DEADLINE_MS = 15_000;
+/**
+ * An agent's commands scanned (`commands`, #2254): every skill and command folder it reads, which on
+ * a slow mount took 10-27 s, and may take minutes on a slower one. Each request waits for it only
+ * `COMMANDS_WAIT_MS` (`commands.ts`), and a request asking again waits for the same scan, so it is
+ * given this long, waiting for a thread included, before nobody may still be waiting for it.
+ */
+export const FILE_SCAN_DEADLINE_MS = 5 * 60_000;
 
 /** Every file thread is taken (or a task outlived its deadline): try again in a moment. */
 export class FileBusyError extends Error {
@@ -36,6 +43,13 @@ interface PoolOptions {
   waiting: number;
   deadlineMs: number;
   longDeadlineMs: number;
+  scanDeadlineMs: number;
+  /**
+   * At most this many threads run a commands scan at once: a scan can hold its thread for many
+   * seconds, and the file routes keep the others. A scan past that waits, and the tasks behind it
+   * still take a free thread.
+   */
+  scans: number;
   /** the module a thread runs (a stand-in, in tests) */
   worker: URL;
   /** run each task on the calling thread instead (tests that set `pageFileHooks`, which a thread cannot see) */
@@ -47,12 +61,14 @@ const DEFAULTS: PoolOptions = {
   waiting: 64,
   deadlineMs: FILE_TASK_DEADLINE_MS,
   longDeadlineMs: FILE_LONG_TASK_DEADLINE_MS,
+  scanDeadlineMs: FILE_SCAN_DEADLINE_MS,
+  scans: 2,
   worker: new URL("./file-worker.ts", import.meta.url),
   inline: null,
 };
 let options = DEFAULTS;
 
-interface Pending { task: FileTask; done: (result: FileTaskResult) => void; fail: (error: Error) => void; timer: ReturnType<typeof setTimeout>; settled: boolean; unlisten?: () => void }
+interface Pending { task: FileTask; done: (result: FileTaskResult) => void; fail: (error: Error) => void; timer: ReturnType<typeof setTimeout>; settled: boolean; unlisten?: () => void; onRun?: () => void }
 /** Bun's Worker, which the DOM's type does not describe: `unref` lets the process end with the thread idle. */
 type BunWorker = Worker & { ref(): void; unref(): void };
 /** `orphaned`: the task of a thread ended while it ran, whose descriptor is closed once it is gone; `closed`: once it is gone. */
@@ -131,8 +147,9 @@ export function filePoolSize(): { threads: number; idle: number; waiting: number
  * `task` run on a file thread; rejects with `FileBusyError` when none is free in time, or at once
  * when `signal` aborts (the request went away). Either way a task already on a thread keeps it
  * until its call returns, and what that late answer opened is closed then, never under it.
+ * `onRun`: called once the task is handed to a thread (it no longer waits for one).
  */
-export function fileTask<T extends FileTaskResult>(task: FileTask, signal?: AbortSignal): Promise<T> {
+export function fileTask<T extends FileTaskResult>(task: FileTask, signal?: AbortSignal, onRun?: () => void): Promise<T> {
   const inline = options.inline;
   if (inline !== null) return Promise.resolve().then(() => inline(task) as T);
   if (signal?.aborted) return Promise.reject(new FileBusyError("the request was cancelled"));
@@ -140,18 +157,32 @@ export function fileTask<T extends FileTaskResult>(task: FileTask, signal?: Abor
   // failed or was ended mid-task) can still be closed (`abandon`)
   if (task.op === "open" || task.op === "describe") task = { ...task, opened: openedCell() };
   return new Promise<T>((done, fail) => {
-    const deadline = task.op === "render" || task.op === "walk" ? options.longDeadlineMs : options.deadlineMs;
-    const pending: Pending = { task, done: done as (result: FileTaskResult) => void, fail, settled: false, timer: setTimeout(() => expire(pending, "the file system did not answer in time"), deadline) };
+    const deadline = task.op === "commands" ? options.scanDeadlineMs : task.op === "render" || task.op === "walk" ? options.longDeadlineMs : options.deadlineMs;
+    const pending: Pending = { task, done: done as (result: FileTaskResult) => void, fail, settled: false, timer: setTimeout(() => expire(pending, "the file system did not answer in time"), deadline), ...(onRun ? { onRun } : {}) };
     if (signal !== undefined) {
       const cancel = () => expire(pending, "the request was cancelled");
       signal.addEventListener("abort", cancel, { once: true });
       pending.unlisten = () => signal.removeEventListener("abort", cancel);
     }
-    const thread = idle.pop() ?? (threads.size < options.workers ? start() : null);
+    const thread = mayRun(task) ? idle.pop() ?? (threads.size < options.workers ? start() : null) : null;
     if (thread !== null) run(thread, pending);
     else if (queue.length < options.waiting) queue.push(pending);
     else settle(pending, new FileBusyError("every file thread is busy"));
   });
+}
+
+/** A scan only while fewer than `scans` threads run one (a scan past its deadline keeps its thread, and counts, until it returns); any other task always. */
+function mayRun(task: FileTask): boolean {
+  if (task.op !== "commands") return true;
+  let scanning = 0;
+  for (const thread of threads) if (thread.pending?.task.op === "commands") scanning += 1;
+  return scanning < options.scans;
+}
+
+/** The first waiting task that may run now, taken out of the queue. */
+function nextWaiting(): Pending | undefined {
+  const at = queue.findIndex((pending) => mayRun(pending.task));
+  return at < 0 ? undefined : queue.splice(at, 1)[0];
 }
 
 function settle(pending: Pending, outcome: FileTaskResult | Error): void {
@@ -192,7 +223,7 @@ function start(): Thread {
     const at = idle.indexOf(thread);
     if (at >= 0) idle.splice(at, 1);
     orphan(thread, error);
-    const waiting = queue.shift();
+    const waiting = nextWaiting();
     if (waiting !== undefined) run(start(), waiting);
   };
   worker.addEventListener("error", (event) => { end(new Error(`a file thread failed: ${event.message}`)); void worker.terminate(); });
@@ -210,13 +241,14 @@ function run(thread: Thread, pending: Pending): void {
   thread.pending = pending;
   thread.worker.ref();
   thread.worker.postMessage(pending.task);
+  pending.onRun?.();
 }
 
 /** A thread that answered takes the next waiting task, or rests. */
 function next(thread: Thread): void {
   // ended by setFilePoolOptions (tests) while it ran
   if (!threads.has(thread)) return;
-  const waiting = queue.shift();
+  const waiting = nextWaiting();
   if (waiting !== undefined) {
     run(thread, waiting);
     return;

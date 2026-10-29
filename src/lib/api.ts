@@ -212,13 +212,16 @@ export class ApiError extends Error {
   readonly code: string | null;
   /** the server's own words, without the URL and status the message starts with */
   readonly detail: string;
+  /** how long the server asked to wait before trying again (`Retry-After` in seconds), in ms; null when it did not say */
+  readonly retryAfterMs: number | null;
 
-  constructor(url: string, status: number, detail: string, code: string | null) {
+  constructor(url: string, status: number, detail: string, code: string | null, retryAfterMs: number | null = null) {
     super(`${url} failed (${status}): ${detail}`);
     this.name = "ApiError";
     this.status = status;
     this.code = code;
     this.detail = detail;
+    this.retryAfterMs = retryAfterMs;
   }
 }
 
@@ -249,7 +252,10 @@ async function errorFrom(url: string, response: Response): Promise<ApiError> {
     /* non-JSON error body */
   }
   if (code !== null && Object.hasOwn(UNUSABLE_ANSWER, code)) detail = UNUSABLE_ANSWER[code]!();
-  return new ApiError(url, response.status, detail, code);
+  // only the seconds form (the server's `retry-after: 1`); an HTTP date is not one this API sends
+  const retryAfter = response.headers.get("retry-after");
+  const seconds = retryAfter !== null && /^\d+$/.test(retryAfter.trim()) ? Number(retryAfter.trim()) : null;
+  return new ApiError(url, response.status, detail, code, seconds === null ? null : seconds * 1000);
 }
 
 async function getJson<T>(url: string, init?: RequestInit): Promise<T> {
