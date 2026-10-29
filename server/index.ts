@@ -236,6 +236,8 @@ export function createServer(
   const cliProxy = options.cliProxy ?? new CLIProxyService(stateDir);
   const cliProxyRoutes = new CLIProxyRoutes(cliProxy);
   const usageLogin = options.usageLogin ?? new UsageLoginService();
+  // a sign-in runs in a herdr tab, which outlives this server: the next one must know its home is taken (#2313)
+  usageLogin.persistTo(stateDir);
   const usage = options.usage ?? new UsageService(undefined, undefined, (refresh) => cliProxy.report(refresh));
   const voice = options.voice ?? new VoiceService({ stateDir, env: process.env, fetch });
   /** a login named here is taken as it is: a tagged node has none of its own to read (OVIS_TAILSCALE_OWNER) */
