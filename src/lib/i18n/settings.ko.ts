@@ -79,7 +79,7 @@ export const SETTINGS_KO: Record<string, string> = {
   "Full": "전체",
   "Chat font size": "채팅 글자 크기",
   "History page size": "기록 페이지 크기",
-  "Prompts per page; older turns load a page at a time as you scroll up": "페이지당 프롬프트 수. 위로 스크롤하면 이전 턴을 한 페이지씩 불러옵니다",
+  "Prompts per page; older turns load a page at a time as you scroll up. Hermes keeps its own page of messages": "페이지당 프롬프트 수. 위로 스크롤하면 이전 턴을 한 페이지씩 불러옵니다. Hermes는 자체 메시지 단위 페이지로 불러옵니다",
   "Messages, code, prompt cards and the message box in the chat view": "채팅 화면의 메시지, 코드, 프롬프트 카드, 입력창",
   "Decrease chat font size": "채팅 글자 작게",
   "Increase chat font size": "채팅 글자 크게",

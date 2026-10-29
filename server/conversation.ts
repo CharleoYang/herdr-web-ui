@@ -145,7 +145,7 @@ function copilotPage(page: ConversationPage, prefix: string): ConversationPage {
     if (!cursor.startsWith(prefix)) throw new HistoryChanged();
     return cursor.slice(prefix.length);
   };
-  return { before: unbind(page.before), since: unbind(page.since), from: unbind(page.from) };
+  return { before: unbind(page.before), since: unbind(page.since), from: unbind(page.from), prompts: page.prompts };
 }
 
 function bindCopilotAnswer(answer: RecognizedConversation, prefix: string): RecognizedConversation {
@@ -1521,7 +1521,7 @@ export async function paneConversation(paneId: string, codexHome?: string, page:
     if (answer.kind === "history_changed") throw new HistoryChanged();
     if (answer.kind === "unavailable") throw new ConversationUnavailable(answer.reason);
     const { kind: _kind, signature, ...conversation } = answer;
-    const key = `opencode\0${resolved.path}\0${resolved.session}\0${page.before ?? ""}\0${page.since ?? ""}\0${page.from ?? ""}`;
+    const key = `opencode\0${resolved.path}\0${resolved.session}\0${page.before ?? ""}\0${page.since ?? ""}\0${page.from ?? ""}\0${page.prompts ?? ""}`;
     return { source: resolved.source, ...conversation, version: answerVersion(key, signature) };
   }
   if (resolved.source === "hermes-transcript") {
