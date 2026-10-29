@@ -425,9 +425,10 @@ export async function fetchPaneConversation(paneId: string, machineId = "local",
     if (!response.ok) throw await errorFrom(url, response);
     return { response, body: (await response.json()) as ConversationResponse };
   }, chatReadDeadlineMs(machineId)).catch((cause: unknown) => {
+    // a rejected history is the pane's, whatever page size it was read at: none of its pages may draw again
     if (cause instanceof ApiError && cause.status === 409) {
-      conversationAnswers.delete(url);
-      conversationAnswers.delete(conversationUrl(paneId, machineId, {}));
+      const pane = paneKey(paneId, machineId);
+      for (const [cached, answer] of conversationAnswers) if (cached === url || answer.pane === pane) conversationAnswers.delete(cached);
     }
     throw cause;
   });

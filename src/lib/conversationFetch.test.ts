@@ -46,6 +46,20 @@ describe("conversation polling", () => {
     ]);
   });
 
+  it.each([{ from: "history-a:50" }, { before: "history-a:50" }])("forgets every page size of a pane whose history a read rejects: %o", async (held) => {
+    let status = 200;
+    globalThis.fetch = (async (_url: string) => status === 200
+      ? Response.json({ source: "claude-transcript", history_id: "history-a", cursor: "history-a:100", turns: [] }, { headers: { etag: '"history-a"' } })
+      : Response.json({ error: { code: "history_changed", message: "reload" } }, { status })) as unknown as typeof fetch;
+    const pane = `rejected-sized-${Object.keys(held)[0]}`;
+    await fetchPaneConversation(pane);
+    await fetchPaneConversation(pane, "local", { prompts: 10 });
+    await fetchPaneConversation(pane, "local", { prompts: 25 });
+    status = 409;
+    await expect(fetchPaneConversation(pane, "local", { ...held, history_id: "history-a", prompts: 10 })).rejects.toBeInstanceOf(ApiError);
+    expect([peekPaneConversation(pane), peekPaneConversation(pane, "local", 10), peekPaneConversation(pane, "local", 25)]).toEqual([undefined, undefined, undefined]);
+  });
+
   it("revalidates a new finish without borrowing the previous finish's ETag", async () => {
     const sent: (string | null)[] = [];
     const body: ConversationResponse = { source: "claude-transcript", turns: [] };
