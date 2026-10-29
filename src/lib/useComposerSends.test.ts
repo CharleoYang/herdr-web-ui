@@ -11,6 +11,7 @@ import { PendingMessageStore, pendingMessages } from "./pendingMessages.ts";
 import { paneLifetimes } from "./paneLifetime.ts";
 import { useComposerSends, type ComposerSendsDeps } from "./useComposerSends.ts";
 import type { HerdrSocket, SubmitDelivery, SubmitResult } from "./ws.ts";
+import { currentWaitingSends, forgetWaitingSends, settleWaitingSends, waitingKey } from "./sentWaiting.ts";
 import type { InteractivePrompt } from "../../shared/protocol.ts";
 
 // A bridge without `submit` takes a message as raw input and sends no receipt (ws.ts `unconfirmed`):
@@ -142,6 +143,50 @@ it.each([
     pendingMessages.removeCopy(owner, message.id);
     saved.restore();
   }
+});
+
+it.each(["refusal", "rejection"] as const)("a connection %s leaves no waiting line", async (kind) => {
+  const pane = `closed-${kind}`, key = waitingKey("local", pane);
+  const error = new Error("herdr closed the connection before answering agent.prompt");
+  const actions = sends(pane, { ok: false, code: "closed", message: error.message }, [], {
+    setPromptRefresh: () => {},
+    submitComposerMessage: () => kind === "rejection" ? Promise.reject(error) : Promise.resolve({ ok: false, code: "closed", message: error.message }),
+  });
+  try {
+    if (kind === "rejection") await expect(actions.composerSend("not typed yet")).rejects.toBe(error);
+    else expect(await actions.composerSend("not typed yet")).not.toBe(true);
+    expect(currentWaitingSends(key)).toEqual([]);
+  } finally { forgetWaitingSends(key); }
+});
+
+it("records a confirmed send for its original pane after navigation without following the new pane", async () => {
+  const pane = "receipt-original", key = waitingKey("local", pane), paneRef = { current: pane };
+  let follow = 0;
+  const { promise: receipt, resolve: release } = Promise.withResolvers<SubmitResult>();
+  const actions = sends(pane, { ok: true }, [], { paneRef, setChatLocalSend: () => { follow++; }, submitComposerMessage: () => receipt });
+  const result = actions.composerSend("from original pane");
+  paneRef.current = "another-pane";
+  release({ ok: true });
+  try {
+    expect(await result).toBe(true);
+    expect(currentWaitingSends(key)).toMatchObject([{ text: "from original pane" }]);
+    expect(follow).toBe(0);
+  } finally { forgetWaitingSends(key); }
+});
+
+it("timestamps a send before the receipt so a turn written during the request settles it", async () => {
+  const pane = "receipt-time", key = waitingKey("local", pane);
+  const clock = spyOn(Date, "now").mockReturnValue(1000);
+  const { promise, resolve } = Promise.withResolvers<SubmitResult>();
+  try {
+    const result = sends(pane, { ok: true }, [], { submitComposerMessage: () => promise }).composerSend("written before receipt");
+    clock.mockReturnValue(3000);
+    resolve({ ok: true });
+    expect(await result).toBe(true);
+    expect(currentWaitingSends(key)[0]?.at).toBe(1000);
+    settleWaitingSends(key, [{ role: "user", ts: new Date(2000).toISOString(), parts: [{ kind: "text", text: "written before receipt" }] }]);
+    expect(currentWaitingSends(key)).toEqual([]);
+  } finally { clock.mockRestore(); forgetWaitingSends(key); }
 });
 
 it("Send it sends the named draft over itself, only at once and never as an answer", async () => {

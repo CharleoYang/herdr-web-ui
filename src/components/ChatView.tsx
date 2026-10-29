@@ -42,6 +42,8 @@ import { followGlides } from "../lib/followScroll.ts";
 import { useMediaQuery } from "../lib/useMediaQuery.ts";
 import { statusEdgeRead } from "../lib/status.ts";
 import { askedQuestions } from "../../shared/askQuestions.ts";
+import { settleWaitingSends, waitingKey } from "../lib/sentWaiting.ts";
+import { SentWaitingList, useWaitingSends } from "./SentWaiting.tsx";
 import { ConversationRefresh } from "../lib/conversationRefresh.ts";
 import { teammateMessageParts, type TeammateMessage } from "../lib/teammateMessage.ts";
 import { usePageVisible } from "../lib/visibility.ts";
@@ -2321,10 +2323,22 @@ export const ChatView = memo(function ChatView({ paneId, presentationKey, finish
   // empty (never display: none); its words land a frame after it (lib/useAnnouncedText.ts). The
   // connection's word is the header chip's alone; a slow PC is waited for quietly before it alarms
   const waiting = error !== null && error.kind === "slow" && failures < SLOW_READS_BEFORE_ALARM;
+  // A message this browser sent that the pane has not written as a turn yet: Claude records the user
+  // turn only when its next turn starts, so without this the chat would show nothing at all. The
+  // queue lives in the store, so a reader who goes to another tab and comes back still sees it.
+  const waitKey = waitingKey(machineId, paneId);
+  const sentWaiting = useWaitingSends(machineId, paneId, connected);
+  // before paint: a frame never shows a send's turn and its waiting bubble together. Only a
+  // conversation read that answered says what the chat holds: a failed read leaves it unknown
+  const turnsRead = loaded && error === null && state.source === "conversation";
+  useLayoutEffect(() => {
+    settleWaitingSends(waitKey, state.turns, Date.now(), turnsRead);
+  }, [sentWaiting, state.turns, turnsRead, waitKey]);
   const waitWords = useAnnouncedText(!loaded && error === null ? t("Loading conversation…") : waiting ? t("Waiting for the PC…") : null);
   const retryRead = useCallback(() => { setFailures(0); conversationRefresh.refresh(); }, [conversationRefresh]);
   const footer = <>
       <p className={waitWords === null ? "visually-hidden" : "chat-inline-state"} role="status">{waitWords}</p>
+      {sentWaiting.length > 0 && state.source === "conversation" && <SentWaitingList sends={sentWaiting} />}
       {error !== null && !waiting && (errorStatus === 401
         ? <p className="chat-inline-state chat-inline-error" role="alert">{t("locked — the token gate is asking again")}</p>
         : <FailureLine action={t("Couldn't load the conversation")} failure={error} onRetry={retryRead} />)}
