@@ -141,6 +141,7 @@ describe("statusline installer and capture", () => {
       `sh "${join(real, "herdr-statusline")}/./statusline-tee.sh"`,
       `sh '${join(link, ".", "herdr-statusline")}/./statusline-tee.sh'`,
       `sh ${join(real, "herdr-statusline").replaceAll("/", "\\/")}/.\\/statusline-tee.sh`,
+      `# Claude's wrapper\nsh ${join(real, "herdr-statusline")}/./statusline-tee.sh`,
     ]) {
       writeFileSync(settings(real), JSON.stringify({ statusLine: { type: "command", command } }));
       expect(run([], real).exitCode).toBe(1);
@@ -153,6 +154,14 @@ describe("statusline installer and capture", () => {
     expect(readFileSync(settings(real), "utf8")).toBe(wrapped);
     expect(run(["--remove"], link).exitCode).toBe(0);
     expect(readSettings(real).statusLine.command).toBe("printf orig");
+  });
+
+  it("--remove leaves a newer command that only mentions the wrapper's path", () => {
+    install();
+    const mention = `printf '%s\\n' "${own()}/./statusline-tee.sh"`;
+    writeFileSync(settings(), JSON.stringify({ statusLine: { type: "command", command: mention } }));
+    install("--remove");
+    expect(readSettings().statusLine.command).toBe(mention);
   });
 
   it("knows a wrapper path quoted with spaces in it", () => {

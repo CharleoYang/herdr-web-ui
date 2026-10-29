@@ -54,6 +54,11 @@ function shellWords(command: string): string[] {
   for (let at = 0; at < command.length; at++) {
     const char = command[at]!;
     if (/\s/.test(char)) { if (word !== null) words.push(word); word = null; continue; }
+    if (char === "#" && word === null) {
+      const end = command.indexOf("\n", at);
+      at = end === -1 ? command.length : end;
+      continue;
+    }
     word ??= "";
     if (char === "'") {
       const end = command.indexOf("'", at + 1);
@@ -83,6 +88,18 @@ function runsWrapper(path: string, tee: string): boolean {
 /** Whether `command` names a wrapper of this installer: any copy by name, or this one however spelled. */
 const runsAWrapper = (command: string, tee: string): boolean =>
   command.includes(WRAPPER) || shellWords(command).some((word) => word !== "" && runsWrapper(word, tee));
+
+/**
+ * Whether --remove may replace `command`: one the installer wrote (its wrapper's name in it), or one
+ * that runs the wrapper however spelled, as its command or through a shell. A command that only
+ * mentions the path in its arguments (`printf <path>`) is the user's own, and stays.
+ */
+function ownsCommand(command: string, tee: string): boolean {
+  if (command.includes(WRAPPER)) return true;
+  const words = shellWords(command);
+  const runner = /^(?:exec|sh|bash|dash|zsh|ksh)$/.test(basename(words[0] ?? "")) ? 1 : 0;
+  return words[runner] !== undefined && runsWrapper(words[runner], tee);
+}
 
 function locations() {
   const configured = process.env["CLAUDE_CONFIG_DIR"]?.trim();
@@ -274,7 +291,7 @@ function remove(): string {
   if (text === record.installed) {
     writeSettings(where.settings, record.original);
     outcome = `put ${where.settings} back as it was`;
-  } else if (runsAWrapper(commandOf(value[KEY]) ?? "", where.tee)) {
+  } else if (ownsCommand(commandOf(value[KEY]) ?? "", where.tee)) {
     writeSettings(where.settings, withStatusLine(text, record.statusLine));
     outcome = `put back the status line in ${where.settings}; its other changes since the install stay`;
   } else {
