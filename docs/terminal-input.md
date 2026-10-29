@@ -170,8 +170,8 @@ trips and pane changes on those keyboards before claiming universal IME compatib
   `compositionend.data`, retaining the `핫 → 하세` case. The readable source patch is in `patches/`;
   Vite builds that source through `scripts/build-xterm.ts` so the patch is present in the shipped
   app, not just unused TypeScript. Version changes fail closed until the patch is revalidated.
-  The queue/watermark approach follows @joonhoekim's proposal in #6090 (MIT); the backport targets
-  5.5.0 and is maintained here pending an upstream release. Reset/disposal also invalidate deferred
+  The queue/watermark approach follows @joonhoekim's proposal in #6090 (MIT); the backport was written
+  for 5.5.0, ported to 6.0.0 (#1617), and is maintained here pending an upstream release. Reset/disposal also invalidate deferred
   composition work so old input cannot enter a newly selected pane. The app resets in a layout
   effect, before another task can deliver the previous pane's commit.
 - Related to [xterm #3600](https://github.com/xtermjs/xterm.js/issues/3600), native Gboard testing
@@ -191,7 +191,7 @@ trips and pane changes on those keyboards before claiming universal IME compatib
 - [xterm #6036](https://github.com/xtermjs/xterm.js/issues/6036): a Linux input method that
   shows no in-app preedit (fcitx4 with Sogou Pinyin) loses a candidate picked with a digit key.
   [PR #6037](https://github.com/xtermjs/xterm.js/pull/6037) defers every digit and Space on Linux
-  for up to 50 ms and is unmerged. The 5.5.0 patch here takes a smaller step, below.
+  for up to 50 ms and is unmerged. The patch here takes a smaller step, below.
 - Mosh-style speculative local echo is not added. It addresses network responsiveness and needs
   a separate reconciliation design; it does not repair text lost before transmission.
 
@@ -208,7 +208,7 @@ composition path preserved the Korean text. Safari emitted `insertText("ㅎ")`, 
 and no composition events; its keydown 229 arrived after each DOM edit. Stock xterm handling
 sent the first jamo and ignored subsequent replacements.
 
-The 5.5.0 source patch treats a single Hangul insertion on macOS Safari as local preedit,
+The source patch treats a single Hangul insertion on macOS Safari as local preedit,
 tracks the corrected DOM range through replacements and deletion, and commits it before the
 next syllable, ordinary key, paste or blur. Reset cancels pending text before a pane change.
 Native composition events and screen-reader mode retain their existing paths. The recorded

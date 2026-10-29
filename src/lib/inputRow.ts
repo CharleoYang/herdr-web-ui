@@ -436,10 +436,10 @@ const SYNC = /\u001b\[\?2026([hl])/g;
 
 /**
  * Whether the screen xterm has parsed is a frame the recognizers may read. herdr wraps each frame
- * it draws in a synchronized-update block (`CSI ? 2026 h` … `l`), which xterm 5.5 does not honour,
- * and a read of its stream can end inside one: a frame is read only once its block has closed. A
- * grid resized here (a fit, a phone peek's narrower grid, a pane's grid adopted) holds the old
- * screen until the agent draws again for the new one: from the resize on, nothing is read until a
+ * it draws in a synchronized-update block (`CSI ? 2026 h` … `l`). xterm 6 holds its drawing until a
+ * block closes, but what it has parsed can still end inside one: a frame is read only once its
+ * block has closed. A grid resized here (a fit, a phone peek's narrower grid, a pane's grid
+ * adopted) holds the old screen until the agent draws again for the new one: from the resize on, nothing is read until a
  * whole frame has come for the new grid, written after the pane's grid said it was that size. When
  * the pane's grid itself changes size, herdr may first draw the old screen again, reflowed for the
  * new size (an idle box cut at its borders reads as gone), before the agent's own redraw, or both

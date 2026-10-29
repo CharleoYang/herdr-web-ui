@@ -244,6 +244,8 @@ export async function checkUsageSignInAgain(browser: Browser, origin: string): P
       await page.locator(".sidebar-footer-row .sidebar-footer-action").click();
       await openSettingsPage(page, "Subscription usage");
       const rows = page.locator(".usage-accounts-row");
+      // the rows come with the usage report, loaded once the page is shown: count them once they are
+      await rows.nth(3).waitFor();
       assert.equal(await rows.count(), 4);
       const rowAgain = page.locator(".settings-dialog").getByRole("button", { name: /^Sign in again/ });
       assert.equal(await rowAgain.count(), 1, "Settings offers it on the expired row of this PC only");
@@ -279,6 +281,7 @@ export async function checkUsageSignInAgain(browser: Browser, origin: string): P
     await page.keyboard.press("Escape");
     await page.locator(".sidebar-footer-row .sidebar-footer-action").click();
     await openSettingsPage(page, "Subscription usage");
+    await page.locator(".usage-accounts-row").nth(3).waitFor();
     assert.equal(await page.locator(".usage-accounts-row").count(), 4);
     assert.equal(await page.locator(".settings-dialog").getByRole("button", { name: /^Sign in again/ }).count(), 0, "no Sign in again in a watching device's Settings");
   } finally {

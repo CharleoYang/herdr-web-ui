@@ -14,14 +14,15 @@
  *   frame each row belongs to.
  *
  * A render is `torn` when xterm had parsed a herdr block's open but not its close, and `mixed` when
- * its rows are not all one frame. xterm 5.5 does not honour mode 2026, so a herdr block split over
- * two frames can render half; xterm 6 holds the render until the close.
+ * its rows are not all one frame. xterm 5.5 did not honour mode 2026, so a herdr block split over
+ * two frames could render half (26 to 46 mixed renders a run, #1617); xterm 6 holds the drawing
+ * until the close, so none is.
  *
- * Asserts what the bridge owns: the brackets pass every hop intact (hop B's bytes are hop A's, every
- * open is closed, at least one block split), a block left open recovers at the next whole frame, and
- * every frame is rendered whole in the end. What herdr does with a block the pane leaves open (herdr
- * 0.9.5 sends nothing of it until it closes) is herdr's to decide, so it is recorded, not asserted. Prints the counts, mixed
- * and torn renders included; SYNC_OUTPUT_REPORT=<file> writes them all as JSON.
+ * Asserts the brackets pass every hop intact (hop B's bytes are hop A's, every open is closed, at
+ * least one block split), no render is mixed or drawn inside an open block, a block left open
+ * recovers at the next whole frame, and every frame is rendered whole in the end. What herdr does
+ * with a block the pane leaves open (herdr 0.9.5 sends nothing of it until it closes) is herdr's to
+ * decide, so it is recorded, not asserted. SYNC_OUTPUT_REPORT=<file> writes the counts as JSON.
  */
 import "./test-herdr.ts";
 import assert from "node:assert/strict";
@@ -408,9 +409,14 @@ async function run(): Promise<void> {
     assert.equal(hops.Ball.opens, hops.Aall.opens, "a block open was lost between herdr and the browser");
     assert.equal(hops.Ball.closes, hops.Aall.closes, "a block close was lost between herdr and the browser");
     assert.equal(hops.Ball.openAtEnd, false, "the browser's stream ends inside a block");
-    assert.equal(tap.acks.length, tap.messages.length, "a frame was not parsed");
+    // each frame acked by its flow identity, once: a count alone would let one ack stand in for another
+    const identities = (rows: ReadonlyArray<{ stream: string; offset: number }>) => rows.map(({ stream, offset }) => `${stream}:${offset}`).sort();
+    assert.deepEqual(identities(tap.acks), identities(tap.messages), "each frame was acked, once");
     // Then: herdr draws a pane's block only once it closes, and a block left open ends at the next frame.
     assert.equal(hops.A.opens, hops.A.closes, "herdr left one of its own blocks open");
+    // Then: xterm draws no frame from a block it has not seen close.
+    assert.equal(hops.D.torn, 0, `${hops.D.torn} of ${hops.D.renders} renders were drawn inside an open block`);
+    assert.equal(hops.D.mixed, 0, `${hops.D.mixed} of ${hops.D.renders} renders mixed two frames`);
     console.log(`PASS synchronized output: ${hops.B.blocks} herdr blocks reached the browser intact, ${hops.B.split} split over frames; ${hops.D.mixed} of ${hops.D.renders} renders mixed, ${hops.D.torn} drawn inside an open block`);
   } finally {
     await browser?.close();
