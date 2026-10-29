@@ -299,7 +299,8 @@ deleted-entry eviction, resource bounds and a
 server answering a ping while a 20 MiB listing is held at a controlled read gate. Deterministic
 clock/timer cases cover aggregate listing expiry, independent deadlines, queued expiry without
 opening and FIFO admission. The ungated 202-session fixture reads the newest 50 long transcripts
-(about 200 MiB together) under the ordinary deadline, then repeats with no transcript reads; the isolated
+(about 200 MiB together) whole, with the listing deadline lengthened so a slow runner cannot hit it, then
+repeats with no transcript reads; the isolated
 history API contract covers a similarly sized store and error-only refusal after an earlier row.
 
 ## Codex Send now

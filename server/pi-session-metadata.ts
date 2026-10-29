@@ -47,6 +47,8 @@ interface Task {
 interface ReaderOptions {
   /** Descriptor-only seam for counting I/O and holding a read in tests. */
   read?: typeof descriptorRead;
+  /** A listing's deadline: PI_READ_DEADLINE_MS. A test that checks what is read, not how fast, sets a longer one. */
+  deadlineMs?: number;
 }
 
 export class PiSessionReader {
@@ -57,6 +59,8 @@ export class PiSessionReader {
   private stopped = false;
   private labels = new Map<string, { key: string; scope: string; label: PiLabel | null }>();
   constructor(private readonly options: ReaderOptions = {}) {}
+  /** How long one listing may take, queue time included. */
+  get listingDeadlineMs(): number { return this.options.deadlineMs ?? PI_READ_DEADLINE_MS; }
 
   /** In-flight scans stay independent; only a completed label for an unchanged checked file is reused. */
   read(open: Task["open"], deadline: number, cache: Task["cache"] = null): Promise<PiLabel | null> {

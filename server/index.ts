@@ -201,6 +201,8 @@ export function createServer(
     attachRelookupForMs?: number;
     /** ATTACH_HOLD_MS; a test lengthens it so an attach's exit always comes before its hold ends */
     attachHoldMs?: number;
+    /** PI_READ_DEADLINE_MS, a Pi session listing's deadline; a test that checks what is listed, not how fast, lengthens it */
+    piSessionDeadlineMs?: number;
     /** whether herdr can `terminal attach`; unset, its ping says, and this runtime's PTY sidecar has to be runnable. Tests give a Windows herdr's answer, at once or as late as a ping's. */
     terminalAttach?: boolean | (() => Promise<boolean>);
     /** GET /api/pane/background-agent's read (server/background-agent.ts); a test holds it to change the pane's session while it is out */
@@ -271,7 +273,7 @@ export function createServer(
   // would count against the read's own 2.5 s limit, and a read cut short leaves the owner unknown for 5 minutes
   identityOf(false, null);
   const bridgeToken = options.bridgeToken ?? randomBytes(32).toString("hex");
-  const piReader = new PiSessionReader();
+  const piReader = new PiSessionReader({ deadlineMs: options.piSessionDeadlineMs });
 
   type PortalStartup = { ok: true } | { ok: false; error: unknown };
   let settlePortalStartup!: (result: PortalStartup) => void;

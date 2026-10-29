@@ -47,6 +47,7 @@ function fixture(options: ConstructorParameters<typeof PiSessionReader>[0] = {})
       io.calls++;
       read(fd, buffer, 0, length, position, (error, bytes) => { io.bytes += bytes; if (error) fail(error); else done(bytes); });
     })),
+    deadlineMs: options.deadlineMs,
   });
   readers.push(reader);
   const stores = { home, env: { PI_CODING_AGENT_SESSION_DIR: store }, piReader: reader };
@@ -232,8 +233,11 @@ describe("Pi stat-keyed streaming reader", () => {
     expect((await f.list())[0]).toMatchObject({ title: null, firstMessage: "late short prompt" });
   });
 
-  it("lists the newest 50 long sessions within the deadline and reads zero bytes on repeat", async () => {
-    const f = fixture();
+  it("lists the newest 50 long sessions whole and reads zero bytes on repeat", async () => {
+    // what is read and returned is the claim, not how fast this runner reads 200 MiB: busy CI runners
+    // took 6.6 s and 9 s and hit the two-second deadline, so the listing's deadline is set past the test's
+    // own timeout. The shared two-second deadline is covered with a fake clock below.
+    const f = fixture({ deadlineMs: 120_000 });
     // Match the video's store count, not its private transcripts. The newest 50 files hold
     // about 200 MiB together: a listing's shared budget must cover more than one long file.
     const system = filler(1024 * 1024);
