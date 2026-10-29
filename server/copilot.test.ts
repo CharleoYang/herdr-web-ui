@@ -604,6 +604,31 @@ it.skipIf(process.platform !== "linux")("retries a failed Copilot process lookup
   }
 });
 
+it.skipIf(process.platform !== "linux")("reads a Copilot pane at the page size the chat asks for", async () => {
+  const own = await logFixture([]);
+  const snapshot = { panes: [{ pane_id: "sized", agent: "copilot", cwd: own.root }], agents: [] } as unknown as SessionSnapshot;
+  const snapshots = spyOn(herdr, "sessionSnapshot").mockResolvedValue(snapshot);
+  const rpc = spyOn(herdr, "herdrRpc").mockResolvedValue({ process_info: { foreground_processes: [] } });
+  const environment = spyOn(omo, "processEnviron").mockImplementation(() => own.environment);
+  const info = spyOn(herdr, "paneProcessInfo").mockImplementation(async (paneId) => ({ pane_id: paneId, foreground_processes: [{ pid: own.pid, name: "copilot", argv: ["copilot"] }] }));
+  const asked = (conversation: { turns: { role: string; parts: unknown[] }[] }) =>
+    conversation.turns.filter((turn) => turn.role === "user").map((turn) => turn.parts[0]);
+  try {
+    appendFileSync(own.log, register(session));
+    writeFileSync(join(own.root, "session-state", session, "events.jsonl"), start
+      + prompt("first") + answer("one") + prompt("second") + answer("two") + prompt("third") + answer("three"));
+    expect(asked(await paneConversation("sized"))).toHaveLength(3);
+    const newest = await paneConversation("sized", undefined, { prompts: 1 });
+    expect(asked(newest)).toEqual([{ kind: "text", text: "third" }]);
+    const older = await paneConversation("sized", undefined, { before: newest.cursor!, prompts: 1 });
+    expect(asked(older)).toEqual([{ kind: "text", text: "second" }]);
+  } finally {
+    info.mockRestore(); environment.mockRestore(); rpc.mockRestore(); snapshots.mockRestore();
+    forgetTranscriptState();
+    await own.close();
+  }
+});
+
 it.skipIf(process.platform !== "linux")("does not retain the old history when the session switches while a failed read rechecks its peers", async () => {
   const root = mkdtempSync(join(tmpdir(), "copilot-recheck-"));
   const transcript = (id: string) => join(root, "session-state", id, "events.jsonl");

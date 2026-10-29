@@ -35,6 +35,13 @@ const READ_FORMATS = new Set<ReadFormat>(["ansi", "text"]);
 const UINT32_MAX = 4294967295;
 
 /** The answer for a pane route, or null when the path is not one. */
+/** `prompts=` from the chat's history-page setting; a junk value is no value. */
+function pagePromptsOf(raw: string | null): number | undefined {
+  if (raw === null) return undefined;
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : undefined;
+}
+
 export async function handlePaneRequest(request: Request, url: URL, pathname: string, options: PaneStores): Promise<Response | null> {
 
   if (pathname === "/api/pane/rename") {
@@ -265,6 +272,7 @@ export async function handlePaneRequest(request: Request, url: URL, pathname: st
       since: url.searchParams.get("since") ?? undefined,
       from: url.searchParams.get("from") ?? undefined,
       history_id: url.searchParams.get("history_id") ?? undefined,
+      prompts: pagePromptsOf(url.searchParams.get("prompts")),
     };
     try {
       const { version, ...conversation } = await paneConversation(paneId, options.codexHome, page, options.devinDbPath, options.opencodeDb, options.hermesHome, options.grokHome, options.museData);

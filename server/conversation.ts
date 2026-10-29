@@ -89,10 +89,23 @@ export { TRANSCRIPT_WINDOW_BYTES, ConversationReadPending, ConversationUnavailab
 const PI_PAGE_CACHE_BYTES = 4 * 1024 * 1024;
 
 /** A page never holds more prompts than this (each opens a user + assistant pair). */
-const MAX_PAGE_PROMPTS = MAX_TURNS / 2;
+export const MAX_PAGE_PROMPTS = MAX_TURNS / 2;
+
+/**
+ * The page size a reader that asks for none gets: every reader before the chat's history setting
+ * keeps the page it always had. The chat asks for its own size (`prompts=`, the setting).
+ */
+export const DEFAULT_PAGE_PROMPTS = MAX_PAGE_PROMPTS;
 
 /** A single turn longer than a window still gets a page of its own, up to this. */
-const MAX_PAGE_BYTES = 4 * TRANSCRIPT_WINDOW_BYTES;
+const MAX_PAGE_BYTES = 16 * 1024 * 1024;
+
+/** The prompts a page keeps for this read: the reader's choice, inside the server's own bounds. */
+function pagePrompts(page: ConversationPage): number {
+  const asked = page.prompts;
+  if (typeof asked !== "number" || !Number.isFinite(asked)) return DEFAULT_PAGE_PROMPTS;
+  return Math.min(MAX_PAGE_PROMPTS, Math.max(1, Math.floor(asked)));
+}
 
 /** Settings recorded once at the start (an omp thinking level) sit before a tail window. */
 const METADATA_HEAD_BYTES = 64 * 1024;
@@ -134,7 +147,7 @@ function copilotPage(page: ConversationPage, prefix: string): ConversationPage {
     if (!cursor.startsWith(prefix)) throw new HistoryChanged();
     return cursor.slice(prefix.length);
   };
-  return { before: unbind(page.before), since: unbind(page.since), from: unbind(page.from) };
+  return { before: unbind(page.before), since: unbind(page.since), from: unbind(page.from), prompts: page.prompts };
 }
 
 function bindCopilotAnswer(answer: RecognizedConversation, prefix: string): RecognizedConversation {
@@ -423,12 +436,12 @@ function* applyHistoryBoundarySteps(path: string, stream: TranscriptStream, sour
  * every append, so it never does: with no turn start in its window it starts
  * mid-turn, at a whole line.
  */
-function pageBefore(stream: TranscriptStream, source: StreamSource, to: number, { floor = stream.floor, widen }: { floor?: number; widen: boolean }): { start: number; bytes: Buffer } {
+function pageBefore(stream: TranscriptStream, source: StreamSource, to: number, { floor = stream.floor, widen, prompts }: { floor?: number; widen: boolean; prompts: number }): { start: number; bytes: Buffer } {
   let from = Math.max(floor, to - TRANSCRIPT_WINDOW_BYTES);
   let bytes = readStream(stream, from, to);
   for (;;) {
     const starts = stream.promptStarts ? stream.promptStarts.filter((at) => at >= from && at < to).map((at) => at - from) : turnStarts(bytes, source, undefined, turnBlobs(stream, source));
-    const keep = starts.length > MAX_PAGE_PROMPTS ? starts[starts.length - MAX_PAGE_PROMPTS] : from === floor ? 0 : starts[0];
+    const keep = starts.length > prompts ? starts[starts.length - prompts] : from === floor ? 0 : starts[0];
     if (keep !== undefined) return { start: from + keep, bytes: bytes.subarray(keep) };
     if (!widen || to - from >= MAX_PAGE_BYTES) {
       const firstLine = bytes.indexOf(0x0a) + 1;
@@ -537,11 +550,11 @@ function rememberPage<T extends { source: RecognizedConversation["source"] }>(ma
 }
 
 /** The newest page's start and every turn start in it (pageBefore without widening), or null when it starts mid-turn. */
-function newestPage(path: string, stream: TranscriptStream, source: StreamSource): { start: number; starts: number[] } | null {
+function newestPage(path: string, stream: TranscriptStream, source: StreamSource, prompts: number): { start: number; starts: number[] } | null {
   const from = Math.max(stream.floor, stream.length - TRANSCRIPT_WINDOW_BYTES);
   if (stream.promptStarts) {
     const starts = stream.promptStarts.filter((at) => at >= from);
-    const start = starts.length > MAX_PAGE_PROMPTS ? starts[starts.length - MAX_PAGE_PROMPTS] : from === stream.floor ? stream.floor : starts[0];
+    const start = starts.length > prompts ? starts[starts.length - prompts] : from === stream.floor ? stream.floor : starts[0];
     return start === undefined ? null : { start, starts };
   }
   let scan = liveScans.get(path);
@@ -566,7 +579,7 @@ function newestPage(path: string, stream: TranscriptStream, source: StreamSource
   if (stale !== 0) scan.starts.splice(0, stale === -1 ? scan.starts.length : stale);
   remember(liveScans, path, scan, 32);
   const starts = pending.length > 0 ? [...scan.starts, ...pending] : scan.starts;
-  const start = starts.length > MAX_PAGE_PROMPTS ? starts[starts.length - MAX_PAGE_PROMPTS] : from === stream.floor ? stream.floor : starts[0];
+  const start = starts.length > prompts ? starts[starts.length - prompts] : from === stream.floor ? stream.floor : starts[0];
   return start === undefined ? null : { start, starts };
 }
 
@@ -1589,7 +1602,7 @@ export async function paneConversation(paneId: string, codexHome?: string, page:
     if (answer.kind === "history_changed") throw new HistoryChanged();
     if (answer.kind === "unavailable") throw new ConversationUnavailable(answer.reason);
     const { kind: _kind, signature, ...conversation } = answer;
-    const key = `opencode\0${resolved.path}\0${resolved.session}\0${page.before ?? ""}\0${page.since ?? ""}\0${page.from ?? ""}`;
+    const key = `opencode\0${resolved.path}\0${resolved.session}\0${page.before ?? ""}\0${page.since ?? ""}\0${page.from ?? ""}\0${page.prompts ?? ""}`;
     return { source: resolved.source, ...conversation, version: answerVersion(key, signature) };
   }
   if (resolved.source === "hermes-transcript") {
@@ -1896,7 +1909,10 @@ function transcriptPageRead(source: StreamSource, path: string, page: Conversati
   }
   // an older page never changes while its file and the rollouts before it stay the same
   // (the stream's id names both); the newest one changes with every append
-  const key = page.before !== undefined ? `${path}\0before:${page.before}:${page.since ?? ""}` : `${path}\0from:${page.from ?? ""}`;
+  // the page size decides which bytes a page starts at: it belongs in the key
+  const key = page.before !== undefined
+    ? `${path}\0before:${page.before}:${page.since ?? ""}:${pagePrompts(page)}`
+    : `${path}\0from:${page.from ?? ""}:${pagePrompts(page)}`;
   // the catalogs a pi window is read from are the pane's: another pane's answer is not this one's
   const catalogs = piAgentDir === undefined ? "" : `:${piAgentDir}`;
   const signature = page.before !== undefined ? `${stream.id}${catalogs}` : `${stream.id}:${stream.length}:${stat.size}:${stat.mtimeMs}:${stat.ctimeMs}${catalogs}`;
@@ -1917,12 +1933,12 @@ function transcriptPageRead(source: StreamSource, path: string, page: Conversati
       const before = parseCursor(stream, page.before);
       const floor = page.since === undefined ? stream.floor : parseCursor(stream, page.since);
       if (floor > before) throw new HistoryChanged();
-      const older = before === floor ? { start: floor, bytes: Buffer.alloc(0) } : pageBefore(stream, source, before, { floor, widen: true });
+      const older = before === floor ? { start: floor, bytes: Buffer.alloc(0) } : pageBefore(stream, source, before, { floor, widen: true, prompts: pagePrompts(page) });
       start = older.start;
       text = older.bytes.toString("utf8");
     } else {
       const held = page.from === undefined ? null : parseCursor(stream, page.from);
-      const newest = newestPage(path, stream, source);
+      const newest = newestPage(path, stream, source, pagePrompts(page));
       // A chat that shows older pages holds the start of its newest turns and keeps
       // every turn after it while they are inside the newest page. Once the newest
       // page has moved past it, the chat gets the newest page and fetches the turns
@@ -1933,7 +1949,7 @@ function transcriptPageRead(source: StreamSource, path: string, page: Conversati
         text = "";
       } else {
         // no turn starts in the window: the page begins mid-turn, read whole as before
-        const whole = pageBefore(stream, source, stream.length, { widen: false });
+        const whole = pageBefore(stream, source, stream.length, { widen: false, prompts: pagePrompts(page) });
         start = held !== null && held >= whole.start ? held : whole.start;
         text = whole.bytes.subarray(start - whole.start).toString("utf8");
       }

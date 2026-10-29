@@ -86,4 +86,8 @@ export function answerVersion(key: string, signature: string): string {
  * while it is still inside the newest page); with `before`, the page ending there,
  * never reaching back past `since`.
  */
-export type ConversationPage = { before?: string; since?: string; from?: string; history_id?: string };
+export type ConversationPage = {
+  before?: string; since?: string; from?: string; history_id?: string;
+  /** Prompts per page, when the reader asks for a page size (bounded by the server's own cap). */
+  prompts?: number;
+};
