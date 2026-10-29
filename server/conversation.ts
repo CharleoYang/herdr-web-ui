@@ -66,7 +66,7 @@ import { withinRetentionBudget } from "./retention-budget.ts";
 import { forgetAllPiIndexes, forgetPiIndex, piAbandonedTurns, piBranchRecords, piBranchSegments } from "./pi-tree.ts";
 import { copilotOffsetOutput, copilotOutput, copilotRootRecord, parseCopilotTranscript } from "./copilot.ts";
 import { copilotExplicitResume, copilotHandoffSession, copilotProcessSession, copilotTranscriptFile, copilotUnwrittenSession, openCopilotFile } from "./copilot-store.ts";
-import { parseConversationMetadata } from "./conversation-metadata.ts";
+import { claudeSetting, parseConversationMetadata } from "./conversation-metadata.ts";
 import { answerVersion, ConversationNotStarted, ConversationReadPending, ConversationUnavailable, type ConversationPage, HistoryChanged, type RecognizedConversation, type StreamSource, TRANSCRIPT_WINDOW_BYTES } from "./conversation-shared.ts";
 import { forgetHermesTranscriptState, hermesConversationPage, hermesToolOutput, hermesTranscriptForPane } from "./hermes.ts";
 
@@ -292,7 +292,42 @@ function readStream(stream: TranscriptStream, from: number, to: number): Buffer 
 const SETTING_TYPES = ['"model_change"', '"thinking_level_change"'];
 const COPILOT_SETTING_TYPES = ['"session.model_change"', '"session.resume"'];
 type SettingType = "model_change" | "thinking_level_change" | "copilot_model" | "copilot_effort";
-const clearScans = new Map<string, { id: string; scanned: number; floor: number; tail: string; settings: Partial<Record<SettingType, { offset: number; end: number; line: string }>>; branch?: ClaudeBranch }>();
+/**
+ * Claude names its model and effort on every answer, and a /rewind can leave any of them off the
+ * branch, so each field keeps every record that set it since the last clear (where it lies, as
+ * `branch.answers` does) and a small line that sets the same value again, shared while it repeats.
+ */
+type ClaudeSettings = Record<"model" | "effort", { line: string; start: number; end: number }[]>;
+const clearScans = new Map<string, { id: string; scanned: number; floor: number; tail: string; settings: Partial<Record<SettingType, { offset: number; end: number; line: string }>>; branch?: ClaudeBranch; claude?: ClaudeSettings }>();
+
+function keepClaudeSetting(settings: ClaudeSettings, entry: unknown, start: number, end: number): void {
+  const set = claudeSetting(entry);
+  const keep = (field: keyof ClaudeSettings, line: string): void => {
+    const last = settings[field].at(-1);
+    // a repeated value keeps one string, not one per record
+    settings[field].push({ line: last?.line === line ? last.line : line, start, end });
+  };
+  if (set.model !== undefined) keep("model", JSON.stringify({ type: "assistant", message: { model: set.model } }));
+  if (set.effort !== undefined) keep("effort", JSON.stringify({ type: "assistant", effort: set.effort }));
+}
+
+/** the ranges in order, those that overlap or adjoin made one */
+function mergedRanges(ranges: readonly [number, number][]): [number, number][] {
+  const merged: [number, number][] = [];
+  for (const [low, high] of [...ranges].sort((a, b) => a[0] - b[0])) {
+    const last = merged.at(-1);
+    if (last !== undefined && low <= last[1]) last[1] = Math.max(last[1], high);
+    else merged.push([low, high]);
+  }
+  return merged;
+}
+
+/** how many of the ascending values lie before `bound` */
+function countBefore<T>(items: readonly T[], value: (item: T) => number, bound: number): number {
+  let low = 0, high = items.length;
+  while (low < high) { const middle = (low + high) >> 1; if (value(items[middle]!) < bound) low = middle + 1; else high = middle; }
+  return low;
+}
 /** a Claude record that holds a picture, up to the largest one the chat shows, is followed whole when it crosses a window */
 const CLAUDE_CARRY_BYTES = Math.ceil(MAX_IMAGE_BYTES * 4 / 3) + 1024 * 1024;
 function applyHistoryBoundary(path: string, stream: TranscriptStream, source: RecognizedConversation["source"]): void {
@@ -307,7 +342,7 @@ function* applyHistoryBoundarySteps(path: string, stream: TranscriptStream, sour
   if (source === "codex-transcript" || source === "grok-transcript" || source === "agy-transcript" || source === "muse-transcript" || source === "letta-transcript") return;
   let scan = clearScans.get(path);
   if (!scan || scan.id !== stream.id || scan.scanned > stream.length || bytesBefore(stream, scan.scanned) !== scan.tail) {
-    scan = { id: stream.id, scanned: 0, floor: 0, tail: "", settings: {}, ...(source === "claude-transcript" ? { branch: { last: null, ends: new Map(), answers: [], forks: [] } } : {}) };
+    scan = { id: stream.id, scanned: 0, floor: 0, tail: "", settings: {}, ...(source === "claude-transcript" ? { branch: { last: null, ends: new Map(), answers: [], forks: [] }, claude: { model: [], effort: [] } } : {}) };
   } else if (apart) scan = structuredClone(scan);
   const branch = scan.branch;
   let position = scan.scanned;
@@ -324,7 +359,10 @@ function* applyHistoryBoundarySteps(path: string, stream: TranscriptStream, sour
     let offset = 0;
     for (let newline = bytes.indexOf(0x0a); newline !== -1; newline = bytes.indexOf(0x0a, offset)) {
       const line = bytes.subarray(offset, newline);
-      if (!skipping && isClear(line)) scan.floor = base + offset;
+      if (!skipping && isClear(line)) {
+        scan.floor = base + offset;
+        if (scan.claude) scan.claude = { model: [], effort: [] };
+      }
       else if (!skipping && source !== "claude-transcript" && (source === "copilot-transcript" ? COPILOT_SETTING_TYPES : SETTING_TYPES).some((type) => line.includes(type))) {
         try {
           const entry: unknown = JSON.parse(line.toString("utf8"));
@@ -347,7 +385,10 @@ function* applyHistoryBoundarySteps(path: string, stream: TranscriptStream, sour
       }
       if (branch) {
         if (skipping) branch.last = null;
-        else followClaudeBranch(branch, line, base + offset, base + newline + 1, scan.floor);
+        else {
+          const entry = followClaudeBranch(branch, line, base + offset, base + newline + 1, scan.floor);
+          if (entry !== undefined && scan.claude) keepClaudeSetting(scan.claude, entry, base + offset, base + newline);
+        }
       }
       skipping = false;
       offset = newline + 1;
@@ -691,13 +732,27 @@ function incrementalLiveTurn(path: string, stream: TranscriptStream, source: Inc
 function metadataHead(path: string, stream: TranscriptStream, source: RecognizedConversation["source"], start: number): string {
   if (source === "codex-transcript") return readRange(path, 0, METADATA_HEAD_BYTES);
   const end = Math.min(start, stream.floor + METADATA_HEAD_BYTES);
-  const later = Object.values(clearScans.get(path)?.settings ?? {})
+  const scan = clearScans.get(path);
+  const later = Object.values(scan?.settings ?? {})
     // a record the head cuts in two is read whole here
     .filter((setting) => setting.end > end && setting.offset < start)
     .sort((a, b) => a.offset - b.offset)
     // One control may update both fields; replay the native line once.
     .filter((setting, index, settings) => index === 0 || setting.offset !== settings[index - 1]!.offset)
     .map((setting) => setting.line);
+  // Claude: each field's latest record before the page that is still on the branch, when the head does
+  // not hold it whole (a record from before a clear ends inside the head, which starts at the clear)
+  const hidden = mergedRanges(stream.hidden ?? []);
+  for (const records of Object.values(scan?.claude ?? {})) {
+    // records ascend by start: a hidden range is passed in one step, not one record at a time
+    for (let index = countBefore(records, (setting) => setting.start, start) - 1; index >= 0;) {
+      const setting = records[index]!;
+      const range = hidden[countBefore(hidden, ([low]) => low, setting.start + 1) - 1];
+      if (range !== undefined && range[1] >= setting.end) { index = countBefore(records, (other) => other.start, range[0]) - 1; continue; }
+      if (setting.end > end) later.push(setting.line);
+      break;
+    }
+  }
   return [readStream(stream, stream.floor, end).toString("utf8"), ...later].join("\n");
 }
 

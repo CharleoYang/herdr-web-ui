@@ -57,13 +57,18 @@ function claudeCommandEchoRecord(entry: { type?: unknown; subtype?: unknown; isM
 /** a record longer than this, its pictures' bytes left out, is not parsed for its links: it leaves the chain unknown */
 const CLAUDE_CHAIN_LINE_BYTES = 1024 * 1024;
 
-export function followClaudeBranch(branch: ClaudeBranch, line: Buffer, start: number, end: number, floor: number): void {
-  if (!line.includes('"uuid"')) return;
+/** follows the branch over one record; the record as parsed, when it was (the scan reads its settings from it) */
+export function followClaudeBranch(branch: ClaudeBranch, line: Buffer, start: number, end: number, floor: number): unknown {
+  if (!line.includes('"uuid"')) return undefined;
   const text = line.length > CLAUDE_CHAIN_LINE_BYTES ? withoutPictureBytes(line.toString("utf8")) : line.toString("utf8");
-  if (text.length > CLAUDE_CHAIN_LINE_BYTES) { branch.last = null; return; }
+  if (text.length > CLAUDE_CHAIN_LINE_BYTES) {
+    // too long to follow, but the model and effort it names still count
+    branch.last = null;
+    try { return JSON.parse(text) as unknown; } catch { return undefined; }
+  }
   let entry: TranscriptEntry & { isSidechain?: unknown; logicalParentUuid?: unknown };
-  try { entry = JSON.parse(text) as typeof entry; } catch { branch.last = null; return; }
-  if (entry === null || typeof entry !== "object" || typeof entry.uuid !== "string" || entry.isSidechain === true) return;
+  try { entry = JSON.parse(text) as typeof entry; } catch { branch.last = null; return undefined; }
+  if (entry === null || typeof entry !== "object" || typeof entry.uuid !== "string" || entry.isSidechain === true) return entry;
   // a compaction's boundary starts a chain of its own, and names the record it continues
   const parent = entry.parentUuid === null ? typeof entry.logicalParentUuid === "string" ? entry.logicalParentUuid : null
     : typeof entry.parentUuid === "string" ? entry.parentUuid : undefined;
@@ -83,6 +88,7 @@ export function followClaudeBranch(branch: ClaudeBranch, line: Buffer, start: nu
   if (entry.type === "assistant") branch.answers.push(start);
   branch.ends.set(entry.uuid, end);
   branch.last = entry.uuid;
+  return entry;
 }
 
 /** Bytes that every line opening a turn contains: a cheap filter before JSON.parse. */
