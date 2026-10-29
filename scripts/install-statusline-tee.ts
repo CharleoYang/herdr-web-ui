@@ -28,6 +28,8 @@ const KEY = "statusLine";
 const WRAPPER = "herdr-statusline/statusline-tee.sh";
 /** the only files the installer writes in its directory, and so the only ones --remove deletes */
 const OWN_FILES = ["statusline-tee.sh", "statusline-capture.ts", "install.json"] as const;
+/** what a write of one of them cut short (a killed install) leaves behind; see writeAtomically */
+const LEFTOVER = /^\.(?:statusline-tee\.sh|statusline-capture\.ts|install\.json)\.\d+\.[0-9a-f-]{36}\.tmp$/;
 
 interface InstallRecord {
   /** settings.json as it was before the install, and as the install wrote it */
@@ -47,6 +49,10 @@ function runsWrapper(command: string, tee: string): boolean {
   const path = command.startsWith("'") && command.endsWith("'") ? command.slice(1, -1).replaceAll(`'\\''`, "'") : command;
   try { return realpathSync(path) === realpathSync(tee); } catch { return false; }
 }
+
+/** Whether `command` names a wrapper of this installer: any copy by name, or this one however spelled. */
+const runsAWrapper = (command: string, tee: string): boolean =>
+  command.includes(WRAPPER) || command.split(/\s+/).some((word) => word !== "" && runsWrapper(word, tee));
 
 function locations() {
   const configured = process.env["CLAUDE_CONFIG_DIR"]?.trim();
@@ -165,6 +171,7 @@ function checkOwnDirectory(own: string): "missing" | "owned" {
   if (!entry.isDirectory()) throw new Error(`${own} is not a directory this installer made; move it away first`);
   for (const name of readdirSync(own)) {
     const file = lstatSync(join(own, name));
+    if (LEFTOVER.test(name) && file.isFile()) { rmSync(join(own, name)); continue; }
     if (!(OWN_FILES as readonly string[]).includes(name) || !file.isFile()) throw new Error(`${own} holds ${name}, which this installer did not write; move it away first`);
   }
   const tee = join(own, "statusline-tee.sh");
@@ -192,7 +199,8 @@ function wrapper(previous: string | null, capture: string): string {
     "# The x keeps the payload's trailing newlines, which $( ) would strip.",
     "payload=$(cat; printf x)",
     "payload=${payload%x}",
-    "# The capture runs beside the status line, so the line is not held up by it.",
+    "# The capture runs beside the status line, so a render takes the longer of the two rather than",
+    "# both; it is waited for so it is not cut off with the status line's own processes.",
     `(umask 077; printf '%s' "$payload" | ${shellQuote(process.execPath)} ${shellQuote(capture)}) >/dev/null 2>&1 &`,
   ];
   if (previous === null) lines.push("wait");
@@ -205,7 +213,7 @@ function install(): string {
   const { text, value } = readSettings(where.settings);
   const current = value[KEY];
   const command = commandOf(current);
-  if (command !== null && command.includes(WRAPPER)) {
+  if (command !== null && runsAWrapper(command, where.tee)) {
     if (existsSync(where.record) && runsWrapper(command, where.tee)) return `already installed: ${where.settings} runs ${command}`;
     throw new Error(`${where.settings} already runs a status-line wrapper of this installer (${command}): run --remove with the CLAUDE_CONFIG_DIR it was installed with, or set statusLine yourself`);
   }
@@ -237,7 +245,7 @@ function remove(): string {
   if (text === record.installed) {
     writeSettings(where.settings, record.original);
     outcome = `put ${where.settings} back as it was`;
-  } else if (commandOf(value[KEY])?.includes(WRAPPER)) {
+  } else if (runsAWrapper(commandOf(value[KEY]) ?? "", where.tee)) {
     writeSettings(where.settings, withStatusLine(text, record.statusLine));
     outcome = `put back the status line in ${where.settings}; its other changes since the install stay`;
   } else {

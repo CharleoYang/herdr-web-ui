@@ -131,6 +131,9 @@ describe("statusline installer and capture", () => {
     writeFileSync(settings(real), JSON.stringify({ statusLine: { type: "command", command: `sh ${settingsCommand(real)}` } }));
     const wrapped = readFileSync(settings(real), "utf8");
     expect(run([], real).exitCode).toBe(1);
+    writeFileSync(settings(real), JSON.stringify({ statusLine: { type: "command", command: `sh ${join(real, "herdr-statusline")}//statusline-tee.sh` } }));
+    expect(run([], real).exitCode).toBe(1);
+    writeFileSync(settings(real), wrapped);
     writeFileSync(settings(), JSON.stringify({ statusLine: { type: "command", command: settingsCommand(real) } }));
     const other = readFileSync(settings(), "utf8");
     expect(run([]).exitCode).toBe(1);
@@ -168,6 +171,15 @@ describe("statusline installer and capture", () => {
     expect(readFileSync(settings(), "utf8")).toBe(before);
     expect(readFileSync(join(own(), "user-notes.txt"), "utf8")).toBe("keep");
     expect(existsSync(tee())).toBe(false);
+  });
+
+  it("clears what a killed install left behind instead of refusing the next one", () => {
+    mkdirSync(own());
+    const leftover = join(own(), ".install.json.4242.0b0e7f5c-8a1d-4c3e-9f2a-7d6b5c4a3e21.tmp");
+    writeFileSync(leftover, "{");
+    install();
+    expect(existsSync(leftover)).toBe(false);
+    expect(draw("{}")).toBe("{}");
   });
 
   it("keeps settings.json whole when a write fails, so a later --remove still recovers it", () => {
