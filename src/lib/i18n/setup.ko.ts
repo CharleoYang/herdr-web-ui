@@ -17,6 +17,8 @@ export const SETUP_KO: Record<string, string> = {
   "{agent} is ready": "{agent} 준비 완료",
   "Version {version}": "버전 {version}",
   "It did not finish": "끝나지 않았어요",
+  "{agent} does not start": "{agent}이(가) 실행되지 않아요",
+  "It is on this PC, but it does not start. Install it again.": "이 PC에 있지만 실행되지 않아요. 다시 설치해 주세요.",
   "Skip": "건너뛰기",
   "I've signed in": "로그인했어요",
   "Start {agent}": "{agent} 시작",

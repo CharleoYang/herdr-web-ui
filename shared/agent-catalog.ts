@@ -117,7 +117,10 @@ export interface AgentInstallState {
   /** false: found only in the installer's folder (detect.install_dirs), not on PATH: a new terminal finds it */
   on_path: boolean | null;
   version: string | null;
-  /** why an installed agent has no version: its flag ran too long, printed none, or did not start */
+  /**
+   * why an installed agent has no version: its flag ran too long (timeout), succeeded without one on
+   * stdout (unreadable), or did not start or exited with an error (failed: a broken install)
+   */
   version_error: "timeout" | "unreadable" | "failed" | null;
   meets_min_version: boolean | null;
 }
@@ -147,6 +150,15 @@ export interface AgentCatalogResponse {
 export function catalogRow({ install, no_install, ...entry }: AgentCatalogEntry, platform: CatalogPlatform | null, state: AgentInstallState): AgentCatalogRow {
   if (platform === null) return { ...entry, install: null, no_install: "Ovis has no install commands for this operating system.", state };
   return { ...entry, install: install[platform], no_install: install[platform] === null ? no_install[platform] ?? null : null, state };
+}
+
+/**
+ * Whether the agent is there and runs: found, and its version flag neither failed nor hung. One whose
+ * version cannot be read still runs; one whose flag fails (a wrapper's missing target) does not, and
+ * is never offered as ready.
+ */
+export function agentRuns(state: AgentInstallState): boolean {
+  return state.installed === true && state.version_error !== "failed" && state.version_error !== "timeout";
 }
 
 /** The catalog platform of a Node `process.platform`. */

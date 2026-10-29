@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { delimiter, join } from "node:path";
 
 import { AGENT_CATALOG, type AgentCatalogEntry } from "../shared/agent-catalog.ts";
 import { AgentDetector, catalogLocator, LOGIN_PATH_KEPT_MS, runVersion, TIMEOUT_KEPT_MS, versionSpawn } from "./agent-catalog-detect.ts";
@@ -80,6 +80,31 @@ describe.skipIf(process.platform === "win32")("AgentDetector", () => {
     expect(await detector.state(entry("omp"), "linux")).toEqual({ installed: true, binary: "omp", on_path: true, version: null, version_error: "unreadable", meets_min_version: null });
   });
 
+  it("never reads a version out of a flag that fails, or out of what it prints as an error", async () => {
+    // a wrapper whose target is gone, as a removed nvm Node leaves one: the shell's error names the
+    // missing path, Node's version and all, and exits 127
+    stub("opencode", `exec '${join(bin, "missing", "node", "v22.17.1", "bin", "opencode")}' "$@"`);
+    // a flag that prints its version only on stderr, and succeeds
+    stub("pi", "echo 'pi 1.2.3' >&2");
+    const detector = new AgentDetector({ home: emptyHome, locate });
+    expect(await detector.state(entry("opencode"), "linux")).toEqual({ installed: true, binary: "opencode", on_path: true, version: null, version_error: "failed", meets_min_version: null });
+    expect(await detector.state(entry("pi"), "linux")).toEqual({ installed: true, binary: "pi", on_path: true, version: null, version_error: "unreadable", meets_min_version: null });
+  });
+
+  it("asks a failed version flag again after a while, so an install repaired behind an unchanged wrapper shows", async () => {
+    let now = 1_000;
+    const target = join(bin, "letta.target");
+    stub("letta", `[ -f '${target}' ] && exec cat '${target}'\necho "${target}: No such file or directory" >&2\nexit 127`);
+    const detector = new AgentDetector({ home: emptyHome, locate, now: () => now });
+    expect(await detector.state(entry("letta"), "linux")).toMatchObject({ version: null, version_error: "failed" });
+    await detector.state(entry("letta"), "linux");
+    expect(runsOf("letta")).toBe(1);
+    writeFileSync(target, "letta 0.5.0\n");
+    now += TIMEOUT_KEPT_MS;
+    expect(await detector.state(entry("letta"), "linux")).toMatchObject({ version: "0.5.0", version_error: null });
+    expect(runsOf("letta")).toBe(2);
+  });
+
   it("kills a version flag that hangs, and asks again only after a while", async () => {
     let now = 1_000;
     const detector = new AgentDetector({ home: emptyHome, locate, timeoutMs: 300, now: () => now });
@@ -117,6 +142,27 @@ describe.skipIf(process.platform === "win32")("AgentDetector", () => {
     expect(await catalogLocator({ probe: null, servicePath: () => bin })("claude")).toBe(join(bin, "claude"));
     const detector = new AgentDetector({ home: emptyHome, locate: locateWithLogin });
     expect(await detector.state(entry("claude"), "linux")).toMatchObject({ installed: true, binary: "claude" });
+  });
+
+  it("runs a version flag with the PATH its agent was found on, so a script's interpreter there is found", async () => {
+    const agents = mkdtempSync(join(tmpdir(), "ovis-catalog-login-bin-"));
+    const runtime = mkdtempSync(join(tmpdir(), "ovis-catalog-login-runtime-"));
+    const script = (path: string, body: string) => { writeFileSync(path, body); chmodSync(path, 0o755); };
+    try {
+      // an interpreter only the login shell's PATH has, as nvm's node is for a server run as a service,
+      // and an npm-style agent run by it through env
+      script(join(runtime, "ovis-fake-node"), "#!/bin/sh\necho 'cmd 1.88.2'\n");
+      script(join(agents, "cmd"), "#!/usr/bin/env ovis-fake-node\n");
+      const locateWithLogin = catalogLocator({ probe: async () => ({ path: `${agents}${delimiter}${runtime}` }), servicePath: () => "/usr/bin/nonexistent" });
+      expect(await new AgentDetector({ home: emptyHome, locate: locateWithLogin }).state(entry("cmd"), "linux")).toMatchObject({ installed: true, version: "1.88.2", version_error: null });
+      // an interpreter beside the agent, as npm's global folder has node: found whatever the PATH
+      script(join(agents, "ovis-fake-node"), "#!/bin/sh\necho 'cmd 1.88.3'\n");
+      script(join(agents, "letta"), "#!/usr/bin/env ovis-fake-node\n");
+      expect(await new AgentDetector({ home: emptyHome, locate: async (binary) => binary === "letta" ? join(agents, "letta") : null }).state(entry("letta"), "linux")).toMatchObject({ installed: true, version_error: null });
+    } finally {
+      rmSync(agents, { recursive: true, force: true });
+      rmSync(runtime, { recursive: true, force: true });
+    }
   });
 
   it("finds an agent its installer put in its own folder, off PATH, and says so", async () => {
@@ -185,7 +231,7 @@ describe.skipIf(process.platform === "win32")("AgentDetector", () => {
     const started = performance.now();
     const run = await runVersion(join(bin, "leaver"), ["--version"], 5_000);
     expect(run.timedOut).toBe(false);
-    expect(run.output).toContain("leaver 1.2.3");
+    expect(run.stdout).toContain("leaver 1.2.3");
     expect(performance.now() - started).toBeLessThan(2_000);
     expect(await ends(Number(readFileSync(pidFile, "utf8").trim()))).toBe(true);
   });
@@ -194,8 +240,8 @@ describe.skipIf(process.platform === "win32")("AgentDetector", () => {
     stub("chatty", "yes 1.2.3 | head -c 1000000");
     const run = await runVersion(join(bin, "chatty"), ["--version"], 5_000);
     expect(run.timedOut).toBe(false);
-    expect(run.output.length).toBeLessThan(10_000);
-    expect(run.output.startsWith("1.2.3")).toBe(true);
+    expect(run.stdout.length).toBeLessThan(10_000);
+    expect(run.stdout.startsWith("1.2.3")).toBe(true);
   });
 });
 
@@ -223,7 +269,7 @@ describe.skipIf(process.platform !== "win32")("runVersion on Windows", () => {
       // %~1: the first argument as the shim got it, cmd's quotes taken off (an npm shim hands %* to node, which does the same)
       writeFileSync(shim, "@echo off\r\necho agent 4.5.6 %~1\r\n");
       const run = await runVersion(shim, ["--version"], 10_000);
-      expect([run.timedOut, run.exitCode, run.output.trim()]).toEqual([false, 0, "agent 4.5.6 --version"]);
+      expect([run.timedOut, run.exitCode, run.stdout.trim()]).toEqual([false, 0, "agent 4.5.6 --version"]);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
