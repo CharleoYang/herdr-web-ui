@@ -1131,6 +1131,29 @@ describe("connection-owned pending input", () => {
     expect(f.bytes()).toBe("");
   }, 30_000);
 
+  it("sends over Claude's grey suggestion while the viewport is scrolled into the history", async () => {
+    const f = await setup("grey-scrolled");
+    // the recording's width: its rules span 119 of 120 columns, and would wrap at the helper's 100
+    const from = f.socket.seen.length;
+    f.socket.send({ type: "attach", pane_id: f.pane, cols: 120, rows: 30 });
+    await f.socket.wait((frame) => frame.type === "input-ready" && frame.pane_id === f.pane && frame.ready !== false, from);
+    // recorded from Claude Code 2.1.311 after a turn: the live box shows its suggestion "do it", dim, under its own cursor
+    const recorded = readFileSync(join(import.meta.dir, "fixtures", "claude-suggestion-2.1.311-119.ansi"), "utf8");
+    const filler = Array.from({ length: 60 }, (_, index) => `  output line ${index + 1}`).join("\n");
+    await f.showScreen(`${filler}\n${recorded}`, "Restart to update");
+    await f.state("idle");
+    // the user scrolled the terminal up: herdr's viewport, shared by every client, no longer shows the box
+    const top = (await paneScrollInfo(f.pane))!.max_offset_from_bottom;
+    expect(top).toBeGreaterThan(0);
+    await herdrRpc("pane.scroll", { pane_id: f.pane, offset_from_bottom: top });
+    expect((await paneRead({ paneId: f.pane, source: "visible", format: "text" })).text).not.toContain("do it");
+    f.socket.send({ type: "submit", id: 1, pane_id: f.pane, text: "next message", payload: "next message" });
+    expect(await f.socket.result(1)).toMatchObject({ ok: true });
+    // the message alone, then its Enter: nothing of the suggestion mixed in
+    await f.waitBytes(`${paste("next message")}\r`);
+    expect(f.bytes()).toBe(`${paste("next message")}\r`);
+  }, 30_000);
+
   it("answers `restored` from the live box only: an older box in a scrolled viewport is no restored copy", async () => {
     const f = await setup("restored-scrolled");
     const rule = "\u2500".repeat(60);
