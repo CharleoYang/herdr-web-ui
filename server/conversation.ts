@@ -60,6 +60,8 @@ import { AgyUnavailable, agyCatalog, agyToolOutput, forgetAgyState, parseAgyTran
 import { resolveAgyStore, sameAgyStore, type AgyStore } from "./agy-store.ts";
 import { museSession, museToolOutput, MuseUnavailable, parseMuseTranscript } from "./muse.ts";
 import { resolveMuseSession } from "./muse-store.ts";
+import { LettaUnavailable, lettaToolOutput, parseLettaTranscript } from "./letta.ts";
+import { resolveLettaTranscript } from "./letta-store.ts";
 import { withinRetentionBudget } from "./retention-budget.ts";
 import { forgetAllPiIndexes, forgetPiIndex, piAbandonedTurns, piBranchRecords, piBranchSegments } from "./pi-tree.ts";
 import { copilotOffsetOutput, copilotOutput, copilotRootRecord, parseCopilotTranscript } from "./copilot.ts";
@@ -302,7 +304,7 @@ function applyHistoryBoundary(path: string, stream: TranscriptStream, source: Re
  * what is kept and puts it back when it ends, so a page read between its steps never sees half of it.
  */
 function* applyHistoryBoundarySteps(path: string, stream: TranscriptStream, source: RecognizedConversation["source"], apart: boolean): Steps<void> {
-  if (source === "codex-transcript" || source === "grok-transcript" || source === "agy-transcript" || source === "muse-transcript") return;
+  if (source === "codex-transcript" || source === "grok-transcript" || source === "agy-transcript" || source === "muse-transcript" || source === "letta-transcript") return;
   let scan = clearScans.get(path);
   if (!scan || scan.id !== stream.id || scan.scanned > stream.length || bytesBefore(stream, scan.scanned) !== scan.tail) {
     scan = { id: stream.id, scanned: 0, floor: 0, tail: "", settings: {}, ...(source === "claude-transcript" ? { branch: { last: null, ends: new Map(), answers: [], forks: [] } } : {}) };
@@ -552,6 +554,12 @@ function parseTurns(source: RecognizedConversation["source"], path: string, text
   if (source === "muse-transcript") {
     try { return parseMuseTranscript(text, museSession(path)); } catch (error) {
       if (error instanceof MuseUnavailable) throw new ConversationUnavailable("transcript_missing");
+      throw error;
+    }
+  }
+  if (source === "letta-transcript") {
+    try { return parseLettaTranscript(text); } catch (error) {
+      if (error instanceof LettaUnavailable) throw new ConversationUnavailable("transcript_missing");
       throw error;
     }
   }
@@ -1274,8 +1282,8 @@ async function resolveTranscript(pane: HerdrPane, cwd: string, codexHome?: strin
     );
     if (running || await gjcPidUnderShell(info?.process_info?.shell_pid)) agent = "gjc";
   }
-  // a Muse pane's processes are asked for once, for omo and for its session lock
-  if (agent === "muse" && known === undefined) known = (await paneProcessInfo(paneId).catch(() => undefined)) ?? null;
+  // a Muse or Letta pane's processes are asked for once, for omo and for its own binding
+  if ((agent === "muse" || agent === "letta") && known === undefined) known = (await paneProcessInfo(paneId).catch(() => undefined)) ?? null;
   if (await paneRunsOmo(paneId, known)) {
     return { source: "omo-transcript", path: await omoTranscriptPath(paneId, cwd, panes) };
   }
@@ -1293,6 +1301,13 @@ async function resolveTranscript(pane: HerdrPane, cwd: string, codexHome?: strin
       const path = await resolveMuseSession(pane, museData, known);
       if (path === null) throw new ConversationUnavailable("no_session_path");
       return { source: "muse-transcript", path };
+    }
+    // herdr's label, not a report an earlier Letta left behind: the binding needs a running one
+    if (agent === "letta" && pane.agent === "letta") {
+      // no file yet is no proof the conversation has no turns (one begun elsewhere): Terminal stands in
+      const found = await resolveLettaTranscript(pane, panes ?? [pane], known);
+      if (found === null) throw new ConversationUnavailable("no_session_path");
+      return { source: "letta-transcript", path: found.path };
     }
     if (agent === "agy") {
       const found = await resolveAgyStore(pane);
@@ -1523,7 +1538,7 @@ export async function paneConversation(paneId: string, codexHome?: string, page:
       throw error;
     }
   }
-  const identity = resolved.source === "agy-transcript" || resolved.source === "copilot-transcript" ? resolved.path
+  const identity = resolved.source === "agy-transcript" || resolved.source === "copilot-transcript" || resolved.source === "letta-transcript" ? resolved.path
     : resolved.source === "claude-transcript" ? nodePath.basename(resolved.path, ".jsonl")
     : resolved.source === "pi-transcript" || resolved.source === "cmd-transcript" || resolved.source === "omp-transcript" ? realpathSync(resolved.path) : null;
   rememberPaneRead(paneId, resolved.path);
@@ -2270,6 +2285,10 @@ export function transcriptToolOutput(source: StreamSource, path: string, ref: st
   if (source === "agy-transcript") return agyToolOutput(path, ref);
   if (source === "muse-transcript") {
     const output = museToolOutput(path, ref);
+    return output !== null && output.length > TOOL_OUTPUT_MAX ? `${output.slice(0, TOOL_OUTPUT_MAX)}\n… trimmed` : output;
+  }
+  if (source === "letta-transcript") {
+    const output = lettaToolOutput(path, ref);
     return output !== null && output.length > TOOL_OUTPUT_MAX ? `${output.slice(0, TOOL_OUTPUT_MAX)}\n… trimmed` : output;
   }
   if (source === "pi-transcript" || source === "cmd-transcript") return piToolOutput(path, ref);

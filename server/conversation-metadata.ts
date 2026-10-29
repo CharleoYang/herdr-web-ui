@@ -84,6 +84,8 @@ export function parseConversationMetadata(text: string, source: ConversationResp
   const metadata: ConversationMetadata = before ? { ...before } : { model: null, reasoning_effort: null };
   // Agy's exported rows do not attest the selected model or reasoning effort.
   if (source === "agy-transcript") return metadata;
+  // Letta's transcript names no model or effort
+  if (source === "letta-transcript") return metadata;
   if (source === "copilot-transcript") {
     for (const { type, data } of copilotRecords(text)) {
       const model = type === "session.start" ? label(data.selectedModel)
