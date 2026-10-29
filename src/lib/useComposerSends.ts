@@ -5,7 +5,7 @@ import { composerDelivery, pendingActionUncertain, submitNotTyped, submitRefusal
 import type { PaneSubmitRetention } from "./paneSubmitRetention.ts";
 import { pendingMessages, UNCONFIRMED_SEND } from "./pendingMessages.ts";
 import { paneStorageId } from "../../shared/machines.ts";
-import { rememberWaitingSend, waitingKey } from "./sentWaiting.ts";
+import { rememberWaitingSend, waitingBaseline, waitingKey } from "./sentWaiting.ts";
 import { composerDrafts } from "./composerDraft.ts";
 import type { AgentStatus, InteractivePrompt, PromptAnswer } from "../../shared/protocol.ts";
 import type { HerdrSocket, SubmitDelivery, SubmitResult } from "./ws.ts";
@@ -128,6 +128,7 @@ export function useComposerSends(deps: ComposerSendsDeps) {
       const navigation = chatNavigation.current;
       const socket = socketRef.current, session = sessionRef.current;
       const sentAt = Date.now();
+      const sentAfter = pane === null ? null : waitingBaseline(waitingKey(machineId, pane));
       const result = submitComposerMessage(text, delivery, delivery === "immediate" ? clearDraft : undefined, sendAnyway);
       return result === null ? false : result.then((answer) => {
         // Neither a dropped connection nor a cleared old draft proves this message was typed.
@@ -140,7 +141,7 @@ export function useComposerSends(deps: ComposerSendsDeps) {
           if (paneRef.current === pane && socketRef.current === socket && sessionRef.current === session) {
             setChatLocalSend((current) => ({ key: current.key + 1, navigationGeneration: navigation }));
           }
-          if (pane !== null) rememberWaitingSend(waitingKey(machineId, pane), text, sentAt);
+          if (pane !== null) rememberWaitingSend(waitingKey(machineId, pane), text, sentAt, sentAfter);
         }
         if (pane !== null && delivery === "immediate" && answer.pending === undefined && !answer.unconfirmed) showSentCommand(pane, text, known, seen);
         return true;

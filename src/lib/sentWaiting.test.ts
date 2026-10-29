@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
 
-import { currentWaitingSends, forgetWaitingSends, rememberWaitingSend, settleWaitingSends, transcriptHolds, waitingKey, waitingText } from "./sentWaiting.ts";
+import { currentWaitingSends, forgetWaitingSends, rememberWaitingSend, settleWaitingSends, transcriptHolds, waitingBaseline, waitingKey, waitingText } from "./sentWaiting.ts";
 import type { ConversationTurn } from "../../shared/protocol.ts";
 
 const user = (text: string, at = 2): ConversationTurn => ({ role: "user", ts: new Date(at).toISOString(), parts: [{ kind: "text", text }] });
@@ -15,10 +15,17 @@ describe("waitingText", () => {
     expect(waitingText(send, [assistant("earlier"), user(send.text)])).toBeNull();
   });
 
-  it("reads a rewrapped or reflowed copy as the same message", () => {
-    const wrapped = send.text.replace("：", "：\n");
-    expect(transcriptHolds(send, [user(wrapped)])).toBe(true);
+  it("reads the copy the terminal writes as the same message", () => {
+    // a space closing a final @mention (server/core/composer.ts closeMention), CRLF line ends,
+    // and whitespace around the message or at the ends of its lines
+    expect(transcriptHolds({ ...send, text: "ask @alice" }, [user("ask @alice ")])).toBe(true);
+    expect(transcriptHolds({ ...send, text: "one\ntwo" }, [user("one  \r\ntwo")])).toBe(true);
     expect(transcriptHolds(send, [user(`  ${send.text}  `)])).toBe(true);
+  });
+
+  it("does not take a message that differs only in its spaces for this one", () => {
+    expect(transcriptHolds({ ...send, text: "change a b to c" }, [user("change ab to c")])).toBe(false);
+    expect(transcriptHolds({ ...send, text: "rename user id" }, [user("renameuserid")])).toBe(false);
   });
 
   it("does not take another turn's words for it", () => {
@@ -47,10 +54,46 @@ describe("waitingText", () => {
     expect(transcriptHolds({ ...send, text }, [user("Please review the complete implementation")])).toBe(false);
   });
 
-  it("matches a genuinely shortened copy only with its explicit ellipsis", () => {
-    const text = "Please review the complete implementation and report the remaining issues";
-    expect(transcriptHolds({ ...send, text }, [user("Please review the complete implementation…")])).toBe(true);
-    expect(transcriptHolds({ ...send, text }, [user("Please review the complete implementation...")])).toBe(true);
+  it("does not take an ellipsized opening for the whole message: the transcript keeps user turns whole", () => {
+    const text = "Please inspect the deployment configuration and then apply safe changes";
+    expect(transcriptHolds({ ...send, text }, [user("Please inspect the deployment configuration…")])).toBe(false);
+    expect(transcriptHolds({ ...send, text }, [user("Please inspect the deployment configuration...")])).toBe(false);
+  });
+
+  it("gives a command no waiting line: Claude writes it as a command, never as this user turn", () => {
+    const key = waitingKey("local", "commands");
+    try {
+      for (const command of ["/cost", "  /model sonnet", "! ls"]) rememberWaitingSend(key, command, 1);
+      expect(currentWaitingSends(key)).toEqual([]);
+    } finally { forgetWaitingSends(key); }
+  });
+
+  it("settles a send from a browser whose clock runs ahead of the PC, by the turns the chat held when it was sent", () => {
+    const key = waitingKey("local", "clock-ahead");
+    const pc = Date.parse("2026-10-29T10:00:00Z");
+    try {
+      const earlier = user("earlier", pc);
+      settleWaitingSends(key, [earlier]);
+      // the phone's clock is a minute ahead of the PC that writes the transcript
+      rememberWaitingSend(key, "hello", pc + 60_000, waitingBaseline(key));
+      settleWaitingSends(key, [earlier, user("hello", pc + 800)]);
+      expect(currentWaitingSends(key)).toEqual([]);
+    } finally { forgetWaitingSends(key); }
+  });
+
+  it("keeps a repeated send waiting past the identical turn the chat held when it was sent, whatever the browser's clock", () => {
+    const key = waitingKey("local", "clock-behind");
+    const pc = Date.parse("2026-10-29T10:00:00Z");
+    try {
+      const earlier = user("repeat", pc);
+      settleWaitingSends(key, [earlier]);
+      // a browser clock a minute behind would take the old turn for the new one
+      rememberWaitingSend(key, "repeat", pc - 60_000, waitingBaseline(key));
+      settleWaitingSends(key, [earlier]);
+      expect(currentWaitingSends(key).map((send) => send.text)).toEqual(["repeat"]);
+      settleWaitingSends(key, [earlier, user("repeat", pc + 5_000)]);
+      expect(currentWaitingSends(key)).toEqual([]);
+    } finally { forgetWaitingSends(key); }
   });
 
   it("keeps a second send's own waiting line without overwriting the first", () => {
