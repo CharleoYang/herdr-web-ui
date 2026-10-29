@@ -409,4 +409,32 @@ describe("status-line switch and capture", () => {
     install("--remove");
     expect(readFileSync(join(own(), "statusline-capture.ts"), "utf8")).toBe("console.log('mine');\n");
   });
+
+  it("waits for a lock whose holder still runs, and takes over one whose holder is gone", () => {
+    const lock = join(home, ".claude", ".herdr-statusline.lock");
+    const before = readFileSync(settings(), "utf8");
+    mkdirSync(lock);
+    writeFileSync(join(lock, "owner"), `${process.pid}:held`);
+    expect(run([]).stderr).toContain("in progress");
+    expect(readFileSync(join(lock, "owner"), "utf8")).toBe(`${process.pid}:held`);
+    const gone = Bun.spawnSync(["true"]).pid;
+    writeFileSync(join(lock, "owner"), `${gone}:died`);
+    install();
+    expect(existsSync(lock)).toBe(false);
+    install("--remove");
+    expect(readFileSync(settings(), "utf8")).toBe(before);
+  });
+
+  it("never takes over a lock that is a link, whatever it points at", () => {
+    const elsewhere = join(home, "elsewhere");
+    mkdirSync(elsewhere);
+    const gone = Bun.spawnSync(["true"]).pid;
+    writeFileSync(join(elsewhere, "owner"), `${gone}:died`);
+    symlinkSync(elsewhere, join(home, ".claude", ".herdr-statusline.lock"));
+    const old = new Date(Date.now() - 60 * 60_000);
+    utimesSync(elsewhere, old, old);
+    expect(run([]).stderr).toContain("in progress");
+    expect(readFileSync(join(elsewhere, "owner"), "utf8")).toBe(`${gone}:died`);
+    expect(lstatSync(join(home, ".claude", ".herdr-statusline.lock")).isSymbolicLink()).toBe(true);
+  });
 });

@@ -289,32 +289,55 @@ export function statuslineInstallState(options: StatuslineInstallOptions): Statu
 
 const CAPTURE_SOURCE = (): string => readFileSync(new URL("./statusline-capture.ts", import.meta.url), "utf8");
 
-/** How long a lock left by a process that died is honoured before the next change takes it over. */
-const STALE_LOCK_MS = 60_000;
+/**
+ * A lock whose holder is gone is taken over at once; one whose holder still runs only after this long,
+ * which no change takes (it is milliseconds), so its pid has been reused by another process.
+ */
+const ABANDONED_LOCK_MS = 10 * 60_000;
+
+const isCode = (error: unknown, code: string): boolean => error !== null && typeof error === "object" && "code" in error && error.code === code;
+
+/** Whether the process a lock's owner token (`<pid>:<uuid>`) names still runs on this PC. */
+function holderRuns(token: string): boolean {
+  const pid = Number(token.split(":")[0]);
+  if (!Number.isInteger(pid) || pid <= 0) return false;
+  try { process.kill(pid, 0); return true; } catch (error) { return isCode(error, "EPERM"); }
+}
 
 /**
  * One change at a time, across processes too (two servers on one home): an install and a removal
- * that interleave could leave settings.json running a wrapper the other just deleted.
+ * that interleave could leave settings.json running a wrapper the other just deleted. The lock names
+ * its holder; a change takes it over only from a holder that is gone, and releases only its own.
  */
 function locked<T>(configDir: string, change: () => T): T {
   const lock = join(configDir, ".herdr-statusline.lock");
+  const ownerOf = (dir: string): string | null => { try { return readFileSync(join(dir, "owner"), "utf8"); } catch { return null; } };
+  const token = `${process.pid}:${randomUUID()}`;
+  const busy = () => new StatuslineInstallError("another change to Claude's status line is in progress; try again in a moment");
+  const take = () => { mkdirSync(lock); writeFileSync(join(lock, "owner"), token, { mode: 0o600 }); };
   try {
-    mkdirSync(lock);
+    take();
   } catch (error) {
-    if (!(error !== null && typeof error === "object" && "code" in error && error.code === "EEXIST")) throw error;
+    if (!isCode(error, "EEXIST")) throw error;
+    const seen = ownerOf(lock);
     const age = Date.now() - (lstatSync(lock, { throwIfNoEntry: false })?.mtimeMs ?? Date.now());
-    const busy = () => new StatuslineInstallError("another change to Claude's status line is in progress; try again in a moment");
-    if (age < STALE_LOCK_MS) throw busy();
-    // the stale lock is moved aside before it is taken: of two changes taking it over at once, one wins the mkdir
+    // no owner yet: another change is between its mkdir and its owner file, unless it died there long ago
+    const abandoned = age >= ABANDONED_LOCK_MS || (seen !== null && !holderRuns(seen));
+    if (!abandoned || lstatSync(lock).isSymbolicLink()) throw busy();
+    // moved aside, then checked: only the lock judged abandoned is removed, never one taken since
     const aside = `${lock}.${process.pid}.${randomUUID()}`;
     try { renameSync(lock, aside); } catch { throw busy(); }
+    if (ownerOf(aside) !== seen) {
+      try { renameSync(aside, lock); } catch { /* a third change holds it now; the moved one stays aside */ }
+      throw busy();
+    }
     rmSync(aside, { recursive: true, force: true });
-    try { mkdirSync(lock); } catch { throw busy(); }
+    try { take(); } catch { throw busy(); }
   }
   try {
     return change();
   } finally {
-    rmSync(lock, { recursive: true, force: true });
+    if (ownerOf(lock) === token) rmSync(lock, { recursive: true, force: true });
   }
 }
 
