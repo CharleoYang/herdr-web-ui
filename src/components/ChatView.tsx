@@ -2239,7 +2239,8 @@ export const ChatView = memo(function ChatView({ paneId, presentationKey, finish
   // queue lives in the store, so a reader who goes to another tab and comes back still sees it.
   const waitKey = waitingKey(machineId, paneId);
   const sentWaiting = useSyncExternalStore(subscribeWaitingSends, () => currentWaitingSends(waitKey));
-  useEffect(() => {
+  // before paint: a frame never shows a send's turn and its waiting bubble together
+  useLayoutEffect(() => {
     settleWaitingSends(waitKey, state.turns);
   }, [sentWaiting, state.turns, waitKey]);
   const waitWords = useAnnouncedText(!loaded && error === null ? t("Loading conversation…") : waiting ? t("Waiting for the PC…") : null);
@@ -2248,10 +2249,15 @@ export const ChatView = memo(function ChatView({ paneId, presentationKey, finish
       <p className={waitWords === null ? "visually-hidden" : "chat-inline-state"} role="status">{waitWords}</p>
       {/* sent, and the agent has not started its turn for it yet: the user's own words where their
           turn will be, quieter, and what they wait for under them */}
-      {sentWaiting.map((send) => <p key={send.id} className="chat-sent-waiting" role="status">
-        <span className="chat-sent-waiting-text">{send.text.length > 160 ? `${send.text.slice(0, 160)}…` : send.text}</span>
-        <span className="chat-sent-waiting-label">{t("Sent · waiting for the agent's next turn")}</span>
-      </p>)}
+      {sentWaiting.length > 0 && <div className="chat-sent-waiting-list" role="status">
+        {sentWaiting.map((send) => {
+          const chars = Array.from(send.text);
+          return <p key={send.id} className="chat-sent-waiting">
+            <span className="chat-sent-waiting-text">{chars.length > 160 ? `${chars.slice(0, 160).join("")}…` : send.text}</span>
+            <span className="chat-sent-waiting-label">{t("Sent · waiting for the agent's next turn")}</span>
+          </p>;
+        })}
+      </div>}
       {error !== null && !waiting && (errorStatus === 401
         ? <p className="chat-inline-state chat-inline-error" role="alert">{t("locked — the token gate is asking again")}</p>
         : <FailureLine action={t("Couldn't load the conversation")} failure={error} onRetry={retryRead} />)}
