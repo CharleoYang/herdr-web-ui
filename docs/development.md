@@ -766,8 +766,9 @@ The [CI workflow](../.github/workflows/ci.yml) runs on every PR and `main` push:
 
   `scripts/windows-terminal-browser-qa.ts` needs native Windows, so the browser lane leaves it out
   (it is on that list) and `windows-terminal-qa.yml` runs it on a GitHub-hosted Windows runner: on pull requests
-  that touch the mirror, the terminal's viewport code or the xterm patch, weekly on main, and on
-  a manual dispatch (**Actions → Windows terminal QA**). It is not a required check. To run it on
+  that touch the mirror, the terminal's viewport code or the xterm patch (on the pull request's
+  merge with main, so a branch cut before a fix to the script runs the fixed one), weekly on
+  main, and on a manual dispatch (**Actions → Windows terminal QA**). It is not a required check. To run it on
   a Windows PC: `bun install --frozen-lockfile`, `bun run build`, then
   `bun scripts/windows-terminal-browser-qa.ts` with herdr on PATH and Chromium installed.
 
