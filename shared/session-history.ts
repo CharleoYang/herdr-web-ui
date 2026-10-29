@@ -39,6 +39,11 @@ export type SessionResumeResponse =
   | { action: "opened"; workspace_id: string; pane_id: string }
   | { action: "created"; workspace_id: string; pane_id: string; agent_started: boolean; error?: { code: string; message: string } };
 
+/**
+ * A Pi scan past its deadline, a busy reader or a transcript changing during the scan answers the
+ * ordinary API error envelope with 503 `session_history_busy`, Retry-After: 1 and Cache-Control:
+ * no-store, NOT incomplete sessions. Every listing reads fresh metadata; retries start over.
+ */
 export interface SessionHistoryResponse {
   workspace_id: string;
   agent: SessionHistoryAgent;

@@ -103,14 +103,16 @@ timing, so more runs side by side make them fail each other: on a 32-core PC thr
 already lost Chromium screenshots in the browser lane, so raise it only to look for such failures. A run that finds every slot taken
 names the holders and exits, or, with `CHECK_WAIT_SECONDS` (0 to 7200), waits that long for one
 first, as CI's herdr-backed lanes do. A second run in the same checkout exits at once, even with
-slots free: runs in one checkout share `dist/` and the generated types. A checkout is its real
+slots free: runs in one checkout share `dist/` and the generated types. `fast` takes no slot
+and never waits, but it claims its checkout the same way, so it and any other mode refuse each
+other there. A checkout is its real
 path, plus `RUNNER_NAME` when that is set: the self-hosted runners of one PC share a loopback and
 all check out to the same path. The
 generated-types and generated-themes checks (`bun run generate:types --check`,
 `bun run generate:themes --check`) are read-only, but `test:unit` includes
 `scripts/generate-protocol-types.test.ts`, which rewrites the generated file while it runs. Fast
-checks and the browser lane also build into `dist/`; avoid overlapping runs that write to the same
-checkout. (`check run` runs only its named command unless `--build` is supplied.)
+checks and the browser lane also build into `dist/`. Nothing stops a `bun run build` or a single
+test command started by hand beside a run, so avoid those while a check runs in that checkout. (`check run` runs only its named command unless `--build` is supplied.)
 Theme colors are edited only in the theme blocks of `src/styles.css`. Never edit the generated
 copies (`src/lib/themes.generated.ts`, the DESIGN.md region between the `GENERATED THEMES`
 markers, the `theme-color` tag in `index.html`, the colors in `public/manifest.webmanifest`); run
@@ -134,7 +136,11 @@ processes. The queue is ordered largest file first, so long files start early. W
 (native Windows) the files run serially in one process.
 Explicit `CHECK_DIR` and `CHECK_REPORT` paths are claimed exclusively by canonical path, even for
 `fast`, before writing reports, logs or isolated state. Pid markers are released at exit after the
-final report and session cleanup; a dead owner's marker is reclaimed under serialized admission.
+final report and session cleanup. A marker names its run's pid and, on Linux and macOS, when that
+process started, so a pid given to another process after a crash or a reboot does not keep the claim.
+A dead owner's marker is taken over under a lock: on Linux an abstract socket, which the kernel lets
+go of however its holder ends; elsewhere a `.reclaim` file, which the next run clears when a run
+killed during a takeover leaves it. No marker needs deleting by hand.
 Lock refusal exits with the holder's identity before writing a report, so it cannot overwrite
 an active run's output or stop its sessions.
 
@@ -185,6 +191,7 @@ bun scripts/key-bar-hold-repeat-regression.ts # phone touch key-bar taps, holds 
 bun scripts/settings-pages-demo-regression.ts # every Settings page on a 390px and a 320px phone, and Back stepping out of the dialog
 bun scripts/interface-font-demo-regression.ts # Interface font at 390 and 1440: System and a typed list lead --font-ui, a reload keeps it, Default restores it; the message box takes the Chat font
 bun scripts/theme-first-paint-demo-regression.ts # the saved theme in every painted frame before and after the app starts, root and demo builds under the app's CSP
+bun scripts/boot-loading-demo-regression.ts # index.html's loading spinner while the app's script is held, as on a slow link: centred, stepped, still under reduced motion, gone with the app's first frame (#2329)
 bun scripts/push-health-demo-regression.ts # the alerts health notice with a stand-in PushManager: a retired subscription told once over the pane and in Settings, repaired once; a refusal, a key mismatch, denied, unsupported, offline, loading and a watching device's refused test, at 390 and 1440, light and dark, Korean at 390
 bun scripts/device-security-demo-regression.ts # Phone & devices on demo fixtures: revoking every device (the caller's warning, the confirmation, a refused write, a watching device) and the line every window gets when a device pairs
 bun scripts/chat-browser-qa.ts  # chat lens end to end
@@ -239,12 +246,62 @@ bun scripts/background-agent-detail-demo-regression.ts # a running Claude subage
 bun scripts/font-swap-demo-regression.ts      # the app's faces arriving late on a slow link: a reader at the end of a chat stays there, a tab strip the user scrolled stays put
 bun scripts/narrow-pane-demo-regression.ts    # a split pane under 80 columns: the smaller font, a zoom, and a pane no font can bring to 80
 bun scripts/agent-skill-menu-demo-regression.ts [agent …] # each agent's `/` (and `$`) skill menu, its origin groups and its skill chips at 1280 and 390px, one case file per agent in scripts/skill-menu-cases/, screenshots in evidence/agent-skill-menu/<agent>/
-bun scripts/install-state-demo-regression.ts  # Install app against a real CDP install on a throwaway profile and HOME: the help or the prompt before, gone in the app window and a tab of its origin, back after uninstall
+bun scripts/install-state-demo-regression.ts  # Install app against a real CDP install on a throwaway profile and HOME: never in the sidebar; Settings > Install shows the help or the prompt before, Installed in the app window and a tab of its origin, the help again after uninstall
 bun scripts/terminal-paste-insert-demo-regression.ts # a phone's Paste key into the terminal's input line and Insert without Enter on the demo shell: the caret, a held or refused clipboard read, the acknowledged clear, an older bridge; with UI_EVIDENCE_DIR, every state at 390 and 1440, light and dark, and Korean
 bun scripts/link-menu-demo-regression.ts       # a long press on a chat link in the Android app: Copy link, Open link and, where the WebView shares, Share link; a tap, other words, a mouse's menu, a swipe and a browser keep their own; with UI_EVIDENCE_DIR, the sheet at 390 in English and Korean
 ```
 
 `FILE_VIEWER_CASE=landscape-notch` selects a viewer case; `FILE_VIEWER_CSS=/path/to/before.css` compares another stylesheet. These checks use Chromium mobile emulation and synthetic safe-area/keyboard geometry; they cannot verify actual iOS Safari keyboard dismissal or notch insets. The existing `bun scripts/file-viewer-regression.ts` separately checks history with an owned herdr pane. The original `scripts/mobile-viewport-regression.ts` exports `checkMobileViewport` for the real-app `bun run test:ui` suite; it also checks the command palette and xterm focus transitions. The demo runners build the real client into a temporary directory, inject the committed fictional-session transport and serve it only on loopback; they do not use a live herdr session or download website media. Run on its own, each builds the client itself (`scripts/demo-build.ts`); the browser lane builds it once and names the directory in `HERDR_DEMO_BUILD`, and each runner copies that instead. They exercise real-app viewport and alert geometry, but not live herdr connectivity.
+
+## Pi session labels
+
+Earlier sessions keeps Pi's native label priority: the latest trimmed `session_info.name` (an
+empty name clears it), else the first usable user string or `text` blocks joined with spaces.
+Pi alone streams metadata on its checked descriptor; other agents retain the 64 KiB head bound.
+Directory discovery retains the existing walk/stat limits. Transcript opens, identity checks,
+reads and stats are asynchronous. A bounded JSON projection validates records without retaining
+large system prompts, extension state or image data. Ordinary string spans are validated in bulk
+within each read chunk; quotes, escapes and control characters are still checked even in discarded
+fields or beyond the retained label. Malformed records and nesting deeper than
+64 levels are skipped through their newline. Incomplete final records are ignored; a valid final
+record needs no newline, matching Pi. BOM-prefixed records are rejected rather than silently
+stripping the BOM before JSON validation. Native falsy JSON preambles are ignored; the first truthy
+record must be a session header. Header cwd/ID strings exceeding 16 KiB are refused rather than
+matched or returned as truncated identities; display-label clipping remains separate.
+
+Pi checks each transcript's path and descriptor identity on every listing. Its server-owned,
+in-memory LRU cache retains at most 256 completed clipped labels and header metadata, never
+transcript content, append prefixes, parser checkpoints or shared in-flight answers. The key is
+the absolute path plus device, inode, size, mtime and ctime where available (nanosecond timestamps
+strengthen the millisecond fields where the filesystem exposes them). An unchanged key performs
+no transcript reads; a changed key scans the file again, so appended names, cleared names and
+new first prompts appear on the next open. Each listing drops entries for transcripts no longer
+discovered in its folders; the count bound also evicts older stores. Stopping the server clears
+the cache. Coarse timestamps can still hide a same-tick, same-size in-place rewrite whose
+identity and timestamps all stay unchanged.
+The server admits at most two readers and 32 waiting tasks. Chunks are 64 KiB; each listing has a
+two-second deadline, including queue time. The deadline bounds scan work instead of a fixed byte
+cutoff. Concurrent listings keep independent deadlines, even when reading the same transcript.
+Only clipped metadata and a bounded record projection are retained during a scan. A final size
+and nanosecond mtime/ctime check refuses a file changed while it was read; coarse timestamps can
+still hide a same-tick in-place rewrite.
+
+A busy reader, elapsed deadline, failed read or changed file returns the standard API error
+envelope, 503 `session_history_busy`, with `Retry-After: 1` and `Cache-Control: no-store`, never
+incomplete rows. The browser keeps its loading state through five bounded automatic retries,
+honouring Retry-After with the same backoff as a busy skill list, then offers a Retry button.
+Retrying an uncached file starts over: a very large or slow file may not finish within the
+request's deadline, and its unfinished scan does not accumulate progress. There is no automatic background
+scan or persisted format. Server stop refuses queued/in-flight requests; a filesystem call
+already in progress keeps its slot and descriptor until it returns and closes. The synthetic
+`server/pi-session-metadata.test.ts` instruments zero-read cache hits, appended label refresh,
+deleted-entry eviction, resource bounds and a
+server answering a ping while a 20 MiB listing is held at a controlled read gate. Deterministic
+clock/timer cases cover aggregate listing expiry, independent deadlines, queued expiry without
+opening and FIFO admission. The ungated 202-session fixture reads the newest 50 long transcripts
+(about 200 MiB together) whole, with the listing deadline lengthened so a slow runner cannot hit it, then
+repeats with no transcript reads; the isolated
+history API contract covers a similarly sized store and error-only refusal after an earlier row.
 
 ## Codex Send now
 
@@ -788,7 +845,9 @@ run). When scripts get much slower, refresh it with each script's median over se
 runs' `[worker-N] PASS <script> (<seconds>s)` lines.
 Each script's full output goes to `${CHECK_DIR:-.ci}/browser-logs/<script>.log`, with
 `summary.json` beside it; a failure prints the last 400 lines of its log and the log's path, and
-the job then fails. CI uploads `browser-logs` with the evidence on success or failure.
+the job then fails. CI uploads `browser-logs` on success or failure; browser-main adds the evidence
+every time, browser-other only when it failed or was cancelled (a timeout included) (its ~2,000 screenshots of a green run cost
+about 50 s to upload on the job that ends a run last).
 A script that fails is run a second time (`BROWSER_RETRY=0` turns that off). One that then passes
 does not fail the job, and is not counted as a plain pass either: its first log is kept as
 `<script>.attempt-1.log` and printed, the summary marks it `~` and `summary.json` lists it under

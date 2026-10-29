@@ -17,6 +17,8 @@ export const SETUP_ZH: Record<string, string> = {
   "{agent} is ready": "{agent} 已就绪",
   "Version {version}": "版本 {version}",
   "It did not finish": "没有完成",
+  "{agent} does not start": "{agent} 无法启动",
+  "It is on this PC, but it does not start. Install it again.": "它在这台电脑上，但无法启动。请重新安装。",
   "Skip": "跳过",
   "I've signed in": "我已登录",
   "Start {agent}": "启动 {agent}",

@@ -17,6 +17,8 @@ export const SETUP_JA: Record<string, string> = {
   "{agent} is ready": "{agent} の準備ができました",
   "Version {version}": "バージョン {version}",
   "It did not finish": "完了しませんでした",
+  "{agent} does not start": "{agent} が起動しません",
+  "It is on this PC, but it does not start. Install it again.": "この PC にありますが、起動しません。もう一度インストールしてください。",
   "Skip": "スキップ",
   "I've signed in": "サインインしました",
   "Start {agent}": "{agent} を開始",

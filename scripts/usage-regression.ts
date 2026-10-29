@@ -142,15 +142,34 @@ export async function checkUsageMeters(browser: Browser, origin: string): Promis
     // turned off in Settings: gone, and no longer asked for
     await settingsButton.click();
     await openSettingsPage(page, "Subscription usage");
+    // The strip disappears before the shared preference's debounced save. Reload only once
+    // the server has taken OFF, or its older ON value will turn usage back on during hydration.
+    const usageOffSaved = page.waitForResponse((response) => response.request().method() === "PUT"
+      && new URL(response.url()).pathname === "/api/preferences" && response.ok()
+      && response.request().postDataJSON()?.settings?.showUsage === false, { timeout: 10_000 });
     await toggle.click();
     await strip.waitFor({ state: "detached" });
     assert.equal(await page.locator(".usage-accounts-intro .settings-note").count(), 1);
     assert.equal(await page.locator(".usage-provider").count(), 0, "disabled meters leave no provider placeholders");
+    await usageOffSaved;
     // a request Settings made before the switch can still be on its way here, so the count is of
     // the reloaded page's own requests, not of what arrives after the reload
     await context.setExtraHTTPHeaders({ [RELOADED]: "1" });
+    // In the new document, settings are written when the server's preferences are applied.
+    // Waiting for that write observes hydration, not just the footer's earlier mount.
+    await page.addInitScript(() => {
+      const setItem = Storage.prototype.setItem;
+      Storage.prototype.setItem = function (key, value) {
+        setItem.call(this, key, value);
+        if (this === localStorage && key === "ovis:settings" && JSON.parse(value).showUsage === false) {
+          document.documentElement.setAttribute("data-usage-preferences-hydrated", "");
+        }
+      };
+    });
     await page.reload();
     await page.locator(".sidebar-footer").waitFor();
+    // a timeout here, not the assertion below, is how a lost OFF save would now fail
+    await page.locator("html[data-usage-preferences-hydrated]").waitFor();
     assert.deepEqual(afterReload, [], "a hidden strip asks for nothing");
     await context.setExtraHTTPHeaders({});
     assert.deepEqual(errors, []);
@@ -159,6 +178,10 @@ export async function checkUsageMeters(browser: Browser, origin: string): Promis
   }
 
   // on a phone the popover opens inside the drawer and stays on screen
+  // The desktop check saved OFF: seed the shared preference too, or hydration overrides
+  // this phone's local ON value before its strip can be opened.
+  const usageOn = await fetch(`${origin}/api/preferences`, { method: "PUT", headers: { "content-type": "application/json", origin }, body: JSON.stringify({ settings: { showUsage: true } }) });
+  assert.equal(usageOn.status, 200, "the phone's shared usage preference is enabled");
   const phone = await browser.newContext({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true, locale: "en-US" });
   try {
     await staged(phone);

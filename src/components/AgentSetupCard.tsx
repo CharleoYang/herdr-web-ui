@@ -76,7 +76,7 @@ export function AgentSetupCard({ agent, machineId = "local", initial = { kind: "
         {step.kind === "installed" && <><KeyRound aria-hidden="true" /><div><strong>{t("Sign in to {agent}", { agent: name })}</strong><span>{step.onPath ? t("Installed. Sign in so it can use your plan.") : t("Installed. New terminal tabs will find it.")}</span></div></>}
         {step.kind === "signing-in" && <><LoaderCircle className="agent-setup-spin" aria-hidden="true" /><div><strong>{t("Finish signing in")}</strong><span>{t("Follow the steps in the sign-in tab, then come back here.")}</span></div></>}
         {step.kind === "ready" && <><Check aria-hidden="true" /><div><strong>{t("{agent} is ready", { agent: name })}</strong>{step.version && <span>{t("Version {version}", { version: step.version })}</span>}</div></>}
-        {step.kind === "failed" && <><TriangleAlert aria-hidden="true" /><div><strong>{t("It did not finish")}</strong><span>{step.message}</span></div></>}
+        {step.kind === "failed" && <><TriangleAlert aria-hidden="true" /><div><strong>{step.message === null ? t("{agent} does not start", { agent: name }) : t("It did not finish")}</strong><span>{step.message ?? t("It is on this PC, but it does not start. Install it again.")}</span></div></>}
       </div>
       {details && command !== null && <pre className="agent-setup-command"><code>{command}</code></pre>}
       {details && step.kind === "installed" && !step.onPath && <p className="agent-setup-note">{t("Its folder is on PATH only for terminals opened after the install.")}</p>}
