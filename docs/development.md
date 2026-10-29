@@ -795,7 +795,9 @@ run). When scripts get much slower, refresh it with each script's median over se
 runs' `[worker-N] PASS <script> (<seconds>s)` lines.
 Each script's full output goes to `${CHECK_DIR:-.ci}/browser-logs/<script>.log`, with
 `summary.json` beside it; a failure prints the last 400 lines of its log and the log's path, and
-the job then fails. CI uploads `browser-logs` with the evidence on success or failure.
+the job then fails. CI uploads `browser-logs` on success or failure; browser-main adds the evidence
+every time, browser-other only when it failed or was cancelled (a timeout included) (its ~2,000 screenshots of a green run cost
+about 50 s to upload on the job that ends a run last).
 A script that fails is run a second time (`BROWSER_RETRY=0` turns that off). One that then passes
 does not fail the job, and is not counted as a plain pass either: its first log is kept as
 `<script>.attempt-1.log` and printed, the summary marks it `~` and `summary.json` lists it under
