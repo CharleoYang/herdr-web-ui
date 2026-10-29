@@ -2,22 +2,29 @@ import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { readStatusline } from "../server/statusline.ts";
+import { installStatusline, removeStatusline, statuslineInstallState } from "./statusline-install.ts";
+import { readStatusline } from "./statusline.ts";
 
 let home: string;
-const installer = new URL("./install-statusline-tee.ts", import.meta.url).pathname;
 const settings = (configDir = join(home, ".claude")) => join(configDir, "settings.json");
 const readSettings = (configDir?: string) => JSON.parse(readFileSync(settings(configDir), "utf8"));
 const own = (configDir = join(home, ".claude")) => join(configDir, "herdr-statusline");
 const tee = (configDir?: string) => join(own(configDir), "statusline-tee.sh");
 const capture = () => join(home, ".herdr", "statusline-last.json");
 const env = (configDir = "") => ({ ...process.env, HOME: home, CLAUDE_CONFIG_DIR: configDir });
+/** the switch, as the server turns it on or off: exit 0 with what it did, or exit 1 with why not */
 function run(args: string[], configDir?: string) {
-  return Bun.spawnSync([process.execPath, installer, ...args], { env: env(configDir) });
+  const options = { home, configDir };
+  try {
+    const said = args.includes("--remove") ? removeStatusline(options) : installStatusline(options);
+    return { exitCode: 0, stdout: said, stderr: "" };
+  } catch (error) {
+    return { exitCode: 1, stdout: "", stderr: error instanceof Error ? error.message : String(error) };
+  }
 }
 function install(...args: string[]) {
   const result = run(args);
-  expect(result.stderr.toString()).toBe("");
+  expect(result.stderr).toBe("");
   expect(result.exitCode).toBe(0);
 }
 /**
@@ -39,7 +46,7 @@ beforeEach(() => {
 });
 afterEach(() => rmSync(home, { recursive: true, force: true }));
 
-describe("statusline installer and capture", () => {
+describe("status-line switch and capture", () => {
   it("wraps the tilde command from HOME and forwards the original payload unchanged", () => {
     install();
     writeFileSync(join(home, ".claude.json"), JSON.stringify({ oauthAccount: { accountUuid: "default-account" } }));
@@ -87,7 +94,7 @@ describe("statusline installer and capture", () => {
     install();
     expect(readSettings().statusLine).toEqual({ ...original, command: expect.stringContaining("herdr-statusline") });
     writeFileSync(settings(), JSON.stringify({ ...readSettings(), model: "opus" }, null, 2));
-    install("--restore");
+    install("--remove");
     expect(readSettings()).toEqual({ theme: "dark", statusLine: original, model: "opus" });
     expect(existsSync(own())).toBe(false);
   });
@@ -248,7 +255,8 @@ describe("statusline installer and capture", () => {
     const before = readFileSync(settings(), "utf8");
     install();
     const installed = readFileSync(settings(), "utf8");
-    const failed = Bun.spawnSync(["sh", "-c", 'ulimit -f 0; exec "$0" "$1" --remove', process.execPath, installer], { env: env() });
+    const removal = `import { removeStatusline } from ${JSON.stringify(new URL("./statusline-install.ts", import.meta.url).pathname)}; removeStatusline({ home: process.env.HOME! });`;
+    const failed = Bun.spawnSync(["sh", "-c", 'ulimit -f 0; exec "$0" -e "$1"', process.execPath, removal], { env: env() });
     expect(failed.exitCode).not.toBe(0);
     expect(readFileSync(settings(), "utf8")).toBe(installed);
     install("--remove");
@@ -267,13 +275,6 @@ describe("statusline installer and capture", () => {
     install("--remove");
     expect(lstatSync(settings()).isSymbolicLink()).toBe(true);
     expect(readFileSync(dotfiles, "utf8")).toBe(original);
-  });
-
-  it("refuses an unknown argument without touching settings", () => {
-    const before = readFileSync(settings(), "utf8");
-    expect(run(["--uninstall"]).exitCode).toBe(1);
-    expect(readFileSync(settings(), "utf8")).toBe(before);
-    expect(existsSync(own())).toBe(false);
   });
 
   it("keeps only the quota windows and the account from the payload", () => {
@@ -322,5 +323,45 @@ describe("statusline installer and capture", () => {
     // a render without limits (before Claude's first answer) does not wipe the last reading
     draw(JSON.stringify({ model: { id: "m" } }));
     expect(readStatusline(home)?.fiveHour?.usedPercent).toBe(40);
+  });
+
+  it("is off until turned on, on once installed, and off again after removal", () => {
+    expect(statuslineInstallState({ home })).toEqual({ installed: false, supported: true });
+    install();
+    expect(statuslineInstallState({ home })).toEqual({ installed: true, supported: true });
+    install("--remove");
+    expect(statuslineInstallState({ home })).toEqual({ installed: false, supported: true });
+  });
+
+  it("creates settings.json where Claude has none yet, and deletes it again on removal", () => {
+    rmSync(settings());
+    install();
+    expect(readSettings().statusLine.command).toContain("herdr-statusline");
+    install("--remove");
+    expect(existsSync(settings())).toBe(false);
+    expect(existsSync(own())).toBe(false);
+  });
+
+  it("removes what an install killed before its record left, without touching settings.json", () => {
+    const before = readFileSync(settings(), "utf8");
+    install();
+    // as an install cut short after its own files and before its record and settings.json
+    rmSync(join(own(), "install.json"));
+    writeFileSync(settings(), before);
+    install("--remove");
+    expect(readFileSync(settings(), "utf8")).toBe(before);
+    expect(existsSync(own())).toBe(false);
+  });
+
+  it("removes an install that failed after its record and before settings.json", () => {
+    const before = readFileSync(settings(), "utf8");
+    mkdirSync(own(), { mode: 0o700 });
+    chmodSync(join(home, ".claude"), 0o500);
+    try { expect(run([]).exitCode).toBe(1); } finally { chmodSync(join(home, ".claude"), 0o700); }
+    expect(existsSync(join(own(), "install.json"))).toBe(true);
+    expect(readFileSync(settings(), "utf8")).toBe(before);
+    install("--remove");
+    expect(readFileSync(settings(), "utf8")).toBe(before);
+    expect(existsSync(own())).toBe(false);
   });
 });

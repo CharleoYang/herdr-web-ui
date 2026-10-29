@@ -3,7 +3,7 @@ import { join } from "node:path";
 
 /**
  * The limits Claude Code hands its status line, kept by the wrapper that
- * scripts/install-statusline-tee.ts installs when the user opts in. Read here instead of asking
+ * server/statusline-install.ts installs when the user turns it on in Settings. Read here instead of asking
  * Anthropic: these are the numbers Claude's own line draws from, they need no token, and they
  * never leave the machine — the usage endpoint answers
  * 403 from some networks, where this file still holds the numbers.
