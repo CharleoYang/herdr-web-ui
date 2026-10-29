@@ -1,7 +1,7 @@
 import type { StreamSource } from "./conversation-shared.ts";
 import { claudePeerNotice, piMessage, piPromptImages } from "./transcript-records.ts";
 import type { TranscriptEntry } from "./claude-transcript.ts";
-import { claudeImages, entryHostToolResults, hostedBlocks, isCommandEntry, withoutPictureBytes } from "./claude-transcript.ts";
+import { claudeImages, isCommandEntry, senpiPrompt, withoutPictureBytes } from "./claude-transcript.ts";
 import { copilotRootRecord } from "./copilot.ts";
 import { musePrompt } from "./muse.ts";
 import { lettaPrompt } from "./letta.ts";
@@ -135,16 +135,16 @@ function opensTurn(source: StreamSource, line: string, blobs: string | null): bo
   const content = entry.message?.content;
   if (typeof content === "string") return !isCommandEntry(content, entry);
   if (!Array.isArray(content)) return false;
-  // senpi's host tool results answer the calls before them: only a message sent along with them is a
-  // prompt, and it stays on those calls' page
-  const hosted = hostedBlocks(entryHostToolResults(entry as Parameters<typeof entryHostToolResults>[0], content));
-  const own = hosted.size === 0 ? content : content.filter((_block: unknown, at: number) => !hosted.has(at));
+  // senpi's host tool results answer the calls before them and its notices are no one's typing: only a
+  // message sent along with them is a prompt, and with host results it stays on those calls' page
+  const sent = senpiPrompt(entry as Parameters<typeof senpiPrompt>[0], content);
+  const own = sent.own.filter((block) => block !== null) as ({ type?: unknown; text?: unknown } | null)[];
   // a prompt that is only a picture is one too, as the parser draws it; a picture beside a tool's
   // result opens nothing: the result must stay on the page of the call it answers
-  const prompt = own.some((block: { type?: unknown; text?: unknown } | null) =>
-    block?.type === "text" && typeof block.text === "string" && !isCommandEntry(block.text.trim(), entry))
+  const prompt = own.some((block) =>
+    block?.type === "text" && typeof block.text === "string" && block.text.trim().length > 0 && !isCommandEntry(block.text.trim(), entry))
     || (!content.some((block: { type?: unknown } | null) => block?.type === "tool_result") && claudeImages(entry.uuid, own).length > 0);
-  return prompt && hosted.size > 0 ? "inline" : prompt;
+  return prompt && sent.hosts.length > 0 ? "inline" : prompt;
 }
 
 /**
