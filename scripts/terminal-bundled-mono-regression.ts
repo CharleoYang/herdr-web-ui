@@ -136,11 +136,17 @@ setInterval(() => {}, 1 << 30);
     await within(faceAsked, "the page to ask for the face");
     // When: the face arrives after the terminal opened without it
     assert.ok(!(await rowsFamily(page)).includes(FAMILY), "the terminal opens without the face it has not loaded");
-    // a slow face is let go only once the font effect gave up waiting for it and waits for its arrival instead
-    if (slow) await page.waitForFunction(() => (window as unknown as { fontLoadsAsked: string[] }).fontLoadsAsked.includes("M"));
+    // a slow face is let go only once the font effect gave up waiting for it, waits for its arrival
+    // instead, and the pane has been attached without it: the attach must not wait for the face, and a
+    // face let go any earlier can arrive before the attach and leave it nothing to resize
+    let attach: Frame | undefined;
+    if (slow) {
+      await page.waitForFunction(() => (window as unknown as { fontLoadsAsked: string[] }).fontLoadsAsked.includes("M"));
+      attach = await frames.attach();
+    }
     release = true;
     for (const route of held.splice(0)) await route.continue();
-    const attach = await frames.attach();
+    attach ??= await frames.attach();
     await page.waitForFunction((family) => getComputedStyle(document.querySelector(".pane-terminal .xterm-rows")!).fontFamily.includes(family), FAMILY);
     await page.locator(".pane-terminal .xterm-rows", { hasText: ROWS[1]! }).waitFor();
 

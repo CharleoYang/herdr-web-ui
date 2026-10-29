@@ -1,6 +1,7 @@
 import { apiFetch as fetch } from "./api-request-id.ts";
 import type { PreferencesChange, SharedPreferences } from "../../shared/preferences.ts";
 import type { SeenFinish } from "../../shared/seen.ts";
+import type { AgentCatalogResponse, AgentTabStarted } from "../../shared/agent-catalog.ts";
 import { resumeConnectionTraces } from "./connectionTrace.ts";
 import { machinePath, type BridgeHealth, type HerdrIdentity, type Machine, type MachineRoster, type SetupAction, type SetupJob, type SetupRequest } from "../../shared/machines.ts";
 import type {
@@ -715,6 +716,22 @@ export async function fetchAgentKinds(machineId = "local"): Promise<AgentKind[]>
   // filtered here, not on the server: a remote PC's older bridge still answers every manifest,
   // and says nothing of what is installed, so its supported kinds are all offered
   return (await getJson<{ agents: AgentKind[] }>(machinePath(machineId, "agents"))).agents.filter((agent) => SUPPORTED_AGENT_KINDS.has(agent.kind) && agent.installed !== false);
+}
+
+/** GET /api/agent-catalog: every agent Ovis can install, with that PC's commands and what it has installed. */
+export async function fetchAgentCatalog(machineId = "local", signal?: AbortSignal): Promise<AgentCatalogResponse> {
+  return getJson<AgentCatalogResponse>(machinePath(machineId, "agent-catalog"), { signal, cache: "no-store" });
+}
+
+/** POST /api/agent-catalog/install: opens a tab on that PC and types the agent's official command there. */
+export async function startAgentInstall(agent: string, machineId = "local", alternative?: number): Promise<AgentTabStarted> {
+  const response = await sendJson(machinePath(machineId, "agent-catalog/install"), "POST", alternative === undefined ? { agent } : { agent, alternative });
+  return (await response.json()) as AgentTabStarted;
+}
+
+/** POST /api/agent-catalog/sign-in: opens a tab on that PC running the agent's own sign-in. */
+export async function startAgentSignIn(agent: string, machineId = "local"): Promise<AgentTabStarted> {
+  return (await (await sendJson(machinePath(machineId, "agent-catalog/sign-in"), "POST", { agent })).json()) as AgentTabStarted;
 }
 
 /** GET /api/integrations: herdr's agent integrations on that PC and whether each is installed. */

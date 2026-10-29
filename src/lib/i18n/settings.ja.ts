@@ -101,7 +101,6 @@ export const SETTINGS_JA: Record<string, string> = {
   "Shortcuts": "ショートカット",
   "Phone": "スマートフォン",
   "Devices": "デバイス",
-  "Install": "インストール",
   "Installed": "インストール済み",
   "About": "情報",
   "Star on GitHub": "GitHub で Star する",

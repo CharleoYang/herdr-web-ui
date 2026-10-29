@@ -118,6 +118,10 @@ export async function checkUsageMeters(browser: Browser, origin: string): Promis
     assert.equal(await page.locator(".usage-chip").nth(1).evaluate((chip) => chip.classList.contains("is-high")), true);
     await settingsButton.click();
     await openSettingsPage(page, "Subscription usage");
+    // the moved order is shared: the page saves it to the server once the settings rest, and a check
+    // run after this one on the same server must not have that save land in the middle of it
+    const orderSaved = page.waitForResponse((response) => response.request().method() === "PUT" && new URL(response.url()).pathname === "/api/preferences"
+      && (response.request().postDataJSON() as { settings?: Record<string, unknown> } | null)?.settings?.["usageOrder"] !== undefined, { timeout: 10_000 });
     await page.getByRole("button", { name: "Used", exact: true }).click();
     await page.getByRole("switch", { name: "Show Codex · me@work.example", exact: true }).click();
     await page.getByRole("button", { name: "Move Codex · me@example.com up", exact: true }).click();
@@ -133,6 +137,7 @@ export async function checkUsageMeters(browser: Browser, origin: string): Promis
     await page.keyboard.press("Escape");
     const stored = await page.evaluate(() => JSON.parse(localStorage.getItem("ovis:settings") ?? "{}") as { usageHidden?: string[]; usageCount?: string; usageGlance?: string });
     assert.deepEqual([stored.usageHidden, stored.usageCount, stored.usageGlance], [["codex:work"], "used", "week"]);
+    assert.equal((await orderSaved).status(), 200, "the moved order reached the server before this page closes");
 
     // turned off in Settings: gone, and no longer asked for
     await settingsButton.click();
@@ -247,6 +252,10 @@ const expiredReport = (): UsageReport => ({
  * never for the hub's or Antigravity's; it asks the server by the account's key and hands the tab over.
  */
 export async function checkUsageSignInAgain(browser: Browser, origin: string): Promise<void> {
+  // the account order is shared through the server: whatever an earlier check on it saved (checkUsageMeters
+  // moves an account) would put its accounts first here, so this check starts from none
+  const reset = await fetch(`${origin}/api/preferences`, { method: "PUT", headers: { "content-type": "application/json", origin }, body: JSON.stringify({ settings: { usageOrder: [] } }) });
+  assert.equal(reset.status, 200, "the shared account order is cleared");
   for (const phone of [false, true]) {
     const context = await browser.newContext({ viewport: phone ? { width: 390, height: 844 } : { width: 1280, height: 800 }, locale: "en-US", ...(phone ? { hasTouch: true, isMobile: true } : {}) });
     try {
@@ -292,6 +301,8 @@ export async function checkUsageSignInAgain(browser: Browser, origin: string): P
       await page.locator(".sidebar-footer-row .sidebar-footer-action").click();
       await openSettingsPage(page, "Subscription usage");
       const rows = page.locator(".usage-accounts-row");
+      // the rows come with the usage report, loaded once the page is shown: count them once they are
+      await rows.nth(3).waitFor();
       assert.equal(await rows.count(), 4);
       const rowAgain = page.locator(".settings-dialog").getByRole("button", { name: /^Sign in again/ });
       assert.equal(await rowAgain.count(), 1, "Settings offers it on the expired row of this PC only");
@@ -327,6 +338,7 @@ export async function checkUsageSignInAgain(browser: Browser, origin: string): P
     await page.keyboard.press("Escape");
     await page.locator(".sidebar-footer-row .sidebar-footer-action").click();
     await openSettingsPage(page, "Subscription usage");
+    await page.locator(".usage-accounts-row").nth(3).waitFor();
     assert.equal(await page.locator(".usage-accounts-row").count(), 4);
     assert.equal(await page.locator(".settings-dialog").getByRole("button", { name: /^Sign in again/ }).count(), 0, "no Sign in again in a watching device's Settings");
   } finally {

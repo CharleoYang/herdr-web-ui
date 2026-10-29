@@ -129,6 +129,14 @@ export interface AgentCatalogRow extends Omit<AgentCatalogEntry, "install" | "no
   state: AgentInstallState;
 }
 
+/** What POST /api/agent-catalog/install or /sign-in answers: the tab it opened, and the exact text typed there. */
+export interface AgentTabStarted {
+  pane_id: string;
+  workspace_id: string;
+  command: string;
+  shell: InstallShell;
+}
+
 export interface AgentCatalogResponse {
   /** null: a platform the catalog has no commands for */
   platform: CatalogPlatform | null;

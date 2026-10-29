@@ -5,6 +5,7 @@ import { composerDelivery, pendingActionUncertain, submitNote, submitNotTyped, s
 import type { PaneSubmitRetention } from "./paneSubmitRetention.ts";
 import { pendingMessages, UNCONFIRMED_SEND } from "./pendingMessages.ts";
 import { paneStorageId } from "../../shared/machines.ts";
+import { rememberWaitingSend, waitingBaseline, waitingKey } from "./sentWaiting.ts";
 import { composerDrafts } from "./composerDraft.ts";
 import type { AgentStatus, InteractivePrompt, PromptAnswer } from "../../shared/protocol.ts";
 import type { HerdrSocket, SubmitDelivery, SubmitResult } from "./ws.ts";
@@ -131,15 +132,21 @@ export function useComposerSends(deps: ComposerSendsDeps) {
       // before the receipt is awaited: navigation while it is on its way cancels the follow
       const navigation = chatNavigation.current;
       const socket = socketRef.current, session = sessionRef.current;
+      const sentAt = Date.now();
+      const sentAfter = pane === null ? null : waitingBaseline(waitingKey(machineId, pane));
       const result = submitComposerMessage(text, delivery, delivery === "immediate" ? clearDraft : undefined, sendAnyway);
       return result === null ? false : result.then((answer) => {
+        // Neither a dropped connection nor a cleared old draft proves this message was typed.
+        // Without a receipt, leave the retryable composer text and report the uncertainty.
         if (!answer.ok) return submitRefusal(answer.code, answer.message, answer.draft, answer.box, agent);
         // an older bridge took it with no receipt: the box lets it go, a row keeps it as not confirmed
         if (answer.unconfirmed && pane !== null) pendingMessages.keepUnconfirmed(paneStorageId(machineId, pane), text);
-        // only a receipt that says the pane took it at once, on the connection and pane it left from
-        if (delivery === "immediate" && answer.pending === undefined && !answer.unconfirmed
-          && paneRef.current === pane && socketRef.current === socket && sessionRef.current === session) {
-          setChatLocalSend((current) => ({ key: current.key + 1, navigationGeneration: navigation }));
+        // A confirmed send belongs to the original pane even if navigation outruns its receipt.
+        if (delivery === "immediate" && answer.pending === undefined && !answer.unconfirmed) {
+          if (paneRef.current === pane && socketRef.current === socket && sessionRef.current === session) {
+            setChatLocalSend((current) => ({ key: current.key + 1, navigationGeneration: navigation }));
+          }
+          if (pane !== null) rememberWaitingSend(waitingKey(machineId, pane), text, sentAt, sentAfter);
         }
         if (pane !== null && delivery === "immediate" && answer.pending === undefined && !answer.unconfirmed) showSentCommand(pane, text, known, seen);
         return true;

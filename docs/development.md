@@ -778,6 +778,14 @@ The serial lane prints each script's wall seconds and exit code, including the s
 build, then a summary on success or failure. The first failing script stops it.
 The parallel runner builds the demo once, prints a line when each script starts and ends (and
 every minute a script is still running), and keeps running the other scripts after one fails.
+It starts the longest scripts first, by `scripts/ci-browser-timings.json` (each script's median
+seconds on CI; one it does not list counts as the median), so the lane does not end with one slow
+script running alone while the other workers wait; `BROWSER_ORDER=listed` keeps
+`scripts/ci-browser.sh`'s order. The table only orders the scripts: a stale one costs time, not
+coverage, and a new script needs no entry. A script removed from or renamed in `ci-browser.sh`
+leaves the table too (`scripts/ci-browser-parallel.test.ts` fails on a name the lane does not
+run). When scripts get much slower, refresh it with each script's median over several recent
+runs' `[worker-N] PASS <script> (<seconds>s)` lines.
 Each script's full output goes to `${CHECK_DIR:-.ci}/browser-logs/<script>.log`, with
 `summary.json` beside it; a failure prints the last 400 lines of its log and the log's path, and
 the job then fails. CI uploads `browser-logs` with the evidence on success or failure.

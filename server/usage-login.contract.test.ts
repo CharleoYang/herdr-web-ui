@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, expect, it, spyOn } from "bun:test";
 import * as fs from "node:fs";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, watch, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, fstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, watch, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, relative } from "node:path";
 import type { UsageLoginStarted } from "../shared/usage-login.ts";
@@ -9,6 +9,7 @@ import { paneClose, workspaceClose, workspaceCreate } from "./herdr/client.ts";
 import * as herdr from "./herdr/client.ts";
 import * as collector from "./collector.ts";
 import { isJsonObject } from "./http.ts";
+import { privateStateFs } from "./private-state.ts";
 import { UsageLoginService } from "./usage-login.ts";
 import { UsageService, USAGE_PROVIDERS, type UsageContext } from "./usage.ts";
 
@@ -324,17 +325,19 @@ async function fileWritten(path: string, what: string): Promise<void> {
 let heldLaunches = 0;
 /**
  * Tabs whose fake CLI stays open, as a sign-in the user has not finished, each with a receipt of its
- * own: `launched(n)` waits for the n-th tab's CLI to have written its sign-in. Restore `create` when done.
+ * own: `launched(n)` waits for the n-th tab's CLI to have written its sign-in; `open` opens one such tab,
+ * for a test that makes one call of `create` wait. Restore `create` when done.
  */
 function holdLogins() {
   const realCreate = herdr.tabCreate;
   const receipts: string[] = [];
-  const create = spyOn(herdr, "tabCreate").mockImplementation((options: Parameters<typeof realCreate>[0]) => {
+  const open = (options: Parameters<typeof realCreate>[0]) => {
     const receipt = join(root, `held-${++heldLaunches}.json`);
     receipts.push(receipt);
     return realCreate({ ...options, env: { ...options.env, TEST_LOGIN_HOLD: "1", TEST_LOGIN_RECEIPT: receipt } });
-  });
-  return { create, launched: (n: number) => fileWritten(receipts[n]!, `held sign-in ${n}`) };
+  };
+  const create = spyOn(herdr, "tabCreate").mockImplementation(open);
+  return { create, open, launched: (n: number) => fileWritten(receipts[n]!, `held sign-in ${n}`) };
 }
 
 const statusAndCode = async (response: Response) => [response.status, response.status === 200 ? null : (await response.json()).error.code];
@@ -393,6 +396,239 @@ it("starts one sign-in again when two arrive at once for an account, also once i
     // its CLI has run before the next test reads the homes
     await launched(1);
   } finally { create.mockRestore(); await workspaceClose(elsewhere).catch(() => undefined); }
+});
+
+/**
+ * Finishes a held sign-in and resolves once herdr says its pane ended, heard on a subscription of the
+ * test's own: the shared server hears no exit before the file's first (see beforeAll), and a server
+ * started in the test may subscribe after it.
+ */
+async function finishLoginInHerdr(paneId: string): Promise<void> {
+  const started = Promise.withResolvers<void>();
+  const ended = Promise.withResolvers<void>();
+  const subscription = herdr.subscribeEvents([{ type: "pane.exited" }], {
+    onStarted: () => started.resolve(),
+    onEvent: (frame) => { if (frame.data?.["type"] === "pane_exited" && frame.data["pane_id"] === paneId) ended.resolve(); },
+    onError: (error) => { started.reject(error); ended.reject(error); },
+  });
+  const timer = setTimeout(() => {
+    const error = new Error(`herdr did not say the sign-in in ${paneId} ended`);
+    started.reject(error); ended.reject(error);
+  }, 10_000);
+  try {
+    await started.promise;
+    await herdr.paneSendKeys(paneId, ["Enter"]);
+    await ended.promise;
+  } finally { clearTimeout(timer); subscription.close(); }
+}
+
+/** A server on `stateDir` signing in from the fixture home, as one started again after a restart would be. */
+function serveOn(stateDir: string) {
+  return createServer({
+    port: 0, stateDir, machines: false, registerBridge: false, sidecar: false, terminalAttach: false,
+    usageLogin: new UsageLoginService(root, { ...process.env, PATH: bin }, ctx),
+    usage: new UsageService(ctx, USAGE_PROVIDERS.filter((provider) => provider.id === "claude" || provider.id === "codex")),
+  });
+}
+const startOn = (instance: { readonly port: number }, body: unknown) => fetch(`http://127.0.0.1:${instance.port}/api/usage/login`, {
+  method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body),
+});
+
+it("keeps a home taken across a server restart while its sign-in still runs in its tab, and frees it once that ended", async () => {
+  // Given: a sign-in again still open in its tab, started by a server that has stopped since
+  expiredHome("claude", ".claude-restart", "restart@example.test");
+  const key = (await listed(true)).find((usage) => usage.account === "restart@example.test")!.key;
+  const stateDir = mkdtempSync(join(root, "restart-state-"));
+  const { create, launched } = holdLogins();
+  const before = serveOn(stateDir);
+  // a server beside it on the same state, started before that sign-in was, so it learns of it from the file only then
+  const beside = serveOn(stateDir);
+  let after: ReturnType<typeof createServer> | undefined;
+  try {
+    const first = await startOn(before, { provider: "claude", account: key });
+    expect(first.status).toBe(200);
+    const pane = (await first.json() as UsageLoginStarted).pane_id;
+    openedPanes.push(pane);
+    await launched(0);
+    expect(await statusAndCode(await startOn(beside, { provider: "claude", account: key }))).toEqual([409, "login_in_progress"]);
+    beside.stop();
+    before.stop();
+    // When: the server starts again on its state, and the same account is asked for
+    after = serveOn(stateDir);
+    const again = await startOn(after, { provider: "claude", account: key });
+    // Then: no second CLI signs in to that home while the first runs
+    expect(await statusAndCode(again)).toEqual([409, "login_in_progress"]);
+    expect(create).toHaveBeenCalledTimes(1);
+    // once that sign-in ends, the home is free again: the restarted server asks herdr, not its own events
+    await finishLoginInHerdr(pane);
+    const later = await startOn(after, { provider: "claude", account: key });
+    expect(later.status).toBe(200);
+    openedPanes.push((await later.json() as UsageLoginStarted).pane_id);
+    await launched(1);
+  } finally { before.stop(); beside.stop(); after?.stop(); create.mockRestore(); }
+});
+
+it("starts one sign-in when two servers on one state dir are asked for one home at once", async () => {
+  // Given: two servers on one state dir, and the first one's sign-in still opening its tab
+  expiredHome("claude", ".claude-two-servers", "two-servers@example.test");
+  const key = (await listed(true)).find((usage) => usage.account === "two-servers@example.test")!.key;
+  const stateDir = mkdtempSync(join(root, "two-servers-state-"));
+  const { create, open, launched } = holdLogins();
+  const opening = Promise.withResolvers<void>();
+  const gate = Promise.withResolvers<void>();
+  create.mockImplementationOnce(async (options) => { opening.resolve(); await gate.promise; return open(options); });
+  const first = serveOn(stateDir);
+  const second = serveOn(stateDir);
+  let answer: Promise<Response> | undefined;
+  try {
+    answer = startOn(first, { provider: "claude", account: key });
+    await opening.promise;
+    // When: the other server is asked for that home meanwhile
+    const other = await startOn(second, { provider: "claude", account: key });
+    // Then: it refuses, and the first one's sign-in opens
+    expect(await statusAndCode(other)).toEqual([409, "login_in_progress"]);
+    gate.resolve();
+    const started = await answer;
+    expect(started.status).toBe(200);
+    openedPanes.push((await started.json() as UsageLoginStarted).pane_id);
+    expect(create).toHaveBeenCalledTimes(1);
+    await launched(0);
+  } finally {
+    // a check that failed early leaves the held launch to finish here, its tab closed with the others
+    gate.resolve();
+    const late = await answer?.catch(() => undefined);
+    if (late?.ok && !late.bodyUsed) openedPanes.push((await late.json() as UsageLoginStarted).pane_id);
+    first.stop(); second.stop(); create.mockRestore();
+  }
+});
+
+for (const damage of ["corrupt", "unreadable"] as const) {
+  // root reads any file, and Windows has no mode that refuses its owner
+  it.skipIf(damage === "unreadable" && (process.platform === "win32" || process.getuid?.() === 0))(`refuses a sign-in while the state file of running sign-ins is ${damage}, rather than reading it as empty`, async () => {
+    // Given: a state file that may name a sign-in still running, which does not parse or may not be read
+    const stateDir = mkdtempSync(join(root, `${damage}-state-`));
+    const saved = join(stateDir, "usage-logins.json");
+    writeFileSync(saved, damage === "corrupt" ? "{broken" : JSON.stringify({ logins: [] }));
+    if (damage === "unreadable") chmodSync(saved, 0);
+    const local = new UsageLoginService(root, { ...process.env, PATH: bin }, ctx);
+    local.persistTo(stateDir);
+    const { create } = holdLogins();
+    try {
+      // When
+      const response = await local.handle(new Request("http://localhost/api/usage/login", { method: "POST", body: JSON.stringify({ provider: "claude", name: `${damage}-state` }) }));
+      const body = await response.json();
+      if (response.status === 200) openedPanes.push((body as UsageLoginStarted).pane_id);
+      // Then: no login starts, and no credential home is left for a retry to trip on
+      expect([response.status, body.error?.code ?? null]).toEqual([409, "login_state_unreadable"]);
+      expect(create).not.toHaveBeenCalled();
+      expect(existsSync(join(root, `.claude-${damage}-state`))).toBe(false);
+    } finally { create.mockRestore(); chmodSync(saved, 0o600); }
+  });
+}
+
+for (const failure of ["refused", "not synced"] as const) {
+// Windows syncs no directory, so a rename there is not checked that way
+it.skipIf(failure === "not synced" && process.platform === "win32")(`closes the tab and sends no login when the record of that tab as the home's holder is ${failure}`, async () => {
+  // Given: the launch is recorded, but the next write, the one naming its tab, is refused (ENOSPC) or
+  // lands without its directory synced (EIO), so a crash could undo it
+  const stateDir = mkdtempSync(join(root, "unrecorded-state-"));
+  const local = new UsageLoginService(root, { ...process.env, PATH: bin }, ctx);
+  local.persistTo(stateDir);
+  let renames = 0;
+  let directorySyncs = 0;
+  const realRename = privateStateFs.renameSync;
+  const realSync = privateStateFs.fsyncSync;
+  const rename = spyOn(privateStateFs, "renameSync").mockImplementation((from, to) => {
+    if (failure === "refused" && ++renames === 2) throw Object.assign(new Error("fixture: no space left on device"), { code: "ENOSPC" });
+    realRename(from, to);
+  });
+  const sync = spyOn(privateStateFs, "fsyncSync").mockImplementation((fd) => {
+    if (failure === "not synced" && fstatSync(fd).isDirectory() && ++directorySyncs === 2) throw Object.assign(new Error("fixture: i/o error"), { code: "EIO" });
+    realSync(fd);
+  });
+  const sent = spyOn(herdr, "paneSendText");
+  const { create } = holdLogins();
+  const name = failure === "refused" ? "unrecorded" : "unsynced";
+  try {
+    // When
+    const response = await local.handle(new Request("http://localhost/api/usage/login", { method: "POST", body: JSON.stringify({ provider: "claude", name }) }));
+    const opened = (await (create.mock.results[0]!.value as ReturnType<typeof herdr.tabCreate>)).root_pane.pane_id;
+    openedPanes.push(opened);
+    // Then: no login runs in that tab, which is closed, and the home is free again for this or another server
+    expect(response.status).toBe(500);
+    expect(sent.mock.calls.filter(([pane]) => pane === opened)).toEqual([]);
+    expect(await herdr.paneGet(opened).then(() => "open", () => "closed")).toBe("closed");
+    expect(JSON.parse(readFileSync(join(stateDir, "usage-logins.json"), "utf8"))).toEqual({ logins: [] });
+    expect(existsSync(join(root, `.claude-${name}`))).toBe(false);
+  } finally { rename.mockRestore(); sync.mockRestore(); sent.mockRestore(); create.mockRestore(); }
+});
+}
+
+it("refuses once, without looking again and again, when a crashed launch's entry cannot be replaced, and signs in once it can", async () => {
+  // Given: a launch that never opened its tab, long ago, and a disk that refuses the file's next writes
+  const stateDir = mkdtempSync(join(root, "full-disk-state-"));
+  writeFileSync(join(stateDir, "usage-logins.json"), JSON.stringify({ logins: [
+    { home: `claude:${join(realpathSync(root), ".claude-full-disk")}`, launch: "crashed", pid: process.pid, at: 0 },
+  ] }));
+  const local = new UsageLoginService(root, { ...process.env, PATH: bin }, ctx);
+  local.persistTo(stateDir);
+  let writes = 0;
+  const realRename = privateStateFs.renameSync;
+  const rename = spyOn(privateStateFs, "renameSync").mockImplementation((from, to) => {
+    // a server that tried again for each refused write would never get past them; give up after 20
+    if (++writes <= 20) throw Object.assign(new Error("fixture: no space left on device"), { code: "ENOSPC" });
+    realRename(from, to);
+  });
+  const { create, launched } = holdLogins();
+  const post = () => local.handle(new Request("http://localhost/api/usage/login", { method: "POST", body: JSON.stringify({ provider: "claude", name: "full-disk" }) }));
+  try {
+    // When
+    const refused = await post();
+    // Then: a sign-in no other server could see is not started, after one try to take that launch's place
+    expect(refused.status).toBe(500);
+    expect(writes).toBe(1);
+    expect(create).not.toHaveBeenCalled();
+    // once the file can be written, the crashed launch holds nothing
+    rename.mockRestore();
+    const started = await post();
+    expect(started.status).toBe(200);
+    openedPanes.push((await started.json() as UsageLoginStarted).pane_id);
+    await launched(0);
+  } finally { rename.mockRestore(); create.mockRestore(); }
+});
+
+it("frees a home after a restart when its sign-in ended while no server ran, even when its pane ID now names another tab", async () => {
+  // Given: a sign-in started by a server that stopped, whose tab then closed while none ran
+  // Claude's stand-in keeps the account its home names, so the key still lists it once it has run
+  expiredHome("claude", ".claude-restart-gone", "restart-gone@example.test");
+  const key = (await listed(true)).find((usage) => usage.account === "restart-gone@example.test")!.key;
+  const stateDir = mkdtempSync(join(root, "restart-gone-state-"));
+  // a plain tab, not one of the held sign-ins counted below
+  const plainTab = herdr.tabCreate;
+  const { create, launched } = holdLogins();
+  const before = serveOn(stateDir);
+  let after: ReturnType<typeof createServer> | undefined;
+  try {
+    const first = await startOn(before, { provider: "claude", account: key });
+    expect(first.status).toBe(200);
+    await launched(0);
+    before.stop();
+    await paneClose((await first.json() as UsageLoginStarted).pane_id);
+    // a herdr started again hands the same pane IDs out again: here the saved one names another live tab
+    const other = (await plainTab({ cwd: root, label: "usage-login-other", workspaceId })).root_pane.pane_id;
+    openedPanes.push(other);
+    const saved = join(stateDir, "usage-logins.json");
+    const state: { logins: { pane: string }[] } = JSON.parse(readFileSync(saved, "utf8"));
+    expect(state.logins).toHaveLength(1);
+    writeFileSync(saved, JSON.stringify({ ...state, logins: state.logins.map((login) => ({ ...login, pane: other })) }));
+    // When: the server starts again and the account is asked for
+    after = serveOn(stateDir);
+    const again = await startOn(after, { provider: "claude", account: key });
+    // Then: nothing holds the home any more
+    expect(again.status).toBe(200);
+    openedPanes.push((await again.json() as UsageLoginStarted).pane_id);
+    await launched(1);
+  } finally { before.stop(); after?.stop(); create.mockRestore(); }
 });
 
 for (const alias of [false, true]) {
@@ -499,9 +735,14 @@ it("frees the home when the login command could not be sent to its new tab", asy
   } finally { send.mockRestore(); create.mockRestore(); }
   // Then: that request fails, and the next is not told a sign-in is open
   expect(failed.status).toBe(500);
-  const retried = await start({ provider: "codex", account: key });
-  expect(retried.status).toBe(200);
-  openedPanes.push((await retried.json() as UsageLoginStarted).pane_id);
+  const { create: held, launched } = holdLogins();
+  try {
+    const retried = await start({ provider: "codex", account: key });
+    expect(retried.status).toBe(200);
+    openedPanes.push((await retried.json() as UsageLoginStarted).pane_id);
+    // its CLI has run before the next test reads the root
+    await launched(0);
+  } finally { held.mockRestore(); }
 });
 
 it("refuses to sign in again to an account this PC does not list, without opening a tab", async () => {

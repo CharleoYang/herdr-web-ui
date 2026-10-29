@@ -9,7 +9,7 @@ import { accessSync, constants, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { delimiter, isAbsolute, join } from "node:path";
 import { meetsMinVersion, parseVersion, type AgentCatalogEntry, type AgentInstallState, type CatalogPlatform } from "../shared/agent-catalog.ts";
-import { loginPathProbe, loginShell, type LoginPathProbe } from "./shell-agent.ts";
+import { loginPathProbe, loginShell, shellCommandLine, type LoginPathProbe } from "./shell-agent.ts";
 
 /** How long one `--version` may run before it is killed and reported as timed out. */
 export const VERSION_TIMEOUT_MS = 5_000;
@@ -117,12 +117,23 @@ function killTree(pid: number): void {
 }
 
 /**
+ * The process that runs `executable args`. On Windows a .cmd or .bat (the shim npm installs an agent
+ * as) is a batch file, which only cmd.exe runs: it goes through `cmd.exe /d /s /c "<line>"`, the line
+ * quoted as cmd reads it, with Bun's own argument quoting off so cmd gets it as written.
+ */
+export function versionSpawn(executable: string, args: readonly string[], platform: NodeJS.Platform = process.platform, comspec: string | undefined = process.env["ComSpec"]): { cmd: string[]; windowsVerbatimArguments: boolean } {
+  if (platform !== "win32" || !/\.(?:cmd|bat)$/i.test(executable)) return { cmd: [executable, ...args], windowsVerbatimArguments: false };
+  return { cmd: [comspec || "cmd.exe", "/d", "/s", "/c", `"${shellCommandLine("cmd", executable, args)}"`], windowsVerbatimArguments: true };
+}
+
+/**
  * Runs `executable args` with no input and this server's environment, in a process group of its own.
  * At `timeoutMs` the whole group is killed and its output no longer read: a version flag that starts
  * a child holding stdout open (an npm shim, a launcher) would otherwise outlast the timeout.
  */
 export const runVersion: RunVersion = async (executable, args, timeoutMs) => {
-  const child = Bun.spawn([executable, ...args], { stdin: "ignore", stdout: "pipe", stderr: "pipe", detached: process.platform !== "win32" });
+  const { cmd, windowsVerbatimArguments } = versionSpawn(executable, args);
+  const child = Bun.spawn(cmd, { stdin: "ignore", stdout: "pipe", stderr: "pipe", detached: process.platform !== "win32", windowsVerbatimArguments });
   let timedOut = false;
   let stopReading!: () => void;
   const stop = new Promise<void>((resolve) => { stopReading = resolve; });
@@ -231,6 +242,11 @@ export class AgentDetector {
     }).finally(() => this.#running.delete(fingerprint));
     this.#running.set(fingerprint, read);
     return read;
+  }
+
+  /** The executable `binary` would be started as on this PC: PATH first, then the installer's own folders; null where none is. */
+  async executable(binary: string, dirs: readonly string[], platform: CatalogPlatform | null): Promise<string | null> {
+    return (await this.#locate(binary)) ?? (platform === null ? null : this.#inInstallDirs(binary, dirs, platform));
   }
 
   /**

@@ -1,5 +1,6 @@
 /** xterm's source uses const enums in .d.ts files; TypeScript must inline them before Vite. */
 import ts from "typescript-api";
+import type { BunPlugin } from "bun";
 import { createHash } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
@@ -28,7 +29,13 @@ export function buildXtermSource(root: string): string {
     module: ts.ModuleKind.ESNext,
     moduleResolution: ts.ModuleResolutionKind.Bundler,
     rootDir: source,
-    paths: { "browser/*": [join(source, "browser/*")], "common/*": [join(source, "common/*")] },
+    // xterm 6's VS Code base (src/vs) resolves vs/nls to its own stub, and is written for catch
+    // variables typed any: xterm's repository builds it so (src/vs/tsconfig.json, not in the package)
+    paths: {
+      "browser/*": [join(source, "browser/*")], "common/*": [join(source, "common/*")],
+      "vs/nls": [join(source, "vs/patches/nls")], "vs/*": [join(source, "vs/*")],
+    },
+    useUnknownInCatchVariables: false,
     experimentalDecorators: true, useDefineForClassFields: false,
     skipLibCheck: true, types: [], noEmitOnError: true,
   };
@@ -41,7 +48,7 @@ export function buildXtermSource(root: string): string {
     hashed.set(canonical(file), content.toString("utf8").replace(/^\uFEFF/, ""));
   }
   const version = JSON.parse(hashed.get(canonical(manifest))!).version;
-  if (version !== "5.5.0") throw new Error("Revalidate the xterm composition backport before changing xterm versions");
+  if (version !== "6.0.0") throw new Error("Revalidate the xterm composition backport before changing xterm versions");
   const output = join(cache, key.digest("hex").slice(0, 16));
   if (existsSync(output)) return output;
   mkdirSync(cache, { recursive: true });
@@ -78,6 +85,22 @@ export function buildXtermSource(root: string): string {
     rmSync(staging, { recursive: true, force: true, maxRetries: 5 });
   }
   return output;
+}
+
+/**
+ * Bun.build's resolution of the source `buildXtermSource` emitted, as vite.config.ts aliases it:
+ * `@xterm/xterm` to its public Terminal, its own `browser/`, `common/` and `vs/` imports to their
+ * files, and `vs/nls` to xterm 6's stub.
+ */
+export function xtermSourcePlugin(xterm: string): BunPlugin {
+  return {
+    name: "xterm-source",
+    setup(build) {
+      build.onResolve({ filter: /^@xterm\/xterm$/ }, () => ({ path: join(xterm, "browser/public/Terminal.js") }));
+      build.onResolve({ filter: /^vs\/nls$/ }, () => ({ path: join(xterm, "vs/patches/nls.js") }));
+      build.onResolve({ filter: /^(browser|common|vs)\// }, ({ path }) => ({ path: join(xterm, path + ".js") }));
+    },
+  };
 }
 
 /** One spelling per file for TypeScript's paths and node's alike. */

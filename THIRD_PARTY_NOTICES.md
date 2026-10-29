@@ -1676,13 +1676,16 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
 
 ## xterm.js
 
-The browser terminal includes xterm.js 5.5.0 with a local composition-ordering and reset patch.
+The browser terminal includes xterm.js 6.0.0 with a local composition-ordering and reset patch.
+xterm.js 6 includes parts of Visual Studio Code's base library (`src/vs/base`), under the same
+MIT license.
 The queue/watermark approach follows joonhoekim's MIT-licensed proposal in
 https://github.com/xtermjs/xterm.js/pull/6090.
 
 Copyright (c) 2017-2019, The xterm.js authors (https://github.com/xtermjs/xterm.js)
 Copyright (c) 2014-2016, SourceLair Private Company (https://www.sourcelair.com)
 Copyright (c) 2012-2013, Christopher Jeffrey (https://github.com/chjj/)
+Copyright (c) Microsoft Corporation (`src/vs/base`)
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal

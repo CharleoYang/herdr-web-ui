@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { AGENT_CATALOG, type AgentCatalogEntry } from "../shared/agent-catalog.ts";
-import { AgentDetector, catalogLocator, LOGIN_PATH_KEPT_MS, runVersion, TIMEOUT_KEPT_MS } from "./agent-catalog-detect.ts";
+import { AgentDetector, catalogLocator, LOGIN_PATH_KEPT_MS, runVersion, TIMEOUT_KEPT_MS, versionSpawn } from "./agent-catalog-detect.ts";
 
 const entry = (id: string): AgentCatalogEntry => AGENT_CATALOG.find((candidate) => candidate.id === id)!;
 
@@ -196,5 +196,36 @@ describe.skipIf(process.platform === "win32")("AgentDetector", () => {
     expect(run.timedOut).toBe(false);
     expect(run.output.length).toBeLessThan(10_000);
     expect(run.output.startsWith("1.2.3")).toBe(true);
+  });
+});
+
+describe("versionSpawn", () => {
+  it("runs a Windows batch file (an npm agent's .cmd shim) through cmd.exe, with its line as cmd reads it", () => {
+    const comspec = "C:\\Windows\\system32\\cmd.exe";
+    expect(versionSpawn("C:\\Users\\Jo Doe\\AppData\\Roaming\\npm\\codex.cmd", ["--version"], "win32", comspec)).toEqual({
+      cmd: [comspec, "/d", "/s", "/c", '""C:\\Users\\Jo Doe\\AppData\\Roaming\\npm\\codex.cmd" "--version""'],
+      windowsVerbatimArguments: true,
+    });
+    expect(versionSpawn("C:\\tools\\AGENT.BAT", ["--version"], "win32", "").cmd.slice(0, 4)).toEqual(["cmd.exe", "/d", "/s", "/c"]);
+  });
+
+  it("runs anything else as itself", () => {
+    expect(versionSpawn("C:\\Users\\u\\.local\\bin\\claude.exe", ["--version"], "win32", "cmd.exe")).toEqual({ cmd: ["C:\\Users\\u\\.local\\bin\\claude.exe", "--version"], windowsVerbatimArguments: false });
+    expect(versionSpawn("/opt/tools/agent.cmd", ["--version"], "linux", undefined)).toEqual({ cmd: ["/opt/tools/agent.cmd", "--version"], windowsVerbatimArguments: false });
+  });
+});
+
+describe.skipIf(process.platform !== "win32")("runVersion on Windows", () => {
+  it("reads the version a .cmd shim prints, from a folder with a space in its name", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "ovis catalog cmd "));
+    try {
+      const shim = join(dir, "agent.cmd");
+      // %~1: the first argument as the shim got it, cmd's quotes taken off (an npm shim hands %* to node, which does the same)
+      writeFileSync(shim, "@echo off\r\necho agent 4.5.6 %~1\r\n");
+      const run = await runVersion(shim, ["--version"], 10_000);
+      expect([run.timedOut, run.exitCode, run.output.trim()]).toEqual([false, 0, "agent 4.5.6 --version"]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

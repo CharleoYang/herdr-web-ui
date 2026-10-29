@@ -101,7 +101,6 @@ export const SETTINGS_KO: Record<string, string> = {
   "Shortcuts": "단축키",
   "Phone": "폰",
   "Devices": "기기",
-  "Install": "설치",
   "Installed": "설치됨",
   "About": "정보",
   "Star on GitHub": "GitHub에서 Star 누르기",
