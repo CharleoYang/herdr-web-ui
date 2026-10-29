@@ -69,6 +69,10 @@ run_script scripts/omo-question-wheel-regression.ts
 run_script scripts/mirror-scroll-demo-regression.ts
 run_script scripts/mirror-fold-demo-regression.ts
 run_script scripts/terminal-cjk-punctuation-regression.ts
+run_script scripts/terminal-late-faces-regression.ts
+run_script scripts/terminal-hangul-seam-regression.ts
+run_script scripts/terminal-sync-output-regression.ts
+run_script scripts/terminal-bundled-mono-regression.ts
 run_script scripts/application-paging-regression.ts
 run_script scripts/pane-paging-demo-regression.ts
 run_script scripts/link-menu-demo-regression.ts
@@ -77,6 +81,7 @@ run_script scripts/key-bar-hold-repeat-regression.ts
 run_script scripts/settings-pages-demo-regression.ts
 run_script scripts/interface-font-demo-regression.ts
 run_script scripts/theme-first-paint-demo-regression.ts
+run_script scripts/boot-loading-demo-regression.ts
 run_script scripts/security-summary-demo-regression.ts
 run_script scripts/push-health-demo-regression.ts
 run_script scripts/device-security-demo-regression.ts
@@ -123,6 +128,7 @@ run_script scripts/chat-greeting-demo-regression.ts
 run_script scripts/restored-draft-demo-regression.ts
 run_script scripts/chat-local-send-follow-demo-regression.ts
 run_script scripts/chat-tool-paths-demo-regression.ts
+run_script scripts/chat-list-markers-demo-regression.ts
 run_script scripts/terminal-paste-insert-demo-regression.ts
 run_script scripts/composer-fit-demo-regression.ts
 run_script scripts/held-rows-demo-regression.ts
@@ -132,6 +138,7 @@ run_script scripts/command-outcome-demo-regression.ts
 run_script scripts/chat-outcome-note-browser-qa.ts
 run_script scripts/sidebar-activity-demo-regression.ts
 run_script scripts/sidebar-filter-demo-regression.ts
+run_script scripts/sidebar-declutter-demo-regression.ts
 run_script scripts/sidebar-spacing-demo-regression.ts
 run_script scripts/sidebar-machine-layout-demo-regression.ts
 run_script scripts/sidebar-machine-removal-demo-regression.ts

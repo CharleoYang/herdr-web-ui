@@ -27,7 +27,7 @@ describe("PTY sidecar boundary", () => {
 
   it("loads node-pty only in the Node sidecar", () => {
     // this file names the package in its own examples
-    const code = [...files("{server,src,shared,scripts,site}/**/*.{ts,tsx,mjs,cjs,js}"), "vite.config.ts"].filter((file) => file !== "server/conventions.test.ts");
+    const code = [...files("{server,src,shared,scripts,site,telemetry}/**/*.{ts,tsx,mjs,cjs,js}"), "vite.config.ts"].filter((file) => file !== "server/conventions.test.ts");
     const loads = matches(code, LOAD);
     fail(loads.filter((load) => !NODE_SIDE.has(load.file)).map((load) => load.at),
       "node-pty must never load inside Bun (AGENTS.md, Bridge invariants). PTY work goes through the Node sidecar server/pty/pty-host.mjs via PtySession (server/pty/session.ts).");
@@ -46,7 +46,7 @@ describe("web push", () => {
   // web-push's sendNotification goes through node:https, which Bun does not carry the way it
   // needs; push.ts builds each request with generateRequestDetails and sends it with fetch.
   it("never calls sendNotification", () => {
-    fail(matches(files("{server,src,shared,scripts}/**/*.{ts,tsx,mjs,js}").filter((file) => !file.endsWith(".test.ts")), /\bsendNotification\b/).map((match) => match.at),
+    fail(matches(files("{server,src,shared,scripts,telemetry}/**/*.{ts,tsx,mjs,js}").filter((file) => !file.endsWith(".test.ts")), /\bsendNotification\b/).map((match) => match.at),
       "Web push requests are built with webpush.generateRequestDetails and sent with fetch (server/push.ts); never call sendNotification (AGENTS.md, Bridge invariants).");
   });
 });
@@ -217,5 +217,25 @@ describe("herdr socket", () => {
     const raw = matches(files("{server,src,shared,scripts}/**/*.{ts,tsx,mjs,js}").filter((file) => !file.endsWith(".test.ts")), /["']events\.subscribe["']/).filter((match) => match.file !== "server/herdr/client.ts");
     fail([...subscribers, ...raw].map((match) => match.at),
       "server/collector.ts is the only status subscription (startStatusCollector), and `events.subscribe` is sent only by subscribeEvents in server/herdr/client.ts: take pane status from the collector's callbacks (onStatus, onPaneEnded, onBaseline) in server/index.ts instead of subscribing again.");
+  });
+});
+
+describe("remote PC bundle boundary", () => {
+  // scripts/build-remote-bundle.ts ships server/, shared/ and integrations/ but not src/: code there that
+  // imports src/ loads from a checkout, where every check runs, and not on a remote PC (#2220)
+  const SRC_IMPORT = /(?:\bfrom\s*|\bimport\s*\(?\s*)["'](?:\.\.\/)+src\//;
+
+  it("never imports src/ from code the remote bundle carries", () => {
+    const shipped = [...serverCode(), ...files("{shared,integrations}/**/*.{ts,mjs,js}").filter((file) => !file.endsWith(".test.ts"))];
+    fail(matches(shipped, SRC_IMPORT).map((found) => found.at),
+      "The remote PC bundle (scripts/build-remote-bundle.ts) carries server/, shared/ and integrations/, not src/: move what this code needs from src/ into shared/, as shared/markdown.ts was.");
+  });
+
+  it("knows an import of src/ from a mention", () => {
+    expect(SRC_IMPORT.test("import { parseInline } from \"../src/lib/markdown.ts\";")).toBe(true);
+    expect(SRC_IMPORT.test("const m = await import('../../src/lib/x.ts')")).toBe(true);
+    expect(SRC_IMPORT.test("import \"../src/styles.css\";")).toBe(true);
+    expect(SRC_IMPORT.test("import { a } from \"../shared/markdown.ts\";")).toBe(false);
+    expect(SRC_IMPORT.test("import { a } from \"./src-files.ts\";")).toBe(false);
   });
 });

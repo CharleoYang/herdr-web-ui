@@ -13,14 +13,15 @@ Extension, a later build; see [Later builds](#later-builds)).
 |---|---|---|
 | Bundle ID | `sh.ovis.app` | `PRODUCT_BUNDLE_IDENTIFIER`, `app/ios/App/App.xcodeproj` |
 | Version | `1.0` | `MARKETING_VERSION`, in the project's build settings, which the app and its extension share (not a target's General tab) |
-| Build | `1` | `CURRENT_PROJECT_VERSION`, in the project's build settings too; raise it by one for every upload, TestFlight included |
+| Build | `3` | `CURRENT_PROJECT_VERSION`, in the project's build settings too; raise it by one for every upload, TestFlight included |
 | Devices | iPhone and iPad | `TARGETED_DEVICE_FAMILY = "1,2"`, so the listing needs iPad screenshots too |
 | Minimum iOS | 15.0 | `IPHONEOS_DEPLOYMENT_TARGET` |
 | Signing | Automatic, no team yet | the owner picks the team in Xcode (section 3) |
 | Camera text | "Scan the QR code your PC shows under Settings, Phone & devices." | `NSCameraUsageDescription`, `Info.plist` |
 | Microphone text | "Dictate messages and commands to your agents with voice input." | `NSMicrophoneUsageDescription`, `Info.plist` |
+| Speech recognition text | "Turn what you say into text for your agents when no OpenAI key is set." | `NSSpeechRecognitionUsageDescription`, `Info.plist` |
 | Export compliance | no non-exempt encryption (only Apple's HTTPS) | `ITSAppUsesNonExemptEncryption = false`, so uploads skip the question |
-| Privacy manifest | no tracking and no analytics collection: nothing is declared as collected; UserDefaults for the app's own settings (reason `CA92.1`) | `app/ios/App/App/PrivacyInfo.xcprivacy` |
+| Privacy manifest | no tracking; product interaction, device ID and coarse location collected for analytics, linked to the PC's install ID, not tracking (the PC's usage counts, section 5); UserDefaults for the app's own settings (reason `CA92.1`) | `app/ios/App/App/PrivacyInfo.xcprivacy` |
 
 ## 2. Apple's sites, click by click (the owner)
 
@@ -37,6 +38,12 @@ Extension, a later build; see [Later builds](#later-builds)).
    needs no key.
 
 ## 3. Build and upload (the owner, on his Mac with Xcode)
+
+Build 3 is prepared for the next upload. The last documented upload is version 1.0 build 2,
+submitted on 2026-10-24 ([docs/native-app.md](../../docs/native-app.md#phase-1-first-store-release),
+recorded in commit `54fdadc1`). Check App Store Connect before uploading in case a later build
+has already been uploaded. The App and OvisNotifications targets inherit the same project-level
+build number in Debug and Release.
 
 ```bash
 git switch main && git pull
@@ -106,24 +113,34 @@ without transparency, with the status bar set to 9:41.
 ## 5. App Privacy (App Store Connect > the app > App Privacy)
 
 Apple counts data as collected when it leaves the device "in a way that allows you and/or your
-third-party partners to access it". What the app shows and sends goes only to a computer the user
-runs, so it is not collected in Apple's sense. Analytics are not collected: the app sends no usage
-counts anywhere. The one developer-side service is the push relay (`push-relay/`), which keeps the
-phone's push token to forward the PC's end-to-end encrypted alerts when alerts are turned on; it
-cannot read the alerts and is declared below as a service provider.
+third-party partners to access it". What the app shows and sends goes only to a computer the
+user runs, so it is not collected in Apple's sense. One route does reach the developer: the app
+tells the PC the settings chosen in it (`TelemetryNotice` in
+`src/components/TelemetryControls.tsx`), and the Ovis server on the PC puts the settings of the
+last browser or phone that opened it into its anonymous usage counts, which it sends to the
+developer's telemetry Worker (`server/telemetry.ts`, stored by `telemetry/worker.ts`). They are on
+by default (opt-out), start only after the client has shown its notice, and stop when turned off
+under Settings > About > Anonymous usage counts (in the app or on the PC), or with
+`OVIS_TELEMETRY=0` on the PC. They hold a random ID made on the PC, the Ovis version, the PC's
+operating system, CPU and install method, the allowlisted settings snapshot (no free-form text,
+paths or account names), the kinds of coding agents running, and the country the receiver reads
+from the PC's address (the address is not stored).
 
-Get Started > *Do you or your third-party partners collect data from this app?* **Yes, only the
-push token described above.** Then declare:
+Get Started > *Do you or your third-party partners collect data from this app?* **Yes, we collect
+data from this app.** Then declare:
 
 | Data type | Use | Linked to the user | Tracking |
 |---|---|---|---|
-| Identifiers > Device ID (the phone's push token, kept by the push relay once alerts are on) | App Functionality | Yes | No |
+| Usage Data > Product Interaction (the settings chosen in the app, and daily use) | Analytics | Yes | No |
+| Identifiers > Device ID (the random install ID the PC makes) | Analytics | Yes | No |
+| Location > Coarse Location (the country, two letters) | Analytics | Yes | No |
 
-Nothing else leaves the phone to the developer: no settings, no usage, no location, no analytics.
-The push relay is a service provider carrying the user's own encrypted alerts; nothing is degraded
-for tracking, never combined with other companies' data, and never shared with data brokers or
-advertisers. The privacy manifest declares the same single type, and `https://ovis.sh/privacy/`
-describes the same route. Privacy policy URL: `https://ovis.sh/privacy/`.
+They count as linked: Apple's definition covers data tied to a device-level identifier, and the
+receiver stores them with the PC's persistent install ID (random, with no account, name or contact
+behind it). None is used for tracking: nothing is combined with other companies' data or shared
+with data brokers or advertisers. The privacy manifest lists the same three types, and
+`https://ovis.sh/privacy/` describes the same route. Privacy policy URL:
+`https://ovis.sh/privacy/`.
 
 ## 6. Age rating (App Information > Age Rating > Edit)
 

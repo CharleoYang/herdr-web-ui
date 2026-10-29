@@ -18,12 +18,78 @@ export interface SplitTurn {
   answer: TextPart[];
 }
 
+const isProse = (part: ConversationPart): part is TextPart => part.kind === "text" && part.text.trim().length > 0;
+const isAnswer = (part: ConversationPart): part is TextPart => isProse(part) && part.phase !== "commentary";
+const isWork = (part: ConversationPart): boolean => part.kind !== "text" || (isProse(part) && part.phase === "commentary");
+
 export function splitTurn(parts: ConversationPart[]): SplitTurn {
-  const isProse = (part: ConversationPart): part is TextPart => part.kind === "text" && part.text.trim().length > 0;
-  return {
-    work: parts.filter((part) => part.kind !== "text" || (isProse(part) && part.phase === "commentary")),
-    answer: parts.filter((part): part is TextPart => isProse(part) && part.phase !== "commentary"),
+  return { work: parts.filter(isWork), answer: parts.filter(isAnswer) };
+}
+
+/** `start`: the index of the run's first part in the turn, which names the run while it grows */
+export type TurnSegment = { kind: "work"; start: number; parts: ConversationPart[] } | { kind: "answer"; start: number; parts: TextPart[] };
+export type WorkSegment = Extract<TurnSegment, { kind: "work" }>;
+
+/**
+ * The turn in the agent's own order, as its terminal shows it: each run of work between two
+ * answers is its own block, so words written before a tool call stay above it. Classified as
+ * `splitTurn` classifies; whitespace-only text is in neither.
+ */
+export function turnSegments(parts: ConversationPart[]): TurnSegment[] {
+  const segments: TurnSegment[] = [];
+  parts.forEach((part, index) => {
+    const last = segments.at(-1);
+    if (isAnswer(part)) {
+      if (last?.kind === "answer") last.parts.push(part);
+      else segments.push({ kind: "answer", start: index, parts: [part] });
+    } else if (isWork(part)) {
+      if (last?.kind === "work") last.parts.push(part);
+      else segments.push({ kind: "work", start: index, parts: [part] });
+    }
+  });
+  return segments;
+}
+
+/**
+ * The name of each run's block, which also keeps its fold. A run keeps its name while its parts
+ * change: words before its tools join it (a record marks them commentary, a blank one is filled
+ * in), a part leaves it, or it splits or merges with another run (#2063). `previous` holds the name
+ * of the run each part was in when the turn was last drawn, by part index. A run takes the first
+ * explicitly chosen fold among those names before any untouched default, then the first name no
+ * earlier run has taken. Only then does a run with none
+ * get `work:<start>`, so a new run never takes the name of a run already shown.
+ *
+ * A run that draws no block (`drawn`: hidden reasoning alone) has no fold to keep: the runs drawn
+ * choose first, so it never takes a drawn block's name when the two split or merge (#2111). Its own
+ * name is `dormant`, by part index as `previous` is: a run drawn again takes it back, its fold with
+ * it, but only after every name a drawn run had.
+ */
+export function runNames(runs: readonly WorkSegment[], at: ReadonlyMap<ConversationPart, number>, previous: ReadonlyMap<number, string>,
+  drawn: (run: WorkSegment) => boolean = () => true, dormant: ReadonlyMap<number, string> = new Map(), chosen?: ReadonlyMap<string, boolean | null>): string[] {
+  const used = new Set<string>();
+  const kept: (string | undefined)[] = runs.map(() => undefined);
+  const take = (index: number, from: ReadonlyMap<number, string>): void => {
+    let first: string | undefined;
+    let name: string | undefined;
+    for (const part of runs[index]!.parts) {
+      const candidate = from.get(at.get(part)!);
+      if (candidate === undefined || used.has(candidate)) continue;
+      first ??= candidate;
+      if (chosen?.get(candidate) != null) { name = candidate; break; }
+    }
+    name ??= first;
+    if (name !== undefined) { used.add(name); kept[index] = name; }
   };
+  const shown = runs.flatMap((run, index) => drawn(run) ? [index] : []);
+  const hidden = runs.flatMap((run, index) => drawn(run) ? [] : [index]);
+  for (const group of [shown, hidden]) for (const from of [previous, dormant]) for (const index of group) if (kept[index] === undefined) take(index, from);
+  return runs.map((run, index) => {
+    if (kept[index] !== undefined) return kept[index];
+    let name = `work:${run.start}`;
+    while (used.has(name)) name += "+";
+    used.add(name);
+    return name;
+  });
 }
 
 /**

@@ -10,7 +10,7 @@ import { mapTheme } from "./herdr-theme-proposal.ts";
 import type { Role } from "./herdr-theme-proposal.ts";
 
 /** The app's own themes besides the legacy three: no herdr palette, so no mapping to check. */
-export const APP_THEME_IDS: ReadonlySet<string> = new Set(["codex", "monokai"]);
+export const APP_THEME_IDS: ReadonlySet<string> = new Set(["codex", "monokai", "black"]);
 
 export type ThemeOverride = {
   readonly theme: HerdrThemeId;

@@ -79,21 +79,27 @@ export function pendingActionUncertain(code: string, state: string): boolean {
  * `plain`: the note stands without its Send anyway (a screen a terminal peek left open), so a quick
  * reply, which offers none, shows it as it is.
  */
-export type DraftRefusal = { note: string; draft: string } | { note: string; anyway: true; plain?: boolean }
-  /** not a refusal: what the app cannot tell apart, said without an alert (Composer's `info` note) */
-  | { info: string };
+export type DraftRefusal = { note: string; draft: string } | { note: string; anyway: true; plain?: boolean };
 
 /**
  * submitNote, or a DraftRefusal when the server named a draft it can clear (SubmitResult's `draft`)
  * or showed a box it could not tell empty (`box`; empty when it could not read one whole).
  */
 export function submitRefusal(code: string, message: string, draft?: string, box?: string, agent?: string | null): string | DraftRefusal {
-  // a cleared draft with no Enter receipt: the agent may already hold the message as its next turn,
-  // and the reader is told to look, not that it failed
-  if (code === "submit_partial") return { info: t("Not confirmed: it may already be queued in the terminal. Your message stayed here. Check the terminal before sending again.") };
   if (code === "input_draft" && draft) return { note: t("Not sent: Claude Code's input box in the terminal already holds “{draft}”.", { draft }), draft };
   if (code === "input_draft" && box) return { note: t("Not sent: Claude Code's input box in the terminal may not be empty. It shows “{box}”.", { box }), anyway: true };
   return submitNote(code, message, agent);
+}
+
+/**
+ * The note after Send it, which sends the terminal's draft as the message, did not go. A refusal over another
+ * draft offers that draft's buttons. Any other names the draft on a line under its reason: the server may have
+ * cleared it from the terminal before the send failed (submit_partial), and the Chat box never held it.
+ */
+export function draftSendNote(result: string | DraftRefusal, draft: string): string | DraftRefusal {
+  if (typeof result !== "string" && "draft" in result) return result;
+  const note = typeof result === "string" ? result : "plain" in result && result.plain === true ? result.note : submitNote("input_draft", result.note);
+  return `${note}\n${t("Draft: “{draft}”", { draft })}`;
 }
 
 /** The same message as typed, however a terminal wrapped or indented it: equal once all whitespace is gone. */
@@ -128,9 +134,7 @@ export function openCodeRefusalNote(code: string, message: string, tt: (text: st
 export function submitNote(code: string, message: string, agent?: string | null): string {
   const opencode = openCodeRefusalNote(code, message);
   if (opencode !== null) return opencode;
-  // a cleared draft with no Enter receipt is not a lost message: the agent may already hold it as a
-  // queued turn, so the words say both, and the terminal is where the reader decides
-  if (code === "submit_partial") return t("Not confirmed: it may already be queued in the terminal. Your message stayed here. Check the terminal before sending again.");
+  if (code === "submit_partial") return t("Not confirmed: the terminal draft was cleared or may have changed. Your message stayed here. Check the terminal before sending again.");
   if (code === "agent_blocked") return t("Not sent: the agent is waiting for an answer in the terminal. Answer it first.");
   if (code === "read_only") return t("Not sent: this view only watches the pane.");
   if (code === "held_input") return t("Not sent: send or discard the held input first.");
@@ -285,17 +289,25 @@ export function composerDelivery(agent: string | null, status?: AgentStatus): "q
  * braille spinner in the window title (osc_title_working, 1100) and "Waiting for N background agents
  * to finish" (background_agents_working, 965) as working, both above the idle prompt box
  * (live_prompt_box, 950): a main agent that ended its turn while a subagent it started still runs is
- * reported as working, and the composer holds the message. The screen decides instead: the input row
- * is at rest (lib/inputRow.ts `ready`), and no live turn says how to interrupt it. A turn that is
- * still running keeps one of those markers, and a blocked form asks for esc.
+ * reported as working, and the composer holds the message. Override only on positive evidence:
+ * an empty input box and the waiting line, with no running-turn marker anywhere above the box.
+ * `lines` must be logical screen lines (lib/inputRow.ts readScreenLines), not physical rows.
  */
 export function claudeMainAtRest(row: string | null, lines: readonly string[]): boolean {
   if (row !== "ready") return false;
-  const recent = lines.filter((line) => line.trim().length > 0).slice(-12);
-  for (const line of recent) {
+  const rule = (line: string): boolean => /^[─━]{8,}$|^─{2,}\s.*─$/u.test(line.trim());
+  let lower = lines.length - 1;
+  while (lower >= 0 && !rule(lines[lower]!)) lower--;
+  if (lower < 0) return false;
+  let upper = lower - 1;
+  while (upper >= 0 && !rule(lines[upper]!)) upper--;
+  if (upper < 0) return false;
+  const above = lines.slice(0, upper);
+  if (!above.some((line) => /^\s*Waiting for [1-9]\d* background agents? to finish\s*$/u.test(line))) return false;
+  for (const line of above) {
     if (/esc to (?:interrupt|cancel)/i.test(line)) return false;
-    // the shape of a running turn's own line, which its summary separates with an ellipsis
-    if (/(?:^|\s)[*·✢✳✶✻✽●◐◓◑◒]\s+\S.*…(?:\s+\(\d+[smh](?:\s|·)|\s*$)/u.test(line)) return false;
+    if (/^\s*(?:[*·✢✳✶✻✽●◐◓◑◒]\s+)?Compacting\b/iu.test(line)) return false;
+    if (/^\s*[*·✢✳✶✻✽●◐◓◑◒]\s+\S.*(?:…|\.{3}|\(\d+(?:\.\d+)?[smh](?:\s|[)·]))/u.test(line)) return false;
   }
   return true;
 }

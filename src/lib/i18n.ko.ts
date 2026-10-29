@@ -8,6 +8,7 @@ import { WORKSPACE_KO } from "./i18n/workspace.ko.ts";
 import { FILES_KO } from "./i18n/files.ko.ts";
 import { DEVICES_KO } from "./i18n/devices.ko.ts";
 import { USAGE_KO } from "./i18n/usage.ko.ts";
+import { SETUP_KO } from "./i18n/setup.ko.ts";
 import { UPDATES_KO } from "./i18n/updates.ko.ts";
 import { PALETTE_KO } from "./i18n/palette.ko.ts";
 
@@ -42,7 +43,6 @@ const BASE: Record<string, string> = {
   "Error": "오류",
   "cancelled": "취소됨",
   "Close dialog": "창 닫기",
-  "Preview": "미리보기",
   "Side conversations": "별도 대화",
   "Todo list": "할 일 목록",
   "Fold todo list": "할 일 목록 접기",
@@ -157,6 +157,7 @@ const BASE: Record<string, string> = {
   "Close": "닫기",
 
   // ---- PCs sidebar ----
+  "Filter workspaces and agents": "워크스페이스와 에이전트 필터",
   "Connecting…": "연결 중…",
   "Connected": "연결됨",
   "Reconnecting…": "재연결 중…",
@@ -172,6 +173,8 @@ const BASE: Record<string, string> = {
   // ---- new workspace ----
   "Browse": "찾아보기",
   "Cancel": "취소",
+  "Install": "설치",
+  "Sign in": "로그인",
   "Starting…": "시작 중…",
   "Start": "시작",
   // the launch's model, effort, first message and skills (lib/agentLaunchMode.ts, lib/newSession.ts)
@@ -264,6 +267,10 @@ const BASE: Record<string, string> = {
   "Turning alerts on…": "알림을 켜는 중…",
   "This device's push subscription was made for another server key. Turn alerts on again to make a new one.": "이 기기의 푸시 구독은 다른 서버 키로 만들어졌습니다. 새로 만들려면 알림을\u00a0다시\u00a0켜세요.",
   "The push service refused the last alert to this device. Send a test to check whether it still does.": "푸시 서비스가 이 기기로 보낸 마지막 알림을 거부했습니다. 테스트를 보내 지금도\u00a0그런지\u00a0확인하세요.",
+  "This page's service worker is not running, so it cannot make a push subscription. Reload the page, then try again.": "이 페이지의 서비스 워커가 실행되고 있지 않아 푸시 구독을 만들 수 없습니다. 페이지를 새로고침한 뒤 다시 시도하세요.",
+  "The PC did not take this device's push subscription. Try again.": "PC가 이 기기의 푸시 구독을 받지 않았습니다. 다시 시도하세요.",
+  "Brave would not make a push subscription. Turn on Use Google services for push messaging in Brave's privacy settings, then try again.": "Brave가 푸시 구독을 만들지 않았습니다. Brave 개인정보 설정에서 \"Use Google services for push messaging\"을 켠 뒤 다시 시도하세요.",
+  "This device would not make a push subscription. Check that push messaging is allowed in its settings, then try again.": "이 기기에서 푸시 구독을 만들지 못했습니다. 설정에서 푸시 메시지가 허용되어 있는지 확인한 뒤 다시 시도하세요.",
   "This device can only watch.": "이 기기는 보기만 할 수 있습니다.",
   "Needs input": "입력 필요",
   "Finished": "작업 완료",
@@ -334,6 +341,7 @@ export const KO_PARTS: Record<string, Record<string, string>> = {
   files: FILES_KO,
   devices: DEVICES_KO,
   usage: USAGE_KO,
+  setup: SETUP_KO,
   updates: UPDATES_KO,
   palette: PALETTE_KO,
 };

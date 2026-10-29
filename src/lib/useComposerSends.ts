@@ -1,11 +1,11 @@
 import { useCallback, useMemo, type MutableRefObject } from "react";
 import { ApiError } from "./api.ts";
 import { answerFromText, answerRefusal, needsConfirmation, type TypedAnswer } from "./promptAnswer.ts";
-import { composerDelivery, pendingActionUncertain, submitNotTyped, submitRefusal, type DraftRefusal } from "./compose.ts";
+import { composerDelivery, pendingActionUncertain, submitNote, submitNotTyped, submitRefusal, type DraftRefusal } from "./compose.ts";
 import type { PaneSubmitRetention } from "./paneSubmitRetention.ts";
-import { pendingMessages } from "./pendingMessages.ts";
-import { rememberWaitingSend, waitingKey } from "./sentWaiting.ts";
-import { sendLeftTheBox, uncertainSend } from "./sendUncertain.ts";
+import { pendingMessages, UNCONFIRMED_SEND } from "./pendingMessages.ts";
+import { paneStorageId } from "../../shared/machines.ts";
+import { rememberWaitingSend, waitingBaseline, waitingKey } from "./sentWaiting.ts";
 import { composerDrafts } from "./composerDraft.ts";
 import type { AgentStatus, InteractivePrompt, PromptAnswer } from "../../shared/protocol.ts";
 import type { HerdrSocket, SubmitDelivery, SubmitResult } from "./ws.ts";
@@ -23,8 +23,6 @@ export interface ComposerSendsDeps {
   heldByOpenQueue: boolean;
   heldRef: MutableRefObject<boolean>;
   inputRowNow: () => string | null;
-  /** a Claude pane's input box as it stands (lib/sendUncertain.ts): null when it cannot be read */
-  readDraft?: (pane: string) => Promise<string | null>;
   /** whether the cursor's agent can take a message now, whatever herdr reports (lib/compose.ts) */
   inputAtRest?: () => boolean;
   knownOutcomes: (pane: string | null) => readonly string[] | null;
@@ -57,7 +55,7 @@ export interface ComposerSendsDeps {
 }
 
 export function useComposerSends(deps: ComposerSendsDeps) {
-  const { agent, agentStatus, answerPanePrompt, answering, chatNavigation, draftHeldForRef, ended, heldByOpenQueue, heldRef, inputAtRest, inputRowNow, readDraft, knownOutcomes, observeRef, paneId, paneRef, pendingAnswer, pendingScopeRef, queueOwner, queueStore, machineId, secretRef, sessionRef, setChatLocalSend, setPendingAnswer, setPromptRefresh, settings, showSentCommand, socketRef, stillOpenNote, stillOpenNotedRef, stillOpenRef, submitComposerMessage, submitRetention, t } = deps;
+  const { agent, agentStatus, answerPanePrompt, answering, chatNavigation, draftHeldForRef, ended, heldByOpenQueue, heldRef, inputAtRest, inputRowNow, knownOutcomes, observeRef, paneId, paneRef, pendingAnswer, pendingScopeRef, queueOwner, queueStore, machineId, secretRef, sessionRef, setChatLocalSend, setPendingAnswer, setPromptRefresh, settings, showSentCommand, socketRef, stillOpenNote, stillOpenNotedRef, stillOpenRef, submitComposerMessage, submitRetention, t } = deps;
 
   /** An answer from the message box, not the card: its failure is the box's note. */
   const sendAnswer = useCallback((pane: string, prompt: InteractivePrompt, choice: TypedAnswer): Promise<boolean | string> => {
@@ -92,6 +90,10 @@ export function useComposerSends(deps: ComposerSendsDeps) {
       if (pane !== null && heldByOpenQueue) {
         return t("Codex has a question open in the terminal: answer it above, or close it there (alt+↓) to message Codex.");
       }
+      // Send it: the draft a refusal named goes as the message, over itself (the server clears it, then
+      // sends the same text). A menu opened since would take it as a choice, so it is never an answer
+      const asDraft = clearDraft !== undefined && text === clearDraft;
+      if (pane !== null && asDraft && answering !== null) return submitNote("agent_blocked", "");
       if (pane !== null && answering !== null) {
         // never typed into the agent's menu: only as one of its options, or its own reply row
         const choice = answerFromText(answering, text);
@@ -122,55 +124,35 @@ export function useComposerSends(deps: ComposerSendsDeps) {
       const settled = composerDelivery(agent, agentStatus);
       const queued = settled === "queue" && inputAtRest?.() === true ? "immediate" : settled;
       const delivery: SubmitDelivery = queued === "queue" && !settings.autoSendQueued ? "hold" : queued;
-      // Send anyway answered a box seen at once: an agent that started working since would queue it unchecked
-      if (sendAnyway && delivery !== "immediate") return t("Not sent: the agent started working since. Check the terminal, then send again.");
+      // Send anyway answered a box seen at once: an agent that started working since would queue it unchecked.
+      // Send it too: queued, the draft's text could go again after the draft itself was sent in the terminal
+      if ((sendAnyway || asDraft) && delivery !== "immediate") return t("Not sent: the agent started working since. Check the terminal, then send again.");
       const known = knownOutcomes(pane);
       const seen = inputRowNow() === "ready";
       // before the receipt is awaited: navigation while it is on its way cancels the follow
       const navigation = chatNavigation.current;
       const socket = socketRef.current, session = sessionRef.current;
-      // A send whose receipt never came may still be delivered: the agent holds a message typed
-      // during its turn until that turn ends, and the box says whether the words left it. Both the
-      // refusal and a broken answer ask it, so a queued message is never reported as a failure.
-      const settledAs = async (sent: string, forcedQueue = false): Promise<boolean | null> => {
-        if (pane === null || readDraft === undefined) return null;
-        let draft: string | null = null;
-        try { draft = await readDraft(pane); } catch { return null; }
-        if (!sendLeftTheBox(sent, draft)) return null;
-        rememberWaitingSend(waitingKey(machineId, pane), sent);
-        setChatLocalSend((current) => ({ key: current.key + 1, navigationGeneration: navigation }));
-        if (forcedQueue) setPromptRefresh((key) => key + 1);
-        return true;
-      };
+      const sentAt = Date.now();
+      const sentAfter = pane === null ? null : waitingBaseline(waitingKey(machineId, pane));
       const result = submitComposerMessage(text, delivery, delivery === "immediate" ? clearDraft : undefined, sendAnyway);
-      return result === null ? false : result.then(async (answer) => {
-        if (!answer.ok) {
-          // the draft cleared without a receipt, or herdr went under the write: the box decides
-          if (uncertainSend(answer.code, answer.message)) {
-            const delivered = await settledAs(text);
-            if (delivered === true) return true;
+      return result === null ? false : result.then((answer) => {
+        // Neither a dropped connection nor a cleared old draft proves this message was typed.
+        // Without a receipt, leave the retryable composer text and report the uncertainty.
+        if (!answer.ok) return submitRefusal(answer.code, answer.message, answer.draft, answer.box, agent);
+        // an older bridge took it with no receipt: the box lets it go, a row keeps it as not confirmed
+        if (answer.unconfirmed && pane !== null) pendingMessages.keepUnconfirmed(paneStorageId(machineId, pane), text);
+        // A confirmed send belongs to the original pane even if navigation outruns its receipt.
+        if (delivery === "immediate" && answer.pending === undefined && !answer.unconfirmed) {
+          if (paneRef.current === pane && socketRef.current === socket && sessionRef.current === session) {
+            setChatLocalSend((current) => ({ key: current.key + 1, navigationGeneration: navigation }));
           }
-          return submitRefusal(answer.code, answer.message, answer.draft, answer.box, agent);
-        }
-        // only a receipt that says the pane took it at once, on the connection and pane it left from
-        if (delivery === "immediate" && answer.pending === undefined && !answer.unconfirmed
-          && paneRef.current === pane && socketRef.current === socket && sessionRef.current === session) {
-          setChatLocalSend((current) => ({ key: current.key + 1, navigationGeneration: navigation }));
-          // the chat shows it until the pane writes it as a turn: Claude starts that turn when the
-          // one it is in ends, and the reader may be on another tab by then
-          if (pane !== null) rememberWaitingSend(waitingKey(machineId, pane), text);
+          if (pane !== null) rememberWaitingSend(waitingKey(machineId, pane), text, sentAt, sentAfter);
         }
         if (pane !== null && delivery === "immediate" && answer.pending === undefined && !answer.unconfirmed) showSentCommand(pane, text, known, seen);
         return true;
-      }, async (error: unknown) => {
-        // no answer at all (a bridge that timed out or dropped): the box may hold the words still,
-        // or may already have let them go to the agent's next turn
-        const delivered = await settledAs(text, true);
-        if (delivered === true) return true;
-        throw error;
       });
     },
-    [agent, agentStatus, answering, heldByOpenQueue, sendAnswer, submitComposerMessage, queueStore, machineId, settings.autoSendQueued, showSentCommand, inputAtRest, inputRowNow, readDraft, stillOpenNote],
+    [agent, agentStatus, answering, heldByOpenQueue, sendAnswer, submitComposerMessage, queueStore, machineId, settings.autoSendQueued, showSentCommand, inputAtRest, inputRowNow, stillOpenNote],
   );
 
   const actOnPending = useCallback(async (id: string, action: "steer" | "discard" | "edit"): Promise<void> => {
@@ -250,9 +232,11 @@ export function useComposerSends(deps: ComposerSendsDeps) {
             return;
           }
           const answer = await result;
-          if (answer.ok) {
+          // an older bridge's raw input has no receipt: the copy stays, not confirmed, rather than going as sent
+          if (answer.ok && answer.unconfirmed) pendingMessages.fail(owner, id, UNCONFIRMED_SEND, true, message.resendGeneration ?? 0);
+          else if (answer.ok) {
             pendingMessages.removeCopy(owner, id);
-            if (answer.pending === undefined && !answer.unconfirmed) showSentCommand(pane, message.text, known, seen);
+            if (answer.pending === undefined) showSentCommand(pane, message.text, known, seen);
           }
           // A concurrent Edit can remove storage while this copy is busy. Its exact
           // withdrawal refusal settles that copy instead of recreating a held row.

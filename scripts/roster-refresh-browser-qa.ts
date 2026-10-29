@@ -45,6 +45,7 @@ function closeStreams() {
 }
 function accepted(record: RequestRecord): string | undefined {
   const url = new URL(record.url);
+  if (record.origin === runtime.origin && record.method === "GET" && record.path === "/api/telemetry" && !url.search && record.status === 404 && !record.error) return "optional telemetry disabled (server/index.ts createServer contract)";
   if (record.path === "/api/machines/events" && record.method === "GET" && !url.search
     && (record.origin === runtime.origin || record.origin === runtime.relayOrigin)) {
     if (record.fault === "stream-outage" && record.status === 503 && !record.error) return "controlled stream outage";

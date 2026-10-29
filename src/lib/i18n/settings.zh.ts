@@ -1,7 +1,7 @@
 /**
  * Simplified Chinese for the keys only the settings files use:
  * components/SettingsDialog.tsx (with THEME_NAMES), components/KeyBarSettings.tsx,
- * components/SettingsControls.tsx, lib/paletteSettings.ts.
+ * components/SettingsControls.tsx, components/TelemetryControls.tsx, lib/paletteSettings.ts.
  * Register and fixed terms follow ../i18n.zh.ts; a key another feature also uses goes there.
  */
 export const SETTINGS_ZH: Record<string, string> = {
@@ -30,9 +30,9 @@ export const SETTINGS_ZH: Record<string, string> = {
   "Codex": "Codex",
   "Amber": "琥珀",
   "Catppuccin": "Catppuccin",
-  "Monokai (OMP)": "Monokai（OMP）",
   "Catppuccin Latte": "Catppuccin Latte",
   "Tokyo Night": "Tokyo Night",
+  "Black": "黑色",
   "Tokyo Night Day": "Tokyo Night Day",
   "Gruvbox": "Gruvbox",
   "Gruvbox Light": "Gruvbox Light",
@@ -79,7 +79,7 @@ export const SETTINGS_ZH: Record<string, string> = {
   "Full": "全宽",
   "Chat font size": "聊天字号",
   "History page size": "历史每页条数",
-  "Prompts per page; older turns load a page at a time as you scroll up": "每页显示的用户提问数；向上滚动时更早的对话按页加载",
+  "Prompts per page; older turns load a page at a time as you scroll up. Hermes keeps its own page of messages": "每页显示的用户提问数；向上滚动时更早的对话按页加载。Hermes 按自己的消息页加载",
   "Messages, code, prompt cards and the message box in the chat view": "聊天视图中的消息、代码、提问卡片和输入框",
   "Decrease chat font size": "减小聊天字号",
   "Increase chat font size": "增大聊天字号",
@@ -101,7 +101,6 @@ export const SETTINGS_ZH: Record<string, string> = {
   "Shortcuts": "快捷键",
   "Phone": "手机",
   "Devices": "设备",
-  "Install": "安装",
   "Installed": "已安装",
   "About": "关于",
   "Star on GitHub": "在 GitHub 上点 Star",
@@ -113,6 +112,7 @@ export const SETTINGS_ZH: Record<string, string> = {
   "hide PCs on this device": "在此设备上隐藏 PC",
   "Connect another PC over an SSH alias or user@host. Its workspaces join the sidebar.": "通过 SSH 别名或 user@host 连接另一台 PC。连接后，它的工作区会显示在侧栏中。",
   "Saved PC data was damaged and could not be read when the app started. It was set aside as {files}; add any missing PC again.": "已保存的 PC 数据已损坏，应用启动时无法读取，已另存为 {files}。请重新添加缺少的 PC。",
+  "The permission to connect to the PCs saved in herdr was damaged and could not be read when the app started. It was set aside as {files}; choose Connect on those PCs again.": "herdr 中保存的 PC 的连接许可已损坏，应用启动时无法读取，已另存为 {files}。请在这些 PC 上再次选择“连接”。",
   "Update PC bridges automatically": "自动更新 PC 的 bridge",
   "When an app update needs a newer bridge, PCs that connect with their saved key are updated in the background. PCs that need a password ask first.": "当应用更新需要更新的 bridge 时，使用已保存密钥连接的 PC 会在后台更新。需要密码的 PC 会先询问。",
   "Sign out": "退出登录",
@@ -122,6 +122,8 @@ export const SETTINGS_ZH: Record<string, string> = {
   "Sidebar rows": "侧边栏行",
   "One line": "单行",
   "Two lines": "双行",
+  "Sidebar filter": "侧边栏筛选",
+  "Show the Filter field above the sidebar's lists on this device. When off, Filter workspaces and agents in the command palette opens it.": "在此设备的侧边栏列表上方显示筛选框。关闭时，可从命令面板的“筛选工作区和代理”打开。",
   "Agents order": "代理排序",
   "Activity keeps a waiting agent on top, then the one that changed last; herdr's own order is not changed": "按活动排序会把等待回应的代理放在最上面，其余按最近变化排序；herdr 自身的顺序不会改变",
   "Workspaces": "工作区顺序",
@@ -218,6 +220,15 @@ export const SETTINGS_ZH: Record<string, string> = {
   "A chip above the message box puts the prompt Claude Code suggests next into the box. With a keyboard, Tab does it.": "输入框上方的标签会把 Claude Code 建议的下一条提示填入输入框。使用键盘时按 Tab 即可。",
   "Show above the message box": "显示在输入框上方",
   "Restore defaults": "恢复默认值",
+  "Ovis sends anonymous usage counts.": "Ovis 会匿名发送使用统计。",
+  "What is sent": "发送的内容",
+  "Anonymous usage counts": "匿名使用统计",
+  "Turned off on this PC by OVIS_TELEMETRY=0, DO_NOT_TRACK or a CI environment.": "此电脑因 OVIS_TELEMETRY=0、DO_NOT_TRACK 或 CI 环境而已关闭。",
+  "Send anonymous usage counts": "发送匿名使用统计",
+  "Once on install and once per update, with the last browser's app settings, and once a day you open the app, with the kinds of coding agents running in herdr (such as claude or codex). Custom fonts, shortcuts and replies are reported only as customization flags or counts, never their text. Account identifiers, terminal content and files are excluded. The receiver stores the country, not the IP address.": "应用安装时发送一次，每次更新发送一次，并附带最后使用的浏览器中的应用设置；在你打开应用的每一天再发送一次，并附带 herdr 中正在运行的编码代理类型（例如 claude 或 codex）。自定义字体、快捷键和快捷回复仅以自定义标记或数量的形式上报，不会上报其文本。账户标识符、终端内容和文件均不包含在内。接收端保存国家/地区，而非 IP 地址。",
+  "Once a day you open the app:": "在你打开应用的每一天发送一次：",
+  "The receiver adds the country this message comes from (two letters, such as KR). It does not store the address.": "接收端会附加这条消息来自的国家（两个字母，例如 KR）。不保存地址。",
+  "This version has already been counted. The next event is sent after an update.": "此版本已统计。下一次发送在更新之后。",
   "Agent integrations": "代理集成",
   "This PC's bridge does not offer agent integrations yet. It will after its next runtime update.": "这台 PC 的桥接服务暂不提供代理集成。下次运行时更新后即可使用。",
   "herdr's integrations let it resume each agent's session after a restart. This page only reads them: run a command in a terminal on the PC herdr runs on, then reopen this page.": "有了 herdr 集成，重启后可以恢复每个代理的会话。此页面只读取状态：请在运行 herdr 的 PC 的终端中执行命令，然后重新打开此页面。",
@@ -254,6 +265,7 @@ export const SETTINGS_ZH: Record<string, string> = {
   "maximize fullscreen full screen focus": "最大化 全屏 专注",
   "lens chat terminal conversation": "视图 聊天 终端 对话",
   "panel drawer hide show": "侧边栏 抽屉 隐藏 显示",
+  "search find narrow sidebar": "搜索 查找 缩小 侧边栏",
   "dark light mode appearance colors": "深色 浅色 模式 外观 颜色",
   "preferences options config": "偏好 选项 配置",
   "remote machine computer connect ssh": "远程 机器 电脑 连接 ssh",
@@ -325,4 +337,5 @@ export const SETTINGS_ZH: Record<string, string> = {
   "Reachable": "可访问",
   "This request came through Tailscale Funnel, which is open to the public internet.": "此请求经由向公共互联网开放的 Tailscale Funnel 到达。",
   "The server cannot see whether a proxy, tunnel or router makes it reachable from the internet.": "服务器无法判断代理、隧道或路由器是否使其可从互联网访问。",
+  "Monokai (OMP)": "Monokai（OMP）",
 };

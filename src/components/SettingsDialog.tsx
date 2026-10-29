@@ -28,6 +28,7 @@ import type { Machine, MachineSettings } from "../../shared/machines.ts";
 import { canHideMachine, isMachineShown, setHiddenMachines, useHiddenMachines, withMachineHidden } from "../lib/hiddenMachines.ts";
 import { fetchRemoteAccess, fetchVoiceStatus, machineRequest, saveVoiceConfig } from "../lib/api.ts";
 import { isLoopbackHost, phonePlan } from "../lib/phone.ts";
+import type { PushActionResult } from "../lib/pushHealth.ts";
 import type { AgentIntegration, HealthAuth, PluginActions, RemoteAccess } from "../../shared/protocol.ts";
 import type { SecurityFacts } from "../lib/useAccess.ts";
 import { useMachineApi, useMachineId } from "../lib/machineContext.tsx";
@@ -42,6 +43,7 @@ import { copyText } from "../lib/clipboard.ts";
 import { PushTestControls } from "./PushTestControls.tsx";
 import { previewAlertSound, unlockAlertSound } from "../lib/alertSound.ts";
 import { HerdrUpdateControls, UpdateControls } from "./UpdateControls.tsx";
+import { TelemetryControls } from "./TelemetryControls.tsx";
 import { UsageSettings } from "./UsageSettings.tsx";
 import { useSheetSwipe } from "../lib/sheets.ts";
 import { useMediaQuery } from "../lib/useMediaQuery.ts";
@@ -70,7 +72,7 @@ export interface SettingsDialogProps {
   herdrVersion: string | null;
   /** what protects this server, from the last bridge health check: never an earlier answer once one fails */
   security: SecurityFacts;
-  onEnableNotifications: () => Promise<boolean>;
+  onEnableNotifications: () => Promise<PushActionResult>;
   /** the last change the server refused to save (lib/preferencesSync.ts); null once a save lands */
   saveError: UserError | null;
   /** three saves failed in a row: nothing is sent until Retry, a reconnect or a longer wait */
@@ -267,6 +269,7 @@ const THEME_NAMES: Record<ThemeId, string> = {
   catppuccin: "Catppuccin",
   "catppuccin-latte": "Catppuccin Latte",
   "tokyo-night": "Tokyo Night",
+  "black": "Black",
   "tokyo-night-day": "Tokyo Night Day",
   gruvbox: "Gruvbox",
   "gruvbox-light": "Gruvbox Light",
@@ -367,6 +370,9 @@ function AppearancePage() {
       <SettingsRow label={t("Sidebar rows")} description={t("Name each workspace on one line, or show what its agent is doing with the workspace under it")} wide>
         <Segmented label={t("Sidebar rows")} value={settings.sidebarRows} onChange={(sidebarRows) => update({ sidebarRows })} options={[{ value: "one", label: t("One line") }, { value: "two", label: t("Two lines") }]} />
       </SettingsRow>
+      <SettingsRow label={t("Sidebar filter")} description={t("Show the Filter field above the sidebar's lists on this device. When off, Filter workspaces and agents in the command palette opens it.")}>
+        <Toggle label={t("Sidebar filter")} checked={settings.sidebarFilter} onChange={(sidebarFilter) => update({ sidebarFilter })} />
+      </SettingsRow>
       <SettingsRow label={t("Agents order")} description={t("Activity keeps a waiting agent on top, then the one that changed last; herdr's own order is not changed")} wide>
         <Segmented label={t("Agents order")} value={settings.agentOrder} onChange={(agentOrder) => update({ agentOrder })} options={[{ value: "workspace", label: t("Workspaces") }, { value: "activity", label: t("Activity") }]} />
       </SettingsRow>
@@ -417,7 +423,7 @@ function ChatPage() {
         <SettingsRow label={t("Chat font")} description={t("Message text; code stays monospace. Comma-separated, tried in order. A font this device does not have falls back to the default.")} wide>
           <FontFamilyInput value={settings.chatFontFamily} label={t("Chat font")} onCommit={(chatFontFamily) => update({ chatFontFamily })} />
         </SettingsRow>
-        <SettingsRow label={t("History page size")} description={t("Prompts per page; older turns load a page at a time as you scroll up")} wide>
+        <SettingsRow label={t("History page size")} description={t("Prompts per page; older turns load a page at a time as you scroll up. Hermes keeps its own page of messages")} wide>
           <Segmented label={t("History page size")} value={String(settings.historyPrompts)} onChange={(value) => update({ historyPrompts: Number(value) })} options={HISTORY_PROMPTS.map((prompts) => ({ value: String(prompts), label: String(prompts) }))} />
         </SettingsRow>
       </SettingsGroup>
@@ -531,7 +537,7 @@ function TerminalPage({ keyBarButtonRef, onEditKeyBar }: { keyBarButtonRef: RefO
   );
 }
 
-function AlertsPage({ onEnableNotifications }: { onEnableNotifications: () => Promise<boolean> }) {
+function AlertsPage({ onEnableNotifications }: { onEnableNotifications: () => Promise<PushActionResult> }) {
   const { settings, update } = useSettings();
   const t = useT();
   // the Sound switch as last set: the preview waits for the audio, and must not play once it is off
@@ -591,11 +597,15 @@ function VoicePage() {
   const [voiceError, setVoiceError] = useState<string | null>(null);
   const [micDenied, setMicDenied] = useState(false);
   useEffect(() => { fetchVoiceStatus().then(setVoice, () => setVoice(null)); }, []);
-  /** On asks now, so the first dictation does not stop at the browser's permission prompt */
+  /**
+   * On asks now, so the first dictation does not stop at the browser's permission prompt. Not in an
+   * iPhone home-screen app, which this request closed or reloaded (#2343): there the first tap of the mic asks.
+   */
   const chooseVoiceInput = async (voiceInput: VoiceButton) => {
     update({ voiceInput });
     setMicDenied(false);
-    if (voiceInput !== "on" || !window.isSecureContext || !navigator.mediaDevices?.getUserMedia) return;
+    const homeScreenApp = (navigator as Navigator & { standalone?: boolean }).standalone === true;
+    if (voiceInput !== "on" || homeScreenApp || !window.isSecureContext || !navigator.mediaDevices?.getUserMedia) return;
     try { (await navigator.mediaDevices.getUserMedia({ audio: true })).getTracks().forEach((track) => track.stop()); }
     catch { setMicDenied(true); }
   };
@@ -1021,6 +1031,9 @@ function SidebarPcsGroup({ machines }: { machines: readonly Machine[] }) {
   );
 }
 
+/** a set-aside copy of machines.json (the PCs added in this app), not of herdr-profile-state.json */
+const heldAddedPcs = (name: string): boolean => name.startsWith("machines.json.");
+
 function RemotePcsPage({ actions, machines, pcSettings, pcSettingsError, onPcSettings }: { actions: AppActions; machines: readonly Machine[]; pcSettings: MachineSettings | null; pcSettingsError: string | null; onPcSettings: (patch: Partial<MachineSettings>) => void }) {
   const t = useT();
   return (
@@ -1035,9 +1048,13 @@ function RemotePcsPage({ actions, machines, pcSettings, pcSettingsError, onPcSet
           <Toggle label={t("Update PC bridges automatically")} checked={pcSettings.auto_update_bridges} onChange={(auto_update_bridges) => onPcSettings({ auto_update_bridges })} />
         </SettingsRow>
       )}
-      {/* a crash can leave the saved PCs unreadable: the server set the file aside and started without them */}
-      {pcSettings?.set_aside && pcSettings.set_aside.length > 0 && <p className="settings-item settings-hint">
-        {t("Saved PC data was damaged and could not be read when the app started. It was set aside as {files}; add any missing PC again.", { files: pcSettings.set_aside.join(", ") })}
+      {/* a crash can leave the saved PCs unreadable: the server set the file aside and started without them.
+          machines.json held the PCs added here; herdr-profile-state.json only the permission to connect to herdr's own */}
+      {pcSettings?.set_aside?.some(heldAddedPcs) && <p className="settings-item settings-hint">
+        {t("Saved PC data was damaged and could not be read when the app started. It was set aside as {files}; add any missing PC again.", { files: pcSettings.set_aside.filter(heldAddedPcs).join(", ") })}
+      </p>}
+      {pcSettings?.set_aside?.some((name) => !heldAddedPcs(name)) && <p className="settings-item settings-hint">
+        {t("The permission to connect to the PCs saved in herdr was damaged and could not be read when the app started. It was set aside as {files}; choose Connect on those PCs again.", { files: pcSettings.set_aside.filter((name) => !heldAddedPcs(name)).join(", ") })}
       </p>}
       {pcSettingsError && <p className="settings-item settings-hint" role="alert">{pcSettingsError}</p>}
     </SettingsGroup>
@@ -1078,6 +1095,7 @@ function AboutPage({ updates, herdrVersion, bridgesFollow }: { updates: UpdatesM
       <UpdateControls updates={updates} bridgesFollow={bridgesFollow} />
       <HerdrUpdateControls enabled herdrVersion={herdrVersion} />
       <PluginsGroup />
+      <TelemetryControls />
       <SettingsGroup title={t("About")} className="settings-about" section="about">
         <div className="settings-row">
           <div className="settings-row-text">
@@ -1284,7 +1302,7 @@ function OpenSettingsDialog({ section = null, linkPage = null, linkSection = nul
       case "terminal": return <TerminalPage keyBarButtonRef={keyBarButtonRef} onEditKeyBar={openKeyBar} />;
       case "alerts": return <AlertsPage onEnableNotifications={onEnableNotifications} />;
       case "voice": return <VoicePage />;
-      case "usage": return <UsageSettings onLocalLogin={onUsageLogin} />;
+      case "usage": return <UsageSettings onLocalLogin={onUsageLogin} watching={auth?.role === "watch"} />;
       case "shortcuts": return <ShortcutsPage />;
       // after every device went, its own pairing included, a browser asks the server where it stands: the roster answers, or the gate does
       case "devices": return <DevicesPage auth={auth} security={security} onSignOut={actions.lock} onRevokedAll={actions.refresh} />;

@@ -1,7 +1,7 @@
 /**
  * Japanese for the keys only the settings files use:
  * components/SettingsDialog.tsx (with THEME_NAMES), components/KeyBarSettings.tsx,
- * components/SettingsControls.tsx, lib/paletteSettings.ts.
+ * components/SettingsControls.tsx, components/TelemetryControls.tsx, lib/paletteSettings.ts.
  * Register and fixed terms follow ../i18n.ja.ts; a key another feature also uses goes there.
  */
 export const SETTINGS_JA: Record<string, string> = {
@@ -30,9 +30,9 @@ export const SETTINGS_JA: Record<string, string> = {
   "Codex": "Codex",
   "Amber": "アンバー",
   "Catppuccin": "Catppuccin",
-  "Monokai (OMP)": "モノカイ (OMP)",
   "Catppuccin Latte": "Catppuccin Latte",
   "Tokyo Night": "Tokyo Night",
+  "Black": "ブラック",
   "Tokyo Night Day": "Tokyo Night Day",
   "Gruvbox": "Gruvbox",
   "Gruvbox Light": "Gruvbox Light",
@@ -79,7 +79,7 @@ export const SETTINGS_JA: Record<string, string> = {
   "Full": "全幅",
   "Chat font size": "チャットのフォントサイズ",
   "History page size": "履歴の 1 ページ件数",
-  "Prompts per page; older turns load a page at a time as you scroll up": "1 ページあたりのプロンプト数。上へスクロールすると古いターンを 1 ページずつ読み込みます",
+  "Prompts per page; older turns load a page at a time as you scroll up. Hermes keeps its own page of messages": "1 ページあたりのプロンプト数。上へスクロールすると古いターンを 1 ページずつ読み込みます。Hermes は独自のメッセージ単位のページで読み込みます",
   "Messages, code, prompt cards and the message box in the chat view": "チャット画面のメッセージ、コード、質問カード、入力欄",
   "Decrease chat font size": "チャットの文字を小さく",
   "Increase chat font size": "チャットの文字を大きく",
@@ -101,7 +101,6 @@ export const SETTINGS_JA: Record<string, string> = {
   "Shortcuts": "ショートカット",
   "Phone": "スマートフォン",
   "Devices": "デバイス",
-  "Install": "インストール",
   "Installed": "インストール済み",
   "About": "情報",
   "Star on GitHub": "GitHub で Star する",
@@ -113,6 +112,7 @@ export const SETTINGS_JA: Record<string, string> = {
   "hide PCs on this device": "このデバイスで PC を非表示にする",
   "Connect another PC over an SSH alias or user@host. Its workspaces join the sidebar.": "SSH エイリアスまたは user@host で別の PC を接続します。接続した PC のワークスペースはサイドバーに並びます。",
   "Saved PC data was damaged and could not be read when the app started. It was set aside as {files}; add any missing PC again.": "保存された PC のデータが壊れていたため、アプリの起動時に読み込めませんでした。{files} として退避したので、見つからない PC はもう一度追加してください。",
+  "The permission to connect to the PCs saved in herdr was damaged and could not be read when the app started. It was set aside as {files}; choose Connect on those PCs again.": "herdr に保存された PC への接続許可が壊れていたため、アプリの起動時に読み込めませんでした。{files} として退避したので、それらの PC で「接続」をもう一度選んでください。",
   "Update PC bridges automatically": "PC ブリッジを自動更新",
   "When an app update needs a newer bridge, PCs that connect with their saved key are updated in the background. PCs that need a password ask first.": "アプリの更新で新しいブリッジが必要になった場合、保存済みのキーで接続する PC はバックグラウンドで更新されます。パスワードが必要な PC では先に確認します。",
   "Sign out": "サインアウト",
@@ -122,6 +122,8 @@ export const SETTINGS_JA: Record<string, string> = {
   "Sidebar rows": "サイドバーの行",
   "One line": "1 行",
   "Two lines": "2 行",
+  "Sidebar filter": "サイドバーの絞り込み",
+  "Show the Filter field above the sidebar's lists on this device. When off, Filter workspaces and agents in the command palette opens it.": "このデバイスで、サイドバーの一覧の上に絞り込み欄を表示します。オフのときは、コマンドパレットの「ワークスペースとエージェントを絞り込む」で開きます。",
   "Agents order": "エージェントの並び順",
   "Activity keeps a waiting agent on top, then the one that changed last; herdr's own order is not changed": "アクティビティ順では、応答待ちのエージェントを一番上に、その後は最近変化した順に並べます。herdr 自体の順序は変わりません",
   "Workspaces": "ワークスペース順",
@@ -218,6 +220,15 @@ export const SETTINGS_JA: Record<string, string> = {
   "A chip above the message box puts the prompt Claude Code suggests next into the box. With a keyboard, Tab does it.": "入力欄の上のチップで、Claude Code が次に提案するプロンプトを入力欄に入れます。キーボードでは Tab で入れます。",
   "Show above the message box": "入力欄の上に表示",
   "Restore defaults": "デフォルトに戻す",
+  "Ovis sends anonymous usage counts.": "Ovis は匿名の利用集計を送信します。",
+  "What is sent": "送信内容",
+  "Anonymous usage counts": "匿名の利用集計",
+  "Turned off on this PC by OVIS_TELEMETRY=0, DO_NOT_TRACK or a CI environment.": "この PC では OVIS_TELEMETRY=0、DO_NOT_TRACK または CI 環境によりオフになっています。",
+  "Send anonymous usage counts": "匿名の利用集計を送る",
+  "Once on install and once per update, with the last browser's app settings, and once a day you open the app, with the kinds of coding agents running in herdr (such as claude or codex). Custom fonts, shortcuts and replies are reported only as customization flags or counts, never their text. Account identifiers, terminal content and files are excluded. The receiver stores the country, not the IP address.": "インストール時に 1 回、更新ごとに 1 回、最後に使用したブラウザーのアプリ設定とともに送信し、アプリを開いた日に 1 回、herdr で動いているコーディングエージェントの種類（claude や codex など）とともに送信します。カスタムフォント、ショートカット、返信は、内容そのものではなく、カスタマイズの有無を示すフラグまたは件数としてのみ報告されます。アカウント識別子、ターミナルの内容、ファイルは含まれません。受信側が保存するのは国であり、IP アドレスではありません。",
+  "Once a day you open the app:": "アプリを開いた日に 1 回:",
+  "The receiver adds the country this message comes from (two letters, such as KR). It does not store the address.": "受信側が、このメッセージの送信元の国（KR のような 2 文字）を付け加えます。アドレスは保存しません。",
+  "This version has already been counted. The next event is sent after an update.": "このバージョンは集計済みです。次の送信は更新の後です。",
   "Agent integrations": "エージェント連携",
   "This PC's bridge does not offer agent integrations yet. It will after its next runtime update.": "この PC のブリッジはまだエージェント連携に対応していません。次のランタイム更新後に利用できます。",
   "herdr's integrations let it resume each agent's session after a restart. This page only reads them: run a command in a terminal on the PC herdr runs on, then reopen this page.": "herdr の連携があると、再起動後に各エージェントのセッションを再開できます。このページは状態を読むだけです。herdr が動いている PC のターミナルでコマンドを実行してから、このページを開き直してください。",
@@ -254,6 +265,7 @@ export const SETTINGS_JA: Record<string, string> = {
   "maximize fullscreen full screen focus": "最大化 フルスクリーン 全画面 フォーカス",
   "lens chat terminal conversation": "表示 チャット ターミナル 会話",
   "panel drawer hide show": "パネル ドロワー 非表示 表示",
+  "search find narrow sidebar": "検索 探す 絞り込み サイドバー",
   "dark light mode appearance colors": "ダーク ライト モード 外観 色",
   "preferences options config": "環境設定 オプション 設定",
   "remote machine computer connect ssh": "リモート マシン コンピューター 接続 ssh",
@@ -325,4 +337,5 @@ export const SETTINGS_JA: Record<string, string> = {
   "Reachable": "接続可能",
   "This request came through Tailscale Funnel, which is open to the public internet.": "このリクエストは公開インターネットに開かれたTailscale Funnelを経由しました。",
   "The server cannot see whether a proxy, tunnel or router makes it reachable from the internet.": "プロキシ、トンネル、ルーターによってインターネットから接続できるかどうかは、サーバーからは分かりません。",
+  "Monokai (OMP)": "モノカイ (OMP)",
 };

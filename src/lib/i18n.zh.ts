@@ -8,6 +8,7 @@ import { WORKSPACE_ZH } from "./i18n/workspace.zh.ts";
 import { FILES_ZH } from "./i18n/files.zh.ts";
 import { DEVICES_ZH } from "./i18n/devices.zh.ts";
 import { USAGE_ZH } from "./i18n/usage.zh.ts";
+import { SETUP_ZH } from "./i18n/setup.zh.ts";
 import { UPDATES_ZH } from "./i18n/updates.zh.ts";
 import { PALETTE_ZH } from "./i18n/palette.zh.ts";
 
@@ -46,7 +47,6 @@ const BASE: Record<string, string> = {
   "Error": "错误",
   "cancelled": "已取消",
   "Close dialog": "关闭对话框",
-  "Preview": "预览",
   "Side conversations": "旁路对话",
   "Todo list": "待办列表",
   "Fold todo list": "折叠待办列表",
@@ -161,6 +161,7 @@ const BASE: Record<string, string> = {
   "Close": "关闭",
 
   // ---- PCs sidebar ----
+  "Filter workspaces and agents": "筛选工作区和代理",
   "Connecting…": "正在连接…",
   "Connected": "已连接",
   "Reconnecting…": "正在重连…",
@@ -176,6 +177,8 @@ const BASE: Record<string, string> = {
   // ---- new workspace ----
   "Browse": "浏览",
   "Cancel": "取消",
+  "Install": "安装",
+  "Sign in": "登录",
   "Starting…": "正在启动…",
   "Start": "启动",
   // the launch's model, effort, first message and skills (lib/agentLaunchMode.ts, lib/newSession.ts)
@@ -268,6 +271,10 @@ const BASE: Record<string, string> = {
   "Turning alerts on…": "正在开启提醒…",
   "This device's push subscription was made for another server key. Turn alerts on again to make a new one.": "此设备的推送订阅是用另一个服务器密钥创建的。请重新开启提醒以创建新的订阅。",
   "The push service refused the last alert to this device. Send a test to check whether it still does.": "推送服务拒绝了发往此设备的上一条提醒。请发送测试，看看是否仍被拒绝。",
+  "This page's service worker is not running, so it cannot make a push subscription. Reload the page, then try again.": "此页面的 Service Worker 未在运行，无法创建推送订阅。请刷新页面后重试。",
+  "The PC did not take this device's push subscription. Try again.": "电脑未接受此设备的推送订阅。请重试。",
+  "Brave would not make a push subscription. Turn on Use Google services for push messaging in Brave's privacy settings, then try again.": "Brave 未创建推送订阅。请在 Brave 的隐私设置中开启“Use Google services for push messaging”，然后重试。",
+  "This device would not make a push subscription. Check that push messaging is allowed in its settings, then try again.": "此设备未能创建推送订阅。请确认其设置中允许推送消息，然后重试。",
   "This device can only watch.": "此设备只能查看。",
   "Needs input": "需要输入",
   "Finished": "已完成",
@@ -338,6 +345,7 @@ export const ZH_PARTS: Record<string, Record<string, string>> = {
   files: FILES_ZH,
   devices: DEVICES_ZH,
   usage: USAGE_ZH,
+  setup: SETUP_ZH,
   updates: UPDATES_ZH,
   palette: PALETTE_ZH,
 };

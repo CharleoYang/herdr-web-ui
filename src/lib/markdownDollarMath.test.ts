@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { parseInline, parseMarkdown } from "./markdown.ts";
+import { parseInline, parseMarkdown } from "../../shared/markdown.ts";
 
 test("Ask may opt in to dollar math without changing ordinary chat or code", () => {
   expect(parseInline("$x_i^2$", true, 0, true)).toEqual([{ type: "math", value: "x_i^2" }]);

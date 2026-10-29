@@ -5,6 +5,7 @@
  * `--term-*` tokens of each theme for PaneTerminal's theme object.
  */
 
+import { TELEMETRY_THEME_IDS, type TelemetrySettings, type TelemetryThemeId } from "../../shared/telemetry.ts";
 import { mirrorPalette, SHARED_SETTING_KEYS, type SharedSettingKey } from "../../shared/preferences.ts";
 import { createContext, createElement, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 import { DEFAULT_THEME, terminalColors, themeColor as themeTableColor, type ThemeId, type ThemeEntry } from "./themes.ts";
@@ -74,6 +75,9 @@ export interface Settings {
   density: Density;
   /** How much a workspace row says: its name, or its pane's title over its place. */
   sidebarRows: SidebarRows;
+  /** the Filter field above the sidebar's lists (components/MachineSidebar.tsx); off, the command palette's
+   *  Filter workspaces and agents still opens it for the time it holds words or the focus */
+  sidebarFilter: boolean;
   /** The Agents list's order. Activity is display-only: herdr's own order never changes. */
   agentOrder: AgentOrder;
   /** How the Agents list is grouped: by workspace, or by coding agent with its workspaces under it. */
@@ -200,6 +204,85 @@ export type MarkdownWidth = (typeof MARKDOWN_WIDTHS)[number];
 export const DIFF_STYLES = ["unified", "split"] as const;
 export type DiffStyle = (typeof DIFF_STYLES)[number];
 
+/** Raw custom text, key combinations and account keys are never copied. Requiring every other
+ * Settings field in the projection makes a new field require an explicit collection decision.
+ * fileOpen, webLinks, the launch modes, followHerdrFocus, composerNewTabButton, terminalMirrorWrap, sidebarFilter, the
+ * interface font and the chat's history page size are not collected: the telemetry schema (shared/telemetry.ts) does not carry them. */
+type TelemetrySourceSettings = Omit<Settings,
+  "keyBarExtras" | "keyBarItems" | "shortcutOverrides" | "terminalFontFamily" | "chatFontFamily" | "uiFontFamily"
+  | "quickReplies" | "usageOrder" | "usageHidden" | "fileOpen" | "webLinks" | "claudeLaunchMode" | "codexLaunchMode"
+  | "followHerdrFocus" | "composerNewTabButton" | "terminalMirrorWrap" | "sidebarFilter" | "historyPrompts" | "showTodos" | "foldTodos" | "agentGrouping">;
+
+/** Compare structured custom settings by content against this app's built-in defaults. */
+function differsFromDefault(value: unknown, defaultValue: unknown): boolean {
+  return JSON.stringify(value) !== JSON.stringify(defaultValue);
+}
+
+/**
+ * A theme as the deployed telemetry Worker knows it. shared/telemetry.ts is pinned to that Worker, so a
+ * theme this checkout adds on top of upstream (Monokai) reports as amber, the base every theme block
+ * overrides, rather than widening the schema the Worker refuses.
+ */
+export function telemetryTheme(id: ThemeId): TelemetryThemeId {
+  return (TELEMETRY_THEME_IDS as readonly string[]).includes(id) ? id as TelemetryThemeId : "amber";
+}
+
+/** Full allowlisted snapshot. Text and account-key values are only used for safe summaries. */
+export function telemetrySettingsSnapshot(settings: Settings): TelemetrySettings & TelemetrySourceSettings {
+  return {
+    terminalInputMode: settings.terminalInputMode,
+    theme: settings.theme,
+    density: settings.density,
+    sidebarRows: settings.sidebarRows,
+    agentOrder: settings.agentOrder,
+    agentMarks: settings.agentMarks,
+    statusIndicators: settings.statusIndicators,
+    palette: telemetryTheme(settings.palette),
+    paletteLight: telemetryTheme(settings.paletteLight),
+    paletteDark: telemetryTheme(settings.paletteDark),
+    terminalFontSize: settings.terminalFontSize,
+    terminalWheelSpeed: settings.terminalWheelSpeed,
+    paneClipboard: settings.paneClipboard,
+    releasePaneAway: settings.releasePaneAway,
+    chatFontSize: settings.chatFontSize,
+    uiFontSize: settings.uiFontSize,
+    chatWidth: settings.chatWidth,
+    enterSends: settings.enterSends,
+    autoSendQueued: settings.autoSendQueued,
+    suggestionChip: settings.suggestionChip,
+    showThinking: settings.showThinking,
+    keepScreenOn: settings.keepScreenOn,
+    language: settings.language,
+    alertsOn: settings.alertsOn,
+    alertInput: settings.alertInput,
+    alertDone: settings.alertDone,
+    alertInApp: settings.alertInApp,
+    alertSound: settings.alertSound,
+    showQuickReplies: settings.showQuickReplies,
+    showUsage: settings.showUsage,
+    usageCount: settings.usageCount,
+    usageGlance: settings.usageGlance,
+    defaultView: settings.defaultView,
+    voiceInput: settings.voiceInput,
+    voiceLanguage: settings.voiceLanguage,
+    voicePolishChat: settings.voicePolishChat,
+    voicePolishTerminal: settings.voicePolishTerminal,
+    wrapCode: settings.wrapCode,
+    markdownWidth: settings.markdownWidth,
+    diffStyle: settings.diffStyle,
+    terminalFontCustom: settings.terminalFontFamily !== DEFAULT_SETTINGS.terminalFontFamily,
+    chatFontCustom: settings.chatFontFamily !== DEFAULT_SETTINGS.chatFontFamily,
+    shortcutsCustom: differsFromDefault(settings.shortcutOverrides, DEFAULT_SETTINGS.shortcutOverrides),
+    keyBarCustom: differsFromDefault(settings.keyBarItems, DEFAULT_SETTINGS.keyBarItems)
+      || differsFromDefault(settings.keyBarExtras, DEFAULT_SETTINGS.keyBarExtras),
+    quickRepliesCustom: differsFromDefault(settings.quickReplies, DEFAULT_SETTINGS.quickReplies),
+    quickReplyCount: settings.quickReplies.length,
+    usageHiddenCount: settings.usageHidden.length,
+    usageOrderCustom: settings.usageOrder.length > 0,
+    darkTheme: telemetryTheme(settings.darkTheme),
+    lightTheme: telemetryTheme(settings.lightTheme),
+  };
+}
 
 /**
  * Which settings every browser of this server shares (shared/preferences.ts, lib/preferencesSync.ts)
@@ -224,6 +307,8 @@ export const SETTING_SCOPE = {
   composerNewTabButton: "device",
   // the pinned plan's display: this screen's own
   showTodos: "device", foldTodos: "device",
+  // a desk with a keyboard may do without the field a phone keeps, as with the PCs it shows (lib/hiddenMachines.ts)
+  sidebarFilter: "device",
   keepScreenOn: "device", alertsOn: "device", alertInput: "device", alertDone: "device", alertInApp: "device", alertSound: "device",
   paletteLight: "device", paletteDark: "device", statusIndicators: "device",
   voiceInput: "device", voiceLanguage: "device", voicePolishChat: "device", voicePolishTerminal: "device",
@@ -246,6 +331,7 @@ export const DEFAULT_SETTINGS: Settings = {
   theme: "dark",
   density: "comfortable",
   sidebarRows: "one",
+  sidebarFilter: true,
   agentOrder: "workspace",
   agentGrouping: "workspace",
   agentMarks: "color",
@@ -426,6 +512,7 @@ export function sanitizeSettings(raw: unknown): Settings {
     theme,
     density: density === "compact" || density === "comfortable" ? density : DEFAULT_SETTINGS.density,
     sidebarRows: record["sidebarRows"] === "one" || record["sidebarRows"] === "two" ? record["sidebarRows"] : DEFAULT_SETTINGS.sidebarRows,
+    sidebarFilter: typeof record["sidebarFilter"] === "boolean" ? record["sidebarFilter"] : DEFAULT_SETTINGS.sidebarFilter,
     agentOrder: record["agentOrder"] === "workspace" || record["agentOrder"] === "activity" ? record["agentOrder"] : DEFAULT_SETTINGS.agentOrder,
     agentGrouping: record["agentGrouping"] === "workspace" || record["agentGrouping"] === "agent" ? record["agentGrouping"] : DEFAULT_SETTINGS.agentGrouping,
     agentMarks: record["agentMarks"] === "color" || record["agentMarks"] === "mono" ? record["agentMarks"] : DEFAULT_SETTINGS.agentMarks,
@@ -522,12 +609,37 @@ function readMirrorWrap(): boolean | null {
   }
 }
 
+/** Settings → Appearance → Sidebar filter, kept in a key of its own for the same reason: shown until chosen off. */
+export const SIDEBAR_FILTER_STORAGE_KEY = "ovis:sidebar-filter";
+
+function readSidebarFilter(): boolean {
+  try {
+    const raw = window.localStorage.getItem(SIDEBAR_FILTER_STORAGE_KEY);
+    const value: unknown = raw === null ? null : JSON.parse(raw);
+    return typeof value === "boolean" ? value : DEFAULT_SETTINGS.sidebarFilter;
+  } catch {
+    return DEFAULT_SETTINGS.sidebarFilter;
+  }
+}
+
+/** Settings → Chat → History page size, kept in a key of its own for the same reason: an old tab's save drops a field it does not know. */
+export const HISTORY_PROMPTS_STORAGE_KEY = "ovis:history-prompts";
+
+function readHistoryPrompts(): number {
+  try {
+    const raw = window.localStorage.getItem(HISTORY_PROMPTS_STORAGE_KEY);
+    return sanitizeSettings({ historyPrompts: raw === null ? null : JSON.parse(raw) }).historyPrompts;
+  } catch {
+    return DEFAULT_SETTINGS.historyPrompts;
+  }
+}
+
 export function loadSettings(): Settings {
   // read as the page's boot script reads them (themeBoot.ts), so React starts on the row the first frame showed
   const stored = readStoredAppearance(() => window.localStorage);
   const settings = stored.main === null ? DEFAULT_SETTINGS : sanitizeSettings(stored.main.value);
   const merged = stored.themes === null ? settings : sanitizeSettings({ ...settings, ...stored.themes });
-  return { ...merged, uiFontFamily: readUiFontFamily(), terminalMirrorWrap: readMirrorWrap() };
+  return { ...merged, uiFontFamily: readUiFontFamily(), terminalMirrorWrap: readMirrorWrap(), sidebarFilter: readSidebarFilter(), historyPrompts: readHistoryPrompts() };
 }
 
 export function saveSettings(settings: Settings): void {
@@ -537,9 +649,11 @@ export function saveSettings(settings: Settings): void {
       darkTheme: mirrored.darkTheme, lightTheme: mirrored.lightTheme,
       mirror: { palette: mirrored.palette, paletteDark: mirrored.paletteDark, paletteLight: mirrored.paletteLight },
     }));
-    const { uiFontFamily, terminalMirrorWrap, ...main } = mirrored;
+    const { uiFontFamily, terminalMirrorWrap, sidebarFilter, historyPrompts, ...main } = mirrored;
     window.localStorage.setItem(UI_FONT_STORAGE_KEY, JSON.stringify(uiFontFamily));
     window.localStorage.setItem(MIRROR_WRAP_STORAGE_KEY, JSON.stringify(terminalMirrorWrap));
+    window.localStorage.setItem(SIDEBAR_FILTER_STORAGE_KEY, JSON.stringify(sidebarFilter));
+    window.localStorage.setItem(HISTORY_PROMPTS_STORAGE_KEY, JSON.stringify(historyPrompts));
     window.localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(main));
   } catch {
     /* private mode: preferences last for the session */

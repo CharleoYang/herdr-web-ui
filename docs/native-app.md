@@ -21,7 +21,7 @@ also opens the door to features a home-screen web app cannot have.
 | Where the code lives | `app/` in this repo | The app and the web client change together. App builds are not a required check. |
 | Who serves the UI | The PC, as today | The UI and the server ship together, so they never disagree on the wire contract. The app holds only the native shell, the connect screen and the demo. |
 | Notifications | In the first release, through an APNs relay | A WKWebView app gets no Web Push, so the app needs Apple's push service, and only a key held by the project can sign for it. |
-| Notification privacy | End-to-end encrypted | The relay only forwards what it cannot read. |
+| Notification privacy | End-to-end encrypted | The relay only forwards what it cannot read, as the telemetry Worker never reads what it does not need. |
 | Builds | Xcode on the macbook | See the iOS QA notes; Capacitor needs a Mac for iOS. |
 
 ## How it fits
@@ -66,9 +66,9 @@ choices) and changes little:
 6. APNs telling the relay a token is gone becomes a 410 to the PC, which already deletes a gone
    subscription.
 
-The relay's code lives in this repo, in
+The relay's code lives in this repo next to `telemetry/`, in
 [`push-relay/`](../push-relay/README.md), open so anyone can run their own, and keeps no logs,
-It answers at `push.ovis.sh`. Its APNs key is a secret of the
+like the telemetry Worker. It answers at `push.ovis.sh`. Its APNs key is a secret of the
 project's Cloudflare account (`APNS_KEY`).
 
 Android takes the same steps through Firebase Cloud Messaging, in the same Worker: the app
@@ -218,6 +218,11 @@ What is there:
   one goes with its web view. `@capacitor/barcode-scanner` kept every old one alive (its scanner
   manager holds the view controller, which holds the bridge and the plugin), so
   `app/patches` makes that manager for each scan instead of keeping it.
+  `HerdrBridgeViewController` also hides WebKit's form accessory bar (the up and down arrows and the check mark over the
+  keyboard), as `@capacitor/keyboard`'s `hideFormAccessoryBar` would, without that plugin or its
+  patch of WebKit's private content view: its web view is a `WKWebView` subclass whose
+  `inputAccessoryView` is nil, which WebKit asks for since iOS 13. The client has its own key bar,
+  and a page cannot remove WebKit's.
 - In the client, `src/lib/nativeApp.ts` notices the app through `window.Capacitor`, as the app
   injects it; the browser build carries no Capacitor code. Inside the app:
   - Settings → Phone & devices has a Change PC row, and so does the pairing screen (a PC that

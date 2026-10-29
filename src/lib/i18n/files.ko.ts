@@ -7,6 +7,7 @@
  * Register and fixed terms follow ../i18n.ko.ts; a key another feature also uses goes there.
  */
 export const FILES_KO: Record<string, string> = {
+  "Preview": "미리보기",
   "Show source": "소스 보기",
   "Resize file panel": "파일 패널 너비 조절",
   "Show beside the pane": "창 옆에 표시",

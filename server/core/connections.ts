@@ -20,6 +20,8 @@ export interface SocketData {
   promptScreenOnly?: boolean;
   features?: readonly ServerFeature[];
   relay?: MachineRelay;
+  /** another Ovis server reading this PC with its bridge token: it gets snapshots whole and applies its own sidebar rows (#2160) */
+  bridge?: boolean;
   /** this connection's id, told to its page in the first snapshot: a create request names it as its first message's typist */
   connectionId: string;
   /** A fresh claim per attach lifetime; deleting it invalidates queued terminal keys. */
@@ -49,7 +51,7 @@ function stateOf(client: Client): ConnectionState {
 }
 
 /** The data for a connection's upgrade: it starts to interact unless its access is read-only. */
-export function connectionData(fields: { relay?: MachineRelay; deviceId: string | undefined; readOnly: boolean; promptScreenOnly?: boolean }): SocketData {
+export function connectionData(fields: { relay?: MachineRelay; deviceId: string | undefined; readOnly: boolean; promptScreenOnly?: boolean; bridge?: boolean }): SocketData {
   const data: SocketData = { connectionId: crypto.randomUUID(), attached: new Map<string, { keepSize: boolean }>(), conversationInterests: new Map<string, { signature: string | null }>(), output: new Map(), ...fields };
   states.set(data, { closing: false, revoked: false, mode: fields.readOnly ? "observe" : "interact", roles: 0, watches: new Map<string, PaneWatch>() });
   return data;
@@ -88,7 +90,7 @@ export function send(client: Client, message: ServerMessage): number {
     // -1 means ALREADY queued. Never retry that frame, or terminal bytes repeat.
     const result = client.send(encoded);
     if (result === 0) client.close(OUTPUT_STALLED_CLOSE_CODE, "output delivery failed");
-    if (result !== 0 && message.type === "snapshot") client.data.features = message.features?.slice() ?? [];
+    if (result !== 0 && (message.type === "snapshot" || message.type === "features")) client.data.features = message.features?.slice() ?? [];
     return result;
   } catch {
     /* client vanished mid-send */

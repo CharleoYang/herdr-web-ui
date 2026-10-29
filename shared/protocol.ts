@@ -131,7 +131,8 @@ export type { DevicePairedEvent, Machine, MachineEvent, MachineRoster, PaneTarge
  *         Unsupported methods/actions get 405 method_not_allowed; a watch-only device gets
  *         403 read_only. Startup holds HTTP/WS requests until leftover Portal cleanup completes;
  *         unreadable saved state or unverifiable cleanup fails closed with 500 internal_error.
- *  GET    /api/updates                   -> UpdateStatus (shared/update.ts), no-store
+ *  GET    /api/updates                   -> UpdateStatus (shared/update.ts), no-store; to the bridge
+ *         token (which cannot read /api/access) also `port` and `serving_url`, where it answers
  *  POST   /api/updates/check             -> 202 { accepted: true }
  *  POST   /api/updates/install           -> 202 { accepted: true }; UpdateInstallRequest JSON body
  *         (at most 1 KiB): 400 invalid_update_install for a missing or malformed revision,
@@ -144,10 +145,34 @@ export type { DevicePairedEvent, Machine, MachineEvent, MachineRoster, PaneTarge
  *         and authenticated (watch devices included). 400 invalid_trace, 408 trace_timeout (the
  *         body took over 10 s to arrive), 413 trace_too_large, 429 trace_rate_limited. At most 16
  *         events and 8192 bytes; never input or credentials.
+ *  GET    /api/telemetry                 -> TelemetryStatus (shared/telemetry.ts), no-store
+ *  POST   /api/telemetry                 -> TelemetryStatus; TelemetryChange (shared/telemetry.ts):
+ *         { enabled?, notice_seen?: true, notice_version?, settings? }. A notice acknowledgement
+ *         requires the current NOTICE_VERSION. X-Herdr-Update: 1 and same-origin.
+ *         404 from a server that sends no telemetry.
  *  GET    /api/agents                    -> { agents: AgentKind[] } (herdr's agent manifests: the
  *         kinds `agent.start` accepts, plus omo and gjc when they are on this server's PATH,
  *         each with `installed`: whether its command is on this server's PATH; for the
  *         new-session dialog)
+ *  GET    /api/agent-catalog             -> AgentCatalogResponse (shared/agent-catalog.ts: every agent
+ *         Ovis can install, with this PC's platform's official commands and whether each is
+ *         installed here, at which version, read by running its version flag (5 s limit; kept until
+ *         the executable file changes). Read only, no-store; a watch device may read it. A remote PC
+ *         from before the endpoint answers 404 through /api/machines/<id>/agent-catalog)
+ *  POST   /api/agent-catalog/install { agent, alternative? } -> { pane_id, workspace_id, command,
+ *         shell } (opens a tab and types that agent's official command for this PC's platform into its
+ *         shell: the catalog's primary, or alternatives[alternative]; the request never carries a
+ *         command. 400 unknown_agent / invalid_alternative / unknown_field (any other field); 409
+ *         no_install_command, command_refused, shell_mismatch (Windows: the method's shell is not the
+ *         tab's), shell_unknown (Windows: herdr names no PowerShell or cmd.exe in the tab within 10 s);
+ *         both type nothing and close the tab, as any failure after the tab opened does;
+ *         install_running (one install per agent per PC while its installer runs in its tab: until
+ *         the tab is back at its shell, the tab closes, no installer was seen within 2 min, or 30
+ *         min pass; finding the agent installed does not end it), platform_unsupported)
+ *  POST   /api/agent-catalog/sign-in { agent } -> the same (a tab running the agent's own sign-in
+ *         command, or the agent itself when it signs in inside; 400 unknown_field; 409 no_sign_in,
+ *         not_installed, shell_unknown). Both
+ *         are mutations: a watch device gets 403 read_only; another PC's go through the PC proxy
  *  GET    /api/integrations              -> IntegrationsResponse (herdr's `integration.list`, in
  *         herdr's order; read only: nothing here installs or removes one, Settings shows the
  *         `herdr integration install` command instead)
@@ -209,6 +234,9 @@ export type { DevicePairedEvent, Machine, MachineEvent, MachineRoster, PaneTarge
  *  GET    /api/pane/conversation?pane_id=    -> ConversationResponse (structured agent
  *         transcript turns - claude, codex, omp, omo, gjc, pi, devin, OpenCode, hermes, grok or agy;
  *         source:"scrollback" when the pane has no recognized, readable store.
+ *         Copilot page reads that fail while fresh ownership, file generation and the requested
+ *         history_id (or bound cursor) still match answer 503 conversation_read_pending:
+ *         retain the displayed view and retry, not fallback. A mismatched history_id answers 409.
  *         Grok requires exact live process/session evidence, Agy live process/session evidence;
  *         rewinds invalidate cursors.
  *         Grok/Agy optional activity describes the latest native turn, independently of pane status.)
@@ -467,6 +495,9 @@ export type ConversationPart =
   /** a message the agent's runtime put in the user's seat (gjc's background-job result): it starts a turn, nobody typed it.
    * `source`: the runtime's name for it (pi's customType, e.g. "async-result", "irc:incoming", "omo-model-profile:unavailable") */
   | { kind: "notice"; text: string; source?: string }
+  /** a shell command the user ran without the model (Claude Code's `!` bash mode), and what it printed: no stdout or
+   * stderr until the agent records them */
+  | { kind: "shell"; command: string; stdout?: string; stderr?: string }
   /** OmO's background tasks that ended, as OmO reported them back to the agent, or a Claude Code subagent that ended (its task notification): it starts a turn, nobody typed it */
   | { kind: "task_result"; tasks: OmoTaskResult[] };
 
@@ -512,13 +543,16 @@ export interface PlanSummary {
   current: string | null;
 }
 
-/** GET /api/pane/conversation: native conversation with settings, or scrollback fallback. */
+/**
+ * GET /api/pane/conversation: native conversation with settings, or scrollback fallback.
+ * A refresh may echo history_id as a query parameter to identify the view it would retain on failure.
+ */
 export interface ConversationResponse {
   /** Grok/Agy latest native turn; display feedback only, never input-delivery authority. */
   activity?: "thinking" | "working" | "idle";
   /** Stable across appends; changes on transcript replacement or native context clear. */
   history_id?: string;
-  source: "copilot-transcript" | "grok-transcript" | "agy-transcript" | "muse-transcript" | "claude-transcript" | "omp-transcript" | "omo-transcript" | "gjc-transcript" | "pi-transcript" | "cmd-transcript" | "codex-transcript" | "devin-transcript" | "opencode-transcript" | "hermes-transcript" | "scrollback";
+  source: "copilot-transcript" | "grok-transcript" | "agy-transcript" | "muse-transcript" | "letta-transcript" | "claude-transcript" | "omp-transcript" | "omo-transcript" | "gjc-transcript" | "pi-transcript" | "cmd-transcript" | "codex-transcript" | "devin-transcript" | "opencode-transcript" | "hermes-transcript" | "scrollback";
   turns: ConversationTurn[];
   metadata?: ConversationMetadata;
   /**
@@ -658,12 +692,6 @@ export interface PanePromptResponse {
   suggestion?: string | null;
   /** the chat's last message, when the agent put it back as typed text in its input box */
   restored?: string | null;
-  /**
-   * The text a Claude pane's input box holds now, asked for with `?draft=1` (absent otherwise, and
-   * from an older server): "" for an empty box, null when the box could not be read whole. A send
-   * whose receipt never came asks for it: a box that no longer holds the message means it left.
-   */
-  draft?: string | null;
   /** the pane's tracked command outcomes */
   outcomes?: CommandOutcome[];
 }
@@ -685,12 +713,17 @@ export interface InteractivePrompt {
   title: string;
   question: string;
   body: string | null;
-  /** Original Markdown from a session call matched to the live native menu; absent for screen text. */
-  text_format?: "markdown";
   options: InteractivePromptOption[];
   multi_select: boolean;
+  /** `markdown`: the question and the options' labels and descriptions are the agent's own Markdown
+   * (omp's open ask call, once the screen's menu proves it is that call). Absent: plain text, as drawn */
+  text_format?: "markdown";
   /** Native OpenCode question explicitly marked required: false; an empty answer skips it. */
   optional?: true;
+  /** A multi-select whose typed answer goes with its checks in one answer (pi-ask's ask_user; OpenCode's native form says so by its agent). */
+  checks_with_text?: true;
+  /** Moving between steps saves the step's unsent edits on the server (pi-ask's ask_user): a step button never waits for them. */
+  drafts_saved?: true;
   /** index of the "type your own answer" option, when the menu has one */
   custom_option_index: number | null;
   /** a question in Codex's queue while Codex keeps working: only the card answers it. Collapsed,
@@ -716,6 +749,14 @@ export interface InteractivePrompt {
   fallback?: true;
   /** Claude's plan file behind a plan card, whose whole text is then the body: opened in the file viewer */
   plan_file?: string;
+  /**
+   * Claude's own words drawn over its question on the pane's screen, paragraphs parted by a blank line;
+   * lines the pane wrapped are joined back only between plain prose, every other break kept as drawn. Claude Code (2.1.311) writes them to its session file only
+   * with the answer, so until then the card shows them, as read off the screen. Absent when the
+   * screen shows no words of Claude's right over the question, or not where they start; not part
+   * of the card's id.
+   */
+  screen_words?: string;
   /**
    * The card's own words, which the bridge wrote rather than read off the agent's screen (an Esc
    * offered as Close, a fallback card's title): for each such field above, its English as a key with
@@ -957,6 +998,11 @@ export interface ConversationPageDelta {
 }
 
 export type ServerMessage =
+  /** the first frame of a connection, before the snapshot that can wait seconds on herdr: what this server
+   * supports and this socket's `connection` id (the snapshot names the same), and the herdr it reads now
+   * (`herdr_lifetime` as a snapshot names it; absent when unproven). A page acts on it before the snapshot only
+   * when that herdr is the one it already knows. Older bridges never send it: their features come with the snapshot */
+  | { type: "features"; features: ServerFeature[]; connection: string; herdr_lifetime?: string }
   /** `connection`: this socket's id on the PC, for a create request's `first_message_connection`; older bridges send none */
   | { type: "snapshot"; snapshot: SessionSnapshot; features?: ServerFeature[]; connection?: string }
   /** raw PTY bytes: append to the terminal, never repaint over it. A mirrored pane (HerdrIdentity.terminal_mirror) sends whole screens the same way. */

@@ -148,7 +148,7 @@ herdr plugin uninstall devswha.ovis || herdr plugin uninstall devswha.herdr-web-
 tailscale serve --https=<port> off    # the port the installer printed, if it served the app
 ```
 
-The installer's herdr, Bun and Node stay, since other tools may use them: `~/.local/bin/herdr`, `~/.bun`, and `~/.local/share/ovis/node` (`~/.local/share/herdr-web-ui/node` for an install from before the rename) with its link `~/.local/bin/node`. Push keys, paired devices and the identity file that owns the app's Portal address are in `~/.config/ovis`.
+The installer's herdr, Bun and Node stay, since other tools may use them: `~/.local/bin/herdr`, `~/.bun`, and `~/.local/share/ovis/node` (`~/.local/share/herdr-web-ui/node` for an install from before the rename); an older installer also linked it as `~/.local/bin/node`. Running the installer again removes that link once the installed release finds its Node itself; a release from before that still needs the link, so it stays until the installer runs again after Ovis is updated. Push keys, paired devices and the identity file that owns the app's Portal address are in `~/.config/ovis`.
 
 ## Supported agents
 
@@ -156,7 +156,7 @@ Every agent herdr runs shows up with its live status, terminal and alerts. The c
 
 | Agent | Chat | Answer prompts from chat |
 | --- | --- | --- |
-| **Claude Code** | Native transcript, resolved through herdr | ✓ approvals, questions, plan and menu picks, and the `/model` list (picked for the session) |
+| **Claude Code** | Native transcript, resolved through herdr | ✓ approvals, questions, plan and menu picks, the `/model` list, and the `/effort` levels with Ultracode's switch (each picked for the session) |
 | **Codex** | Native rollout, with tool results and commentary/final phases | ✓ approvals and questions, including queued ones, and the `/model` lists (picked for the session) |
 | **omp** | Native session file, in the store the pane's omp process writes to: `~/.omp/agent`, a profile's, or where its `--session-dir`, or the `PI_CODING_AGENT_SESSION_DIR`, `PI_CODING_AGENT_DIR`, `PI_CONFIG_DIR` or XDG data and state directories it was started with, put it (absolute paths only, not values from omp's `.env` files; on Windows only `~/.omp` and its profiles) | ✓ approvals, questions, and the model picker of `/model` and `/switch` (picked for the session: the chat sends `/model` as `/switch`, since omp's own `/model` opens its role hub) |
 | **omo** | Native session file, found through the pane's process tree | ✓ the `/model` list (picked for the session); other menus — use Terminal |
@@ -169,7 +169,7 @@ Every agent herdr runs shows up with its live status, terminal and alerts. The c
 | **Hermes** | Native SQLite session store | — use Terminal |
 | **Muse Code** | **Linux untested with real Muse.** Native session log, bound to the pane by the session lock Muse writes for its process; panes in one folder each show their own session. macOS and Linux; Windows uses Terminal. See [Muse chat](muse-chat.md). | — use Terminal |
 | **Antigravity (agy)** | **Experimental; macOS untested.** Native ledger, selected by the running process’s held conversation lock. Linux native-tested; Windows uses terminal text. See [Agy behavior and limits](agy-chat.md). | — use Terminal |
-| **Letta Code** | The terminal's text. Choose **Letta Code** in **New workspace**, **New tab with agent…** or **New worktree** where `letta` is installed, or run `letta` in a herdr pane's **Terminal**. | — use Terminal |
+| **Letta Code** | **Experimental; Linux and macOS.** Read-only native transcript from where the pane's own `letta` process keeps it (`~/.letta/transcripts`, or its `LETTA_CONFIG_DIR` / `LETTA_TRANSCRIPT_ROOT`), when herdr's Letta integration is installed (`herdr integration install letta`, experimental), it names a conversation for the pane, and Letta's own record in the project folder (`.letta/settings.local.json`) names the same one, is older than that `letta` process and is writable by it, and `letta` is still in the folder it started in (for a local-backend conversation, Letta's local store must also name that agent for it). That holds when `letta` resumes the conversation it last had in that folder (`letta`, or `letta --conversation <id>` on that one). After `/new` or `/resume`, a start on another conversation (`--new` included), once `letta` has moved to another folder (its SetWorkingDirectory or EnterWorktree tools), another `letta` writing that record, while another pane runs `letta` in the same folder, with two panes on one conversation, in the home folder, or before the conversation's first turn on this PC ends, Chat uses the terminal's text until `letta` starts again on that conversation. Letta writes a turn when it ends: a turn appears once it is done, and a cancelled one never does. Only turns Letta Code wrote on this PC show. Choose **Letta Code** in **New workspace**, **New tab with agent…** or **New worktree** where `letta` is installed, or run `letta` in a herdr pane's **Terminal**. Windows uses Terminal. | — use Terminal |
 | **GitHub Copilot CLI** | Linux native transcript when the foreground session is verified. See [Copilot setup and limits](copilot-chat.md). | — recorded choices are read-only; answer questions and approvals in Terminal |
 | **Anything else** | The terminal's text | — use Terminal |
 
@@ -200,6 +200,35 @@ Status tracking reads the same binding. Without it, a GJC pane keeps herdr's own
 which follows GJC's provider child: a finished turn can stay on working, so no done alert
 comes and no INPUT shows for an open question. Install the extension and restart GJC to
 get both chat and done alerts back.
+
+The `ask_user` form of the [`@eko24ive/pi-ask`](https://www.npmjs.com/package/@eko24ive/pi-ask)
+pi package draws its own widget, which the chat cannot read off the screen, and pi-ask answers
+only through its own events inside the pi process, never typed keys. To answer it from the chat,
+explicitly install the web UI's pi extension on each PC that runs pi, from this checkout:
+
+```sh
+bun scripts/install-pi-integration.ts
+```
+
+Nothing installs it for you: the web UI never adds or changes pi's settings, hooks or extensions
+on its own. Restart running pi sessions to load it. The installer writes only its own file,
+`~/.pi/agent/extensions/herdr-web-ui.js` (or under `PI_CODING_AGENT_DIR`), and refuses to replace
+a file it did not write; it does not replace pi settings or other extensions, and no running
+session is modified by it. To remove it, run the same command with `--remove` and restart pi.
+Without the extension the form stays in Terminal, exactly as before. On a remote PC with only the
+runtime bundle, run it with the bundle's Bun as for GJC above. The extension listens on a socket
+only your user can open, `herdr-web-ui-ask/<pid>.sock` in the same directory, and relays the
+card's answer to pi-ask as its submit event: the form then shows as a card with one question per
+step, its options and **Type your own answer**. The card shows only when the pane's pi process
+answers on that socket, writes the session herdr reports for the pane, has one form open and
+that form's `ask_user` call is still unanswered on pi's current branch (after a `/tree` move
+too); anything else, a form opened by `/answer` or `/ask:replay`, Windows, and pi without the
+extension use Terminal. pi-ask is never answered with typed keys: a pi pane never gets the
+generic card of guessed keys that other agents get for a prompt no reader knows, and where the
+extension serves the pane's pi, pi's own dialogs (select, confirm, input) show no card either, since
+a pi-ask form can open there at any moment. The terminal answers those; without the extension,
+pi's own dialogs keep their cards as before. Notes and
+**Elaborate** stay in Terminal. Checked with pi 1.4.0 and pi-ask 1.2.0.
 
 Command Code chat needs the session herdr reports for the pane. Command Code sends that report
 and herdr keeps only the sessions of the agents it knows natively, so no released herdr accepts
@@ -243,7 +272,7 @@ A pane's plan is the task list a Claude Code agent keeps (`TaskCreate` / `TaskUp
 | **Read the conversation** | Prompts and Markdown answers (links, code blocks, tables). Each turn's commands, edits and progress are folded into one "Worked for …" block. Copy an answer as Markdown or plain text. In a pi, omp, Claude Code or Codex pane, a picture the agent's own tool opened shows inside that tool's row. A picture opens in a full-screen viewer: zoom at the pointer, pan, step through the message's other pictures, **Copy image** and **Download**. Skill names an answer writes (`/name`, or `$name` for Codex) show as chips when the pane's own command list names that skill. Once you have sent four or more messages, a rail of dashes at the left, one per message you sent, jumps between them (not on a phone, or when the chat column leaves less than 32 px of margin at each side). |
 | **Follow the plan** | A supported todo-tool call folds into the turn's work block like any tool: it reads as the done count or the step it took, and opened, as the whole list by phase. |
 | **Rewind in terminal** | Claude Code, grok and Antigravity messages offer **Rewind in terminal** beside Copy. It sends nothing, preserves your draft and opens the same pane with a hint to run `/rewind`. Choose and confirm there. Chat follows the native conversation once the agent records its new branch; Claude Code does so on the next prompt or command. |
-| **Drop into the real terminal** | xterm.js on the live pane: full-screen TUIs, raw keys and herdr's scrollback, shared with your own herdr TUI. Drag to select and it is copied on release, unless herdr's `[ui] copy_on_select` is off on the PC serving Ovis: then it is only selected, and stays selected under the pointer until Ctrl+C or Copy copies it. The wheel or the screen's edge scrolls further back while you drag. Ctrl+C copies a selection instead of interrupting. **Quote in message**, shown while text is selected, adds the selection to that pane's chat draft in a code block headed by the pane name, and its line numbers when herdr reports them; nothing is sent. |
+| **Drop into the real terminal** | xterm.js on the live pane: full-screen TUIs, raw keys and herdr's scrollback, shared with your own herdr TUI. Drag to select and it is copied on release, unless herdr's `[ui] copy_on_select` is off on the PC serving Ovis: then it is only selected, and stays selected under the pointer until Ctrl+C or Copy copies it. The wheel or the screen's edge scrolls further back while you drag. In an OpenCode pane a drag goes to OpenCode, which selects inside its own panel and copies it itself, as in a native terminal; hold Shift (Option on a Mac) to select and copy in Ovis instead, which is also the way when OpenCode's own copy does not reach this device's clipboard. Ctrl+C copies a selection instead of interrupting. **Quote in message**, shown while text is selected, adds the selection to that pane's chat draft in a code block headed by the pane name, and its line numbers when herdr reports them; nothing is sent. |
 | **Find in terminal** | **More → Find in terminal** or Mod+Shift+F searches literal text in herdr's history, with a match count, previous/next navigation and visible match highlights. Search jumps and scrolling move the same viewport in every attached client, including the TUI. Older bridges retain search navigation without automatic highlights. |
 | **Jump across PCs** | The command palette (Mod+Shift+K) searches all connected PCs at once by PC, workspace, branch, tab, pane title or agent kind. PC names distinguish results, and Recent remembers each pane's PC. Picking a result opens that PC and pane directly. Disconnected PCs are omitted; app and plugin actions remain on the currently selected PC. It also finds Settings pages and actions by related words (try `theme` or `font`), and browses folders: type a path such as `~/`, or pick **Browse folders**, and the folder you reach opens in Files. |
 | **Answer prompts** | Approval, question and plan menus become cards. Tap an option, or type its number in the composer. The server checks that the menu is still current before answering. |
@@ -382,6 +411,39 @@ Open Settings → Remote PCs and choose **Add PC** (the command palette has it t
 - **Bridge updates:** when an app update needs a newer bridge, PCs that connect with their saved key are updated in the background.
 
 More in [remote PCs](remote-pcs.md).
+
+### One always-on PC for all your PCs
+
+With several PCs, you don't need Ovis on each of them. Install it on one PC that stays on, such as a desktop or a home server, and add the others to it as remote PCs. That one app reaches them over SSH and sets up its own bridge on each, so the other PCs need only an SSH server (setup brings herdr where it is missing).
+
+1. **Install Ovis on the always-on PC** as in [Quick start](#quick-start), with its [phone address](#on-your-phone).
+2. **On each other PC, stop its own Ovis** if it has one, and keep herdr from starting it again:
+
+   ```sh
+   # an install from before the rename has the old id
+   herdr plugin action invoke devswha.ovis.stop || herdr plugin action invoke devswha.herdr-web-ui.stop
+   herdr plugin disable devswha.ovis || herdr plugin disable devswha.herdr-web-ui
+   ```
+
+   On Windows:
+
+   ```powershell
+   herdr plugin action invoke devswha.ovis.stop-windows
+   herdr plugin disable devswha.ovis
+   # an install from before the rename: devswha.herdr-web-ui.stop-windows, then disable devswha.herdr-web-ui
+   ```
+
+   From a checkout, stop `bun run start` instead, and whatever starts it again.
+
+   An Ovis left running there still works with the always-on app, but it stays a second app: it sends its own alerts and updates only through its own updater, which the always-on app can at most ask to run. Once it is stopped, the always-on app runs its own bridge there and keeps that bridge on its own version.
+3. **Add each PC in the always-on app:** Settings → Remote PCs → **Add PC**, then approve the install once. A PC already saved in herdr (`herdr machine`) is listed there already: choose **Connect**. The always-on PC must reach it over SSH as the account Ovis runs under, so try `ssh <pc>` there first. A PC the app already had, connected while that PC's own Ovis ran, keeps waiting for that Ovis to come back: open its **Manage PC** control in the sidebar, choose **Reconnect / setup** and approve the install.
+4. **Open the always-on PC's address everywhere**, in the other PCs' browsers and on your phone, install the app from there, and turn on **Alerts** in it on each device. Pairings and alerts set up with a PC's own Ovis stay with that Ovis, so pair a device again if the new address asks.
+
+Then there is one app to update: each release is downloaded and built once, the bridges on the other PCs follow it in the background (when SSH gets in with the saved key, without a password; otherwise the PC's card offers the update), push alerts come from one place, and no versions have to be kept in step.
+
+- **While the always-on PC is off or asleep**, the other PCs have no Ovis. herdr keeps running on each of them, and its own terminal app works as before.
+- **A laptop's sessions go through the always-on PC**, so a laptop that cannot reach it, offline for example, has no Ovis for them.
+- **With no PC that stays on**, install Ovis on each PC and keep them on the same version. An app that finds an older Ovis on a PC it adds offers to update it when that Ovis can update itself, and otherwise says why not ([Disconnects and updates](remote-pcs.md#disconnects-and-updates)).
 
 ## Access and safety
 
@@ -570,6 +632,18 @@ herdr itself is updated from **Settings → About → Update herdr**. herdr refu
 - What herdr printed is shown under the button. A herdr installed with Homebrew, mise or Nix is updated with that tool, and herdr's message names the command.
 
 This is for Linux and macOS. On Windows, and for a remote PC, update herdr on that PC.
+
+## Anonymous usage counts
+
+The app tells its maintainer how many installs there are, which versions they run, which countries the messages come from and which app settings people choose. It sends one message when it is first installed and one each time it runs a new version, plus a daily active message described below. The first time you open the app, a line under the header says so, with **What is sent**, which opens **Settings → About** and its switch. Nothing is sent before that line has been shown, and the first message waits ten minutes after it, so turning the switch off there stops it. An install that saw an older notice sees the expanded notice (version 4, which adds the daily active message) once more, and sends nothing until then. An existing choice to turn counts off stays off.
+
+A message holds the event (`install` or `update`), a random ID made on this PC, the app's version and the version an update replaced, the OS and CPU architecture, how the app was installed (herdr plugin, `bun run start`, or `bun run server`), and an allowlisted `settings` snapshot. The snapshot contains actual choices for appearance, terminal and chat behavior, notifications, language, voice controls, usage-meter display and the file viewer, including defaults. Custom fonts, shortcuts, key-bar layouts, quick replies and the usage meters' account order are represented by customization flags, not their text, key combinations or account names; quick replies and hidden usage accounts also have counts. Account identifiers and the order itself, paths, addresses, credentials, commands, terminal content, conversations and files are not collected.
+
+The daily active message goes out at most once per UTC day on which the app is opened in a browser. It's dated with that day even when it goes out later (for example after the ten-minute wait), and it's sent again the same day only if a new kind of coding agent shows up. It holds the event (`active`), the day, the random ID, the app's version, the OS and CPU architecture, how the app was installed, and `harnesses`: the kinds of coding agents running in herdr panes, taken from a fixed list (such as `claude` or `codex`), with any other agent counted as `other`. Pane names, pane counts, paths and terminal content are never part of it, and a remote PC's panes aren't included.
+
+The snapshot is the last one a browser reported to this server, not a list of devices or a complete picture of a person. Changing a setting updates that local snapshot but does not send another telemetry event. Before a browser reports, `settings` is `null`. The receiver ([`telemetry/`](../telemetry/README.md)) keeps the event fields, the day and the country the message came from (two letters, such as `KR`, worked out by its host from the connection), and never stores your IP address or anything finer than the country. The random install ID and settings can link events from an installation; they do not guarantee anonymity.
+
+**Settings → About → Anonymous usage counts** shows the next message exactly as it would be sent, and its switch turns the counts off for this PC. `OVIS_TELEMETRY=0` or `DO_NOT_TRACK=1` in the server's environment turns them off whatever the switch says, and they are always off in CI. A remote PC's bridge sends nothing.
 
 ## Keyboard shortcuts
 

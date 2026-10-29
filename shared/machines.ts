@@ -5,7 +5,7 @@ import type { SeenFinish } from "./seen.ts";
 
 export const LOCAL_MACHINE = "local";
 export const BRIDGE_PROTOCOL = 1;
-export const REMOTE_BUNDLE_VERSION = "38";
+export const REMOTE_BUNDLE_VERSION = "39";
 export interface PaneTarget { machine_id: string; pane_id: string }
 export type MachineState = "connecting" | "connected" | "reconnecting" | "disconnected" | "error";
 export interface SshTarget {
@@ -24,7 +24,7 @@ export interface Machine {
   enabled: boolean;
   state: MachineState;
   error: string | null;
-  /** set when retrying cannot help: the user has to update the remote bridge or approve setup */
+  /** Attention needed; windows_login retries, windows_start_failed waits for a startup decision. */
   action_required?: MachineAction | null;
   /** a bridge update running for this PC right now (in the background, or from its dialog) */
   updating?: MachineUpdate | null;
@@ -63,6 +63,11 @@ export interface RemoteOvis {
   /** the HTTPS address it says Tailscale already serves it at, when it says so */
   url: string | null;
 }
+/**
+ * How a PC's error starts while its own Ovis is offered an update it can run (server/machines.ts ownUpdateOffered).
+ * Any other error beside that offer says why its last update failed, and the card shows it.
+ */
+export const OWN_UPDATE_OFFER = "This PC runs its own Ovis";
 /** GET /api/machines: with ?verify_source_boot=<id>, also that PC's freshly proved boot id */
 export interface MachineRoster { machines: Machine[]; verified_source_boot?: { machine_id: string; boot_id: string } }
 /**
@@ -79,7 +84,7 @@ export interface HerdrIdentity {
   /** without attach, the terminal lens shows the pane's screen repainted a few times a second (server/mirror.ts) */
   terminal_mirror?: boolean;
 }
-export type MachineAction = "connect" | "update_bridge" | "setup" | "bridge_conflict";
+export type MachineAction = "connect" | "update_bridge" | "setup" | "bridge_conflict" | "windows_login" | "windows_start_failed";
 /** `ovis`: the PC's own Ovis updates itself (Machine.remote_ovis); absent for a bridge this app installs */
 export interface MachineUpdate { job_id: string; step: string; progress: SetupProgress | null; ovis?: boolean }
 /**
@@ -109,6 +114,8 @@ export interface SetupJob {
   challenge: SetupChallenge | null;
   installations: string[];
   error: string | null;
+  /** An unsaved Windows destination may wait for login; its setup must stay in the current dialog. */
+  windows_startup?: boolean;
   /**
    * set on a failed job when retrying as-is cannot connect: the user has to update the
    * bridge or approve setup. The dialog turns "update_bridge" into its update-and-connect
@@ -125,7 +132,7 @@ export interface SetupJob {
   /** the PC's own Ovis, when it is older than this app (Machine.remote_ovis): a first connect has no PC to carry it */
   remote_ovis?: RemoteOvis | null;
 }
-export type SetupAction = { action: "answer"; challenge_id: string; answer: string } | { action: "approve" } | { action: "cancel" };
+export type SetupAction = { action: "answer"; challenge_id: string; answer: string } | { action: "approve" } | { action: "cancel" } | { action: "start_headless" };
 /**
  * A device was durably enrolled (server/devices.ts): its registry write succeeded, whether at a
  * gated pairing or when a first-pair cookie came back. Never for an unconfirmed credential, a

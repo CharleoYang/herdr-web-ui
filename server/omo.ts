@@ -5,6 +5,7 @@ import { herdrRpc } from "./herdr/client.ts";
 import { recentProcessTable } from "./gjc-runtime.ts";
 import { processStartedAt, processStartedAtAsync } from "./process-start.ts";
 import { descendantProcesses, type ProcessRow } from "./windows-processes.ts";
+import { userHome } from "./user-home.ts";
 
 const OMO_PROCESS = /(^|\/)omo(\.js)?$|\/omo-ai\//;
 /** node and bun run a script: the program is then the script, the first word that is not a flag */
@@ -360,19 +361,26 @@ async function processStarts(infos: Iterable<ProcessInfo>): Promise<(pid: number
 }
 
 /**
- * The pid of the foreground OmO process that holds a session, as typing picks it (paneProcessRoots), or null: an
- * argv-silent custom OmO is known only by its holder, and its bundled Claude SDK child, listed after it, looks like
- * omo by its path but comes and goes with each turn. A process herdr gives no cwd for is placed in the pane's, as
- * discovery places it (macOS has no /proc to ask). Starts are read without holding the event loop.
+ * The foreground OmO process that holds a session, as typing picks it (paneProcessRoots), or null: an argv-silent
+ * custom OmO is known only by its holder, and its bundled Claude SDK child, listed after it, looks like omo by its path
+ * but comes and goes with each turn. `prefer` (the process a send is already bound to) wins while it holds one, so two
+ * holders that herdr lists in another order keep the one a send went to (#2190). A process herdr gives no cwd for is
+ * placed in the pane's, as discovery places it (macOS has no /proc to ask). Starts are read without holding the event
+ * loop; `started` is the start its holder record was checked against, so a pid reused after the check is not taken
+ * for it.
  */
 export async function heldOmoProcess(
   pane: HerdrPane,
   foreground: readonly { pid: number; argv?: readonly string[] | null; cwd?: string | null }[],
-  home = process.env["HOME"] ?? "",
-): Promise<number | null> {
+  home = userHome(),
+  prefer: number | null = null,
+): Promise<{ pid: number; started: number | null } | null> {
   const processes: OmoForeground[] = foreground.map(({ pid, argv, cwd }) => ({ pid, ...(argv ? { argv: [...argv] } : {}), ...(cwd ? { cwd } : {}) }));
   const startOf = await processStarts([{ process_info: { foreground_processes: processes } }]);
-  return processes.find((entry) => omoProcessIdentity(entry, paneFallbackCwd(pane), home, processEnviron, startOf)?.held === true)?.pid ?? null;
+  const holds = (entry: OmoForeground): boolean => omoProcessIdentity(entry, paneFallbackCwd(pane), home, processEnviron, startOf)?.held === true;
+  const preferred = processes.find((entry) => entry.pid === prefer);
+  const held = preferred && holds(preferred) ? preferred : processes.find(holds);
+  return held ? { pid: held.pid, started: startOf(held.pid) } : null;
 }
 
 type OmoForeground = { pid: number; argv?: string[]; cwd?: string };
@@ -515,7 +523,7 @@ export function omoTranscriptsOfCwd(cwd: string, panes: HerdrPane[], infos: Read
  * but omo has not written yet (before its first message, or right after /new). The folder
  * is the pane's resolved runtime cwd, and its peers are the panes resolving to the same one.
  */
-export async function omoSessionForPane(paneId: string, cwd: string, panes: HerdrPane[], home = process.env["HOME"] ?? ""): Promise<{ path: string | null; pending: string | null }> {
+export async function omoSessionForPane(paneId: string, cwd: string, panes: HerdrPane[], home = userHome()): Promise<{ path: string | null; pending: string | null }> {
   // A child model can change herdr's agent label: inspect each pane's processes once.
   const candidates = panes;
   const infos = new Map(await Promise.all(candidates.map(async (pane) => [pane.pane_id, await processInfo(pane.pane_id)] as const)));
@@ -528,7 +536,7 @@ export async function omoSessionForPane(paneId: string, cwd: string, panes: Herd
   return { path: session?.path ?? null, pending: session?.pending ?? null };
 }
 
-export async function omoTranscriptForPane(paneId: string, cwd: string, panes: HerdrPane[], home = process.env["HOME"] ?? ""): Promise<string | null> {
+export async function omoTranscriptForPane(paneId: string, cwd: string, panes: HerdrPane[], home = userHome()): Promise<string | null> {
   return (await omoSessionForPane(paneId, cwd, panes, home)).path;
 }
 
@@ -538,7 +546,7 @@ export async function omoTranscriptForPane(paneId: string, cwd: string, panes: H
  * pane, regardless of its child agent label, shared by all panes of a folder; the folder each
  * pane counts toward is the one its own processes resolve.
  */
-export async function omoPanes(panes: HerdrPane[], home = process.env["HOME"] ?? ""): Promise<Map<string, { path: string | null; startedAt: number | null }>> {
+export async function omoPanes(panes: HerdrPane[], home = userHome()): Promise<Map<string, { path: string | null; startedAt: number | null }>> {
   const candidates = panes;
   const infos = new Map(await Promise.all(candidates.map(async (pane) => [pane.pane_id, await processInfo(pane.pane_id)] as const)));
   const startOf = await processStarts(infos.values());

@@ -1,7 +1,7 @@
 import { constants, closeSync, fstatSync, lstatSync, openSync, opendirSync, readFileSync, readlinkSync, readSync, realpathSync, statSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, sep } from "node:path";
 import { createHash, randomUUID, type Hash } from "node:crypto";
-import { processAlive, processStartedAt } from "./process-start.ts";
+import { readProcessBirth } from "./process-owner.ts";
 
 const SESSION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const HEADER_BYTES = 64 * 1024;
@@ -21,7 +21,8 @@ interface ForegroundCheckpoint {
   hash: Hash; epoch: string; binding: ForegroundBinding | null | undefined; unregistered: ForegroundBinding | null; readConflict?: true;
 }
 const foregroundCheckpoints = new Map<number, ForegroundCheckpoint>();
-const foregroundLogProcesses = new Map<number, { started: number; observed: boolean }>();
+interface InitialLogRead { dev: bigint; ino: bigint; path: string; size: number; hash: string }
+const foregroundLogProcesses = new Map<number, { started: string; observed: boolean; initialRead?: InitialLogRead }>();
 
 /** Revalidate every consumed byte: unchanged boundary samples cannot prove an append. */
 function logPrefix(fd: number, size: number): Hash | null {
@@ -45,8 +46,10 @@ function loggedForeground(pid: number, logDirectories: readonly string[]): Foreg
 }
 
 function scanForegroundLog(pid: number, logDirectories: readonly string[]): ForegroundBinding | null | undefined | typeof VERIFIED_UNREGISTER | typeof LOG_READ_CHANGED {
-  const started = processStartedAt(pid);
-  if (started === null) return undefined;
+  if (process.platform !== "linux") return undefined;
+  const birth = readProcessBirth(pid);
+  if (birth.state !== "identified") return undefined;
+  const started = birth.birth.value;
   let owner = foregroundLogProcesses.get(pid);
   if (owner?.started !== started) {
     foregroundLogProcesses.delete(pid);
@@ -56,8 +59,8 @@ function scanForegroundLog(pid: number, logDirectories: readonly string[]): Fore
   if (owner === undefined) {
     if (foregroundLogProcesses.size >= 256) {
       for (const [previousPid, previous] of foregroundLogProcesses) {
-        const current = processStartedAt(previousPid);
-        if ((current !== null && current !== previous.started) || !processAlive(previousPid)) {
+        const current = readProcessBirth(previousPid);
+        if (current.state === "absent" || (current.state === "identified" && current.birth.value !== previous.started)) {
           foregroundLogProcesses.delete(previousPid);
           foregroundCheckpoints.delete(previousPid);
         }
@@ -73,6 +76,7 @@ function scanForegroundLog(pid: number, logDirectories: readonly string[]): Fore
     owner.observed = true;
   };
   const unavailable = (): undefined => {
+    delete owner.initialRead;
     const checkpoint = foregroundCheckpoints.get(pid);
     if (checkpoint) { checkpoint.binding = undefined; checkpoint.unregistered = null; }
     return undefined;
@@ -87,7 +91,14 @@ function scanForegroundLog(pid: number, logDirectories: readonly string[]): Fore
       let target: string;
       try { target = readlinkSync(`/proc/${pid}/fd/${descriptor.name}`); }
       catch (error) {
-        if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
+        const code = (error as NodeJS.ErrnoException).code;
+        if (code === "ENOENT") continue;
+        if (code === "EINTR" || code === "EAGAIN" || code === "EBUSY" || code === "EIO" || code === "ESTALE") {
+          // Keep only the prefix to revalidate, never permission to serve a failed scan.
+          const cached = foregroundCheckpoints.get(pid);
+          if (cached) cached.readConflict = true;
+          return LOG_READ_CHANGED;
+        }
         return unavailable();
       }
       if (target.endsWith(" (deleted)") && LOG_NAME.test(basename(target.slice(0, -10)))) {
@@ -129,11 +140,24 @@ function scanForegroundLog(pid: number, logDirectories: readonly string[]): Fore
           const start = same ? cached.size : Math.max(0, size - LOG_WINDOW_BYTES);
           const bytes = Buffer.alloc(size - start);
           const read = readSync(fd, bytes, 0, bytes.length, start);
+          const initial = owner.initialRead;
+          // A raced bootstrap is still initial only while the bytes this read returned begin with
+          // every byte already seen, in the same process-owned file. Judged from those bytes, not
+          // a separate read, so a rewrite between two reads cannot pass. A lost/replaced log revokes it.
+          const initialContinues = initial !== undefined && start === 0 && initial.dev === stat.dev && initial.ino === stat.ino
+            && initial.path === target && read >= initial.size
+            && createHash("sha256").update(bytes.subarray(0, initial.size)).digest("hex") === initial.hash;
           const hash = same ? prefix : logPrefix(fd, start);
           const after = fstatSync(fd, { bigint: true });
           if (read !== bytes.length || hash === null || after.size !== stat.size
             || after.mtimeNs !== stat.mtimeNs || after.ctimeNs !== stat.ctimeNs) {
             if (cached) cached.readConflict = true;
+            // A later raced read extends the protected prefix while it still starts with the first one,
+            // so a rewrite back to an earlier prefix cannot drop lifecycle lines read in between.
+            else if ((!observedBefore || initialContinues) && start === 0 && read === bytes.length && hash !== null) {
+              owner.initialRead = { dev: stat.dev, ino: stat.ino, path: target, size,
+                hash: hash.copy().update(bytes).digest("hex") };
+            } else delete owner.initialRead;
             return LOG_READ_CHANGED;
           }
           const text = bytes.subarray(0, read).toString("utf8");
@@ -141,7 +165,7 @@ function scanForegroundLog(pid: number, logDirectories: readonly string[]): Fore
           const complete = text.slice(skip, text.lastIndexOf("\n") + 1);
           if (start > 0 && !complete && !same) return unavailable();
           // Only a complete initial log without lifecycle evidence permits marker/report fallback.
-          let selected = same ? cached.binding : start === 0 && !observedBefore ? null : undefined;
+          let selected = same ? cached.binding : start === 0 && (!observedBefore || initialContinues) ? null : undefined;
           let unregistered = same ? cached.unregistered : null;
           let position = start + Buffer.byteLength(text.slice(0, skip));
           for (const line of complete.split("\n")) {
@@ -170,9 +194,19 @@ function scanForegroundLog(pid: number, logDirectories: readonly string[]): Fore
             dev: stat.dev, ino: stat.ino, path: target, size: start + completeBytes,
             observedSize: size, mtimeNs: stat.mtimeNs, ctimeNs: stat.ctimeNs, checkedAtNs, pendingSwitch, hash, epoch, binding: selected, unregistered,
           });
+          delete owner.initialRead;
           found = pendingSwitch ? undefined : selected === undefined && unregistered ? VERIFIED_UNREGISTER : selected;
         } finally { closeSync(fd); }
-      } catch { return unavailable(); }
+      } catch (error) {
+        const code = (error as NodeJS.ErrnoException).code;
+        if (code === "ENOENT" || code === "EINTR" || code === "EAGAIN" || code === "EBUSY" || code === "EIO" || code === "ESTALE") {
+          // Retain revalidation context, not permission to serve the old binding.
+          const cached = foregroundCheckpoints.get(pid);
+          if (cached) cached.readConflict = true;
+          return LOG_READ_CHANGED;
+        }
+        return unavailable();
+      }
     }
   } finally { directory.closeSync(); }
   return !logFound && owner.observed ? unavailable() : found;

@@ -115,6 +115,7 @@ function verifyMachO(path: string): void {
 }
 
 try {
+
   let bunVersion = Bun.version;
   if (windows) {
     // Five files, not twenty-two thousand. A PC's security suite treats a mass extraction as
@@ -138,7 +139,7 @@ try {
     // bundle is folded into one file of code and one archive (see above)
   for (const dir of ["server", "shared", "integrations", "dist", "node_modules"]) cpSync(join(root, dir), join(stage, dir), { recursive: true, dereference: false, filter: (path) => !path.endsWith(".test.ts") });
   mkdirSync(join(stage, "scripts"));
-  cpSync(join(root, "scripts", "install-gjc-integration.ts"), join(stage, "scripts", "install-gjc-integration.ts"));
+  for (const script of ["install-gjc-integration.ts", "install-pi-integration.ts"]) cpSync(join(root, "scripts", script), join(stage, "scripts", script));
     // Use a reproducible LTS runtime instead of the builder's Node: newer local
     // binaries can require extra system libraries absent on an otherwise supported PC.
     const nodeVersion = "v22.23.2";

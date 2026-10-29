@@ -8,6 +8,7 @@ import { WORKSPACE_JA } from "./i18n/workspace.ja.ts";
 import { FILES_JA } from "./i18n/files.ja.ts";
 import { DEVICES_JA } from "./i18n/devices.ja.ts";
 import { USAGE_JA } from "./i18n/usage.ja.ts";
+import { SETUP_JA } from "./i18n/setup.ja.ts";
 import { UPDATES_JA } from "./i18n/updates.ja.ts";
 import { PALETTE_JA } from "./i18n/palette.ja.ts";
 
@@ -44,7 +45,6 @@ const BASE: Record<string, string> = {
   "Error": "エラー",
   "cancelled": "キャンセル",
   "Close dialog": "ダイアログを閉じる",
-  "Preview": "プレビュー",
   "Side conversations": "サイド会話",
   "Todo list": "タスク一覧",
   "Fold todo list": "タスク一覧を折りたたむ",
@@ -159,6 +159,7 @@ const BASE: Record<string, string> = {
   "Close": "閉じる",
 
   // ---- PCs sidebar ----
+  "Filter workspaces and agents": "ワークスペースとエージェントを絞り込む",
   "Connecting…": "接続しています…",
   "Connected": "接続済み",
   "Reconnecting…": "再接続しています…",
@@ -174,6 +175,8 @@ const BASE: Record<string, string> = {
   // ---- new workspace ----
   "Browse": "参照",
   "Cancel": "キャンセル",
+  "Install": "インストール",
+  "Sign in": "ログイン",
   "Starting…": "起動しています…",
   "Start": "開始",
   // the launch's model, effort, first message and skills (lib/agentLaunchMode.ts, lib/newSession.ts)
@@ -266,6 +269,10 @@ const BASE: Record<string, string> = {
   "Turning alerts on…": "通知をオンにしています…",
   "This device's push subscription was made for another server key. Turn alerts on again to make a new one.": "このデバイスのプッシュ通知の登録は別のサーバーキーで作られています。通知をもう一度オンにすると新しく登録します。",
   "The push service refused the last alert to this device. Send a test to check whether it still does.": "プッシュサービスがこのデバイスへの最後の通知を拒否しました。テストを送って、今も拒否されるか確認してください。",
+  "This page's service worker is not running, so it cannot make a push subscription. Reload the page, then try again.": "このページのサービスワーカーが動作していないため、プッシュ通知を登録できません。ページを再読み込みしてから、もう一度お試しください。",
+  "The PC did not take this device's push subscription. Try again.": "PCがこのデバイスのプッシュ通知の登録を受け付けませんでした。もう一度お試しください。",
+  "Brave would not make a push subscription. Turn on Use Google services for push messaging in Brave's privacy settings, then try again.": "Brave がプッシュ通知の登録を作成しませんでした。Brave のプライバシー設定で「Use Google services for push messaging」をオンにしてから、もう一度お試しください。",
+  "This device would not make a push subscription. Check that push messaging is allowed in its settings, then try again.": "このデバイスでプッシュ通知の登録を作成できませんでした。設定でプッシュメッセージが許可されているか確認してから、もう一度お試しください。",
   "This device can only watch.": "この端末は閲覧のみできます。",
   "Needs input": "入力が必要",
   "Finished": "完了",
@@ -336,6 +343,7 @@ export const JA_PARTS: Record<string, Record<string, string>> = {
   files: FILES_JA,
   devices: DEVICES_JA,
   usage: USAGE_JA,
+  setup: SETUP_JA,
   updates: UPDATES_JA,
   palette: PALETTE_JA,
 };

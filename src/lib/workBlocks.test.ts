@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
 
-import { formatWorkDuration, latestWorkPart, splitTurn, todoGroups, visibleWorkParts, workFailed, workStartsOpen, workSummary, type ToolPart } from "./workBlocks.ts";
+import { formatWorkDuration, latestWorkPart, runNames, splitTurn, todoGroups, turnSegments, visibleWorkParts, workFailed, workStartsOpen, workSummary, type ToolPart } from "./workBlocks.ts";
 import type { ConversationPart } from "../../shared/protocol.ts";
 
 const tool = (name: string, summary = name): Extract<ConversationPart, { kind: "tool" }> => ({ kind: "tool", name, summary, input: "{}", output: "" });
@@ -43,6 +43,61 @@ describe("splitTurn", () => {
     // a running work block starts folded here (d2fa011a), so the live turn opens nothing
     expect(workStartsOpen(true, parts)).toBe(false);
     expect(workStartsOpen(false, parts)).toBe(false);
+  });
+});
+
+describe("turnSegments", () => {
+  it("keeps words written before a tool above it, and each run of work where it happened", () => {
+    const parts = [thinking("hm"), text("I'll check."), tool("eval"), tool("eval"), text("  \n"), text("Found it."), tool("edit"), text("Done.")];
+    expect(turnSegments(parts)).toEqual([
+      { kind: "work", start: 0, parts: [thinking("hm")] },
+      { kind: "answer", start: 1, parts: [text("I'll check.")] },
+      { kind: "work", start: 2, parts: [tool("eval"), tool("eval")] },
+      { kind: "answer", start: 5, parts: [text("Found it.")] },
+      { kind: "work", start: 6, parts: [tool("edit")] },
+      { kind: "answer", start: 7, parts: [text("Done.")] },
+    ]);
+  });
+
+  it("names each run by its first part, so a run that splits keeps the later run's name", () => {
+    const before = turnSegments([tool("A"), text(""), tool("B"), text("between"), tool("C")]);
+    const after = turnSegments([tool("A"), text("arrived"), tool("B"), text("between"), tool("C")]);
+    const runs = (segments: typeof before) => segments.flatMap((segment) => segment.kind === "work" ? [segment.start] : []);
+    expect(runs(before)).toEqual([0, 4]);
+    expect(runs(after)).toEqual([0, 2, 4]);
+  });
+
+  it("keeps commentary inside its run of work and a tools-then-answer turn as one run", () => {
+    const narration = { ...text("looking\u2026"), phase: "commentary" as const };
+    expect(turnSegments([tool("read"), narration, tool("edit"), text("done")])).toEqual([
+      { kind: "work", start: 0, parts: [tool("read"), narration, tool("edit")] },
+      { kind: "answer", start: 3, parts: [text("done")] },
+    ]);
+    expect(turnSegments([])).toEqual([]);
+  });
+});
+
+describe("runNames", () => {
+  // what Turn keeps between draws: each part's run name, by part index
+  const draw = (parts: ConversationPart[], previous: ReadonlyMap<number, string>) => {
+    const runs = turnSegments(parts).flatMap((segment) => segment.kind === "work" ? [segment] : []);
+    const names = runNames(runs, new Map(parts.map((part, index) => [part, index])), previous);
+    return { names, next: new Map(runs.flatMap((run, index) => run.parts.map((part) => [parts.indexOf(part), names[index]!] as const))) };
+  };
+
+  it("names a run by its first part the first time, and keeps the name while its parts change", () => {
+    const narration = { ...text("Checking."), phase: "commentary" as const };
+    const first = draw([text("Checking."), tool("ls")], new Map());
+    expect(first.names).toEqual(["work:1"]);
+    expect(draw([narration, tool("ls")], first.next).names).toEqual(["work:1"]);
+  });
+
+  it("gives a split run's first part the old name and never hands a shown name to a new run", () => {
+    const shown = draw([tool("A"), text(""), tool("B"), text("between"), tool("C")], new Map());
+    expect(shown.names).toEqual(["work:0", "work:4"]);
+    expect(draw([tool("A"), text("arrived"), tool("B"), text("between"), tool("C")], shown.next).names).toEqual(["work:0", "work:2", "work:4"]);
+    // the run named work:0 now starts at 2; a new run at 0 must not take its name
+    expect(draw([tool("new"), text("between"), tool("A")], new Map([[2, "work:0"]])).names).toEqual(["work:0+", "work:0"]);
   });
 });
 

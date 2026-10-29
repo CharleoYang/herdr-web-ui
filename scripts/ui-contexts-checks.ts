@@ -12,7 +12,7 @@ import { checkSecretInput } from "./secret-input-regression.ts";
 import { checkTerminalCopy } from "./terminal-copy-regression.ts";
 import { checkTerminalCopyOff } from "./terminal-copy-off-regression.ts";
 import { checkPaneFind } from "./pane-find-regression.ts";
-import { checkUsageMeters } from "./usage-regression.ts";
+import { checkUsageMeters, checkUsageSignInAgain } from "./usage-regression.ts";
 import { checkNotificationStartup } from "./notification-startup-regression.ts";
 import { checkNotificationView } from "./notification-view-regression.ts";
 import { checkMobileViewport } from "./mobile-viewport-regression.ts";
@@ -29,9 +29,11 @@ import { checkDroplet } from "./droplet-regression.ts";
 import { checkTerminalKeyboardSuggestions } from "./terminal-keyboard-suggestions-regression.ts";
 import { checkSplitView } from "./split-view-regression.ts";
 import { checkTakeOver } from "./take-over-regression.ts";
+import { checkTabOverflow } from "./tab-overflow-regression.ts";
 import { checkAlertSound } from "./alert-sound-regression.ts";
 import { checkBackgroundTabKeepsTerminalSize, checkChatKeepsTerminalSize, checkFocusedWindowReclaimsTerminalSize, checkPaneSwitchKeepsTerminalSize } from "./chat-size-regression.ts";
 import { checkUpdateNotice } from "./update-notice-regression.ts";
+import { checkTelemetrySettings } from "./telemetry-regression.ts";
 import { chromePath } from "./chrome-path.ts";
 
 async function timed(name: string, check: () => Promise<void>): Promise<void> {
@@ -94,6 +96,7 @@ export async function runUiContextChecks(): Promise<void> {
     await timed("checkTerminalCopyOff", () => checkTerminalCopyOff(browser!));
     await timed("checkPaneFind", () => checkPaneFind(browser!, origin));
     await timed("checkUsageMeters", () => checkUsageMeters(browser!, origin));
+    await timed("checkUsageSignInAgain", () => checkUsageSignInAgain(browser!, origin));
     await timed("checkNotificationStartup", () => checkNotificationStartup(browser!, origin, paneA, paneB));
     await timed("checkNotificationView", () => checkNotificationView(browser!, origin));
     await timed("checkMobileViewport", () => checkMobileViewport(browser!, origin, paneB));
@@ -110,12 +113,14 @@ export async function runUiContextChecks(): Promise<void> {
     await timed("checkTerminalKeyboardSuggestions", () => checkTerminalKeyboardSuggestions(browser!, origin));
     await timed("checkSplitView", () => checkSplitView(browser!, origin));
     await timed("checkTakeOver", () => checkTakeOver(browser!, origin));
+    await timed("checkTabOverflow", () => checkTabOverflow(browser!, origin));
     await timed("checkAlertSound", () => checkAlertSound(browser!, origin));
     await timed("checkChatKeepsTerminalSize", () => checkChatKeepsTerminalSize(browser!, origin));
     await timed("checkPaneSwitchKeepsTerminalSize", () => checkPaneSwitchKeepsTerminalSize(browser!, origin));
     await timed("checkBackgroundTabKeepsTerminalSize", () => checkBackgroundTabKeepsTerminalSize(browser!, origin));
     await timed("checkFocusedWindowReclaimsTerminalSize", () => checkFocusedWindowReclaimsTerminalSize(browser!, origin));
     await timed("checkUpdateNotice", () => checkUpdateNotice(browser!, origin));
+    await timed("checkTelemetrySettings", () => checkTelemetrySettings(browser!));
   } catch (error) {
     failed = true;
     failure = error;

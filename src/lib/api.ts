@@ -1,10 +1,11 @@
 import { apiFetch as fetch } from "./api-request-id.ts";
 import type { PreferencesChange, SharedPreferences } from "../../shared/preferences.ts";
 import type { SeenFinish } from "../../shared/seen.ts";
-import { resumeConnectionTraces } from "./connectionTrace.ts";
-import { machinePath, type BridgeHealth, type HerdrIdentity, type Machine, type MachineRoster, type SetupAction, type SetupJob, type SetupRequest } from "../../shared/machines.ts";
+import type { AgentCatalogResponse, AgentTabStarted } from "../../shared/agent-catalog.ts";
 import type { BtwHistory } from "../../shared/omp-btw.ts";
 import type { OmpAgents } from "../../shared/omp-agents.ts";
+import { resumeConnectionTraces } from "./connectionTrace.ts";
+import { machinePath, type BridgeHealth, type HerdrIdentity, type Machine, type MachineRoster, type SetupAction, type SetupJob, type SetupRequest } from "../../shared/machines.ts";
 import type {
   WorkspaceMoved,
   AgentKind,
@@ -85,6 +86,7 @@ import { SUPPORTED_AGENT_KINDS } from "../../shared/supported-agents.ts";
 import type { PaneScrollInfo } from "../../shared/herdr-api.generated.ts";
 import { readInstalledNotes, readUpdateNotes, type HerdrUpdateStatus, type InstalledNotes, type UpdateNotes, type UpdateRequest, type UpdateStatus } from "../../shared/update.ts";
 import type { AlertPrefs } from "../../shared/notify-policy.ts";
+import type { TelemetryChange, TelemetryStatus } from "../../shared/telemetry.ts";
 import type { VoiceConfigUpdate, VoiceStatus } from "../../shared/voice.ts";
 import { MAX_ATTACHMENT_BYTES } from "../../shared/attachments.ts";
 import { t } from "./i18n.ts";
@@ -200,6 +202,17 @@ export async function shareSeen(finish: SeenFinish): Promise<void> {
   throw await errorFrom(url, response);
 }
 
+export async function fetchTelemetry(): Promise<TelemetryStatus | null> {
+  try { return await getJson<TelemetryStatus>("/api/telemetry"); }
+  catch (error) { if (error instanceof ApiError && error.status === 404) return null; throw error; }
+}
+
+export async function changeTelemetry(change: TelemetryChange): Promise<TelemetryStatus> {
+  const url = "/api/telemetry";
+  const response = await fetch(url, { method: "POST", headers: { "content-type": "application/json", "x-herdr-update": "1" }, body: JSON.stringify(change) });
+  if (!response.ok) throw await errorFrom(url, response);
+  return (await response.json()) as TelemetryStatus;
+}
 
 /**
  * A non-2xx answer from the Ovis API. `code` is the server's error-envelope
@@ -211,13 +224,16 @@ export class ApiError extends Error {
   readonly code: string | null;
   /** the server's own words, without the URL and status the message starts with */
   readonly detail: string;
+  /** how long the server asked to wait before trying again (`Retry-After` in seconds), in ms; null when it did not say */
+  readonly retryAfterMs: number | null;
 
-  constructor(url: string, status: number, detail: string, code: string | null) {
+  constructor(url: string, status: number, detail: string, code: string | null, retryAfterMs: number | null = null) {
     super(`${url} failed (${status}): ${detail}`);
     this.name = "ApiError";
     this.status = status;
     this.code = code;
     this.detail = detail;
+    this.retryAfterMs = retryAfterMs;
   }
 }
 
@@ -248,7 +264,10 @@ async function errorFrom(url: string, response: Response): Promise<ApiError> {
     /* non-JSON error body */
   }
   if (code !== null && Object.hasOwn(UNUSABLE_ANSWER, code)) detail = UNUSABLE_ANSWER[code]!();
-  return new ApiError(url, response.status, detail, code);
+  // only the seconds form (the server's `retry-after: 1`); an HTTP date is not one this API sends
+  const retryAfter = response.headers.get("retry-after");
+  const seconds = retryAfter !== null && /^\d+$/.test(retryAfter.trim()) ? Number(retryAfter.trim()) : null;
+  return new ApiError(url, response.status, detail, code, seconds === null ? null : seconds * 1000);
 }
 
 async function getJson<T>(url: string, init?: RequestInit): Promise<T> {
@@ -290,6 +309,8 @@ export async function fetchPaneTranscript(paneId: string, lines: number, machine
 /** Which turns (ConversationResponse.cursor): the page `before` a cursor, not past `since`; the newest ones `from` a held start. */
 export type ConversationPageQuery = {
   before?: string; since?: string; from?: string;
+  /** History currently displayed, even if its cached response was evicted. */
+  history_id?: string;
   /** Prompts per page: the chat's history-page setting, kept in the URL so its cache key matches. */
   prompts?: number;
   /** Revalidate a new finish without borrowing another key's 304. */
@@ -314,15 +335,41 @@ interface ConversationAnswer {
   body: ConversationResponse;
   /** the body's rough size: what the count cap alone cannot bound */
   bytes: number;
+  /** the pane the answer belongs to: a pane the chat has open keeps every page size it read */
+  pane: string;
+}
+
+/** The pane alone, without the page query: one pane can hold several sizes and cursors at once. */
+function paneKey(paneId: string, machineId: string): string {
+  return `${machineId}\u0000${paneId}`;
 }
 const conversationAnswers = new Map<string, ConversationAnswer>();
-const CONVERSATION_ANSWERS_KEPT = 24;
+export const CONVERSATION_ANSWERS_KEPT = 24;
 /** …and this much of them: enough for the panes of ten open tabs at the default page size. */
 export const CONVERSATION_ANSWERS_BYTES = 64 * 1024 * 1024;
 /** One pane's page is a page, not a session: past this a page is fetched again rather than kept. */
 export const CONVERSATION_ANSWER_MAX_BYTES = 8 * 1024 * 1024;
 /** The panes of the tabs the chat has open: their answers go last when the cache must make room. */
 const pinnedConversations = new Set<string>();
+
+/**
+ * The UTF-8 length of a body's JSON, counted without encoding a copy of it. `String.length` counts
+ * UTF-16 code units, which under-reports CJK and emoji by up to three times; a page's cap is bytes.
+ */
+function utf8Length(text: string): number {
+  let bytes = 0;
+  for (let index = 0; index < text.length; index++) {
+    const code = text.charCodeAt(index);
+    if (code < 0x80) bytes += 1;
+    else if (code < 0x800) bytes += 2;
+    // a well-formed pair is four bytes as one character; a lone surrogate is escaped by JSON.stringify
+    else if (code >= 0xd800 && code <= 0xdbff) {
+      bytes += 4;
+      index += 1;
+    } else bytes += 3;
+  }
+  return bytes;
+}
 
 /**
  * The body a cache entry carries: the server's own count when it sends one for the body as it is,
@@ -332,12 +379,14 @@ export function conversationAnswerBytes(body: ConversationResponse, contentLengt
   const declared = Number(contentLength);
   const identity = contentEncoding === null || contentEncoding.trim().toLowerCase() === "identity";
   if (identity && Number.isFinite(declared) && declared > 0) return declared;
-  return JSON.stringify(body)?.length ?? 0;
+  return utf8Length(JSON.stringify(body) ?? "");
 }
 
 /**
  * Drops the least recently used answers until the cache is back inside both caps. An answer the
- * chat still has a pane open for is dropped only once no unpinned one is left.
+ * chat still has a pane open for is dropped only once no unpinned one is left. The pane, not its
+ * URL, is what is pinned: the chat reads its newest page at the page size the setting names, so a
+ * pin taken on the URL alone would never match the entry the open pane actually holds.
  */
 function trimConversationAnswers(keep: string): void {
   let total = 0;
@@ -345,9 +394,9 @@ function trimConversationAnswers(keep: string): void {
   const over = (): boolean => conversationAnswers.size > CONVERSATION_ANSWERS_KEPT || total > CONVERSATION_ANSWERS_BYTES;
   while (over()) {
     let victim: string | undefined;
-    for (const url of conversationAnswers.keys()) {
+    for (const [url, answer] of conversationAnswers) {
       if (url === keep) continue;
-      if (!pinnedConversations.has(url)) { victim = url; break; }
+      if (!pinnedConversations.has(answer.pane)) { victim = url; break; }
       victim ??= url;
     }
     if (victim === undefined) break;
@@ -356,13 +405,13 @@ function trimConversationAnswers(keep: string): void {
   }
 }
 
-/** The chat's open pane keeps its page: `pin`ed answers are evicted last. */
+/** The chat's open pane keeps its pages: `pin`ed panes are evicted last. */
 export function pinPaneConversation(paneId: string, machineId = "local"): void {
-  pinnedConversations.add(conversationUrl(paneId, machineId, {}));
+  pinnedConversations.add(paneKey(paneId, machineId));
 }
 
 export function unpinPaneConversation(paneId: string, machineId = "local"): void {
-  pinnedConversations.delete(conversationUrl(paneId, machineId, {}));
+  pinnedConversations.delete(paneKey(paneId, machineId));
 }
 
 function conversationUrl(paneId: string, machineId: string, page: ConversationPageQuery): string {
@@ -387,12 +436,20 @@ export async function fetchPaneConversation(paneId: string, machineId = "local",
   const url = conversationUrl(paneId, machineId, page);
   const polled = page.before === undefined;
   const known = polled ? conversationAnswers.get(url) : undefined;
+  const requestUrl = page.history_id === undefined ? url : `${url}&history_id=${encodeURIComponent(page.history_id)}`;
   const { response, body } = await withChatReadDeadline(async (signal) => {
-    const response = await fetch(url, { cache: "no-store", signal, ...(known && !page.fresh ? { headers: { "if-none-match": known.etag } } : {}) });
+    const response = await fetch(requestUrl, { cache: "no-store", signal, ...(known && !page.fresh ? { headers: { "if-none-match": known.etag } } : {}) });
     if (response.status === 304 && known) return { response, body: known.body };
     if (!response.ok) throw await errorFrom(url, response);
     return { response, body: (await response.json()) as ConversationResponse };
-  }, chatReadDeadlineMs(machineId));
+  }, chatReadDeadlineMs(machineId)).catch((cause: unknown) => {
+    // a rejected history is the pane's, whatever page size it was read at: none of its pages may draw again
+    if (cause instanceof ApiError && cause.status === 409) {
+      const pane = paneKey(paneId, machineId);
+      for (const [cached, answer] of conversationAnswers) if (cached === url || answer.pane === pane) conversationAnswers.delete(cached);
+    }
+    throw cause;
+  });
   // Cache changes occur after the bounded read: a late, aborted answer cannot replace it.
   if (response.status === 304 && known) {
     conversationAnswers.delete(url);
@@ -405,7 +462,7 @@ export async function fetchPaneConversation(paneId: string, machineId = "local",
   if (etag !== null) {
     const bytes = conversationAnswerBytes(body, response.headers.get("content-length"), response.headers.get("content-encoding"));
     if (bytes <= CONVERSATION_ANSWER_MAX_BYTES) {
-      conversationAnswers.set(url, { etag, body, bytes });
+      conversationAnswers.set(url, { etag, body, bytes, pane: paneKey(paneId, machineId) });
       trimConversationAnswers(url);
     }
   }
@@ -662,6 +719,22 @@ export async function fetchAgentKinds(machineId = "local"): Promise<AgentKind[]>
   return (await getJson<{ agents: AgentKind[] }>(machinePath(machineId, "agents"))).agents.filter((agent) => SUPPORTED_AGENT_KINDS.has(agent.kind) && agent.installed !== false);
 }
 
+/** GET /api/agent-catalog: every agent Ovis can install, with that PC's commands and what it has installed. */
+export async function fetchAgentCatalog(machineId = "local", signal?: AbortSignal): Promise<AgentCatalogResponse> {
+  return getJson<AgentCatalogResponse>(machinePath(machineId, "agent-catalog"), { signal, cache: "no-store" });
+}
+
+/** POST /api/agent-catalog/install: opens a tab on that PC and types the agent's official command there. */
+export async function startAgentInstall(agent: string, machineId = "local", alternative?: number): Promise<AgentTabStarted> {
+  const response = await sendJson(machinePath(machineId, "agent-catalog/install"), "POST", alternative === undefined ? { agent } : { agent, alternative });
+  return (await response.json()) as AgentTabStarted;
+}
+
+/** POST /api/agent-catalog/sign-in: opens a tab on that PC running the agent's own sign-in. */
+export async function startAgentSignIn(agent: string, machineId = "local"): Promise<AgentTabStarted> {
+  return (await (await sendJson(machinePath(machineId, "agent-catalog/sign-in"), "POST", { agent })).json()) as AgentTabStarted;
+}
+
 /** GET /api/integrations: herdr's agent integrations on that PC and whether each is installed. */
 export async function fetchIntegrations(machineId = "local"): Promise<IntegrationsResponse["integrations"]> {
   return (await getJson<IntegrationsResponse>(machinePath(machineId, "integrations"))).integrations;
@@ -916,20 +989,13 @@ export async function fetchPanePrompt(paneId: string, machineId = "local"): Prom
 }
 
 /** The waiting prompt, and with none, the next prompt the agent suggests; restored is a send the agent put back in its input box when it was cancelled; outcomes are the pane's tracked command sends (older servers send none of the three). */
-/**
- * `draft`: ask a Claude pane what its input box holds now (a send whose receipt never came uses it:
- * a box that no longer holds the message means it left). Absent from an older server, null when the
- * box could not be read whole.
- */
-export async function fetchPanePromptState(paneId: string, machineId = "local", options: { draft?: boolean } = {}): Promise<{ prompt: InteractivePrompt | null; suggestion: string | null; restored: string | null; outcomes: CommandOutcome[]; draft: string | null }> {
-  const query = `pane/prompt?pane_id=${encodeURIComponent(paneId)}${options.draft ? "&draft=1" : ""}`;
-  const body = await getJson<PanePromptResponse>(machinePath(machineId, query));
+export async function fetchPanePromptState(paneId: string, machineId = "local"): Promise<{ prompt: InteractivePrompt | null; suggestion: string | null; restored: string | null; outcomes: CommandOutcome[] }> {
+  const body = await getJson<PanePromptResponse>(machinePath(machineId, `pane/prompt?pane_id=${encodeURIComponent(paneId)}`));
   return {
     prompt: body.prompt,
     suggestion: typeof body.suggestion === "string" && body.suggestion !== "" ? body.suggestion : null,
     restored: typeof body.restored === "string" && body.restored !== "" ? body.restored : null,
     outcomes: Array.isArray(body.outcomes) ? body.outcomes : [],
-    draft: typeof body.draft === "string" ? body.draft : null,
   };
 }
 

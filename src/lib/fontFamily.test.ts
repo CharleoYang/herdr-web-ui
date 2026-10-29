@@ -1,7 +1,68 @@
 import { afterEach, describe, expect, it } from "bun:test";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
+import { brotliDecompressSync } from "node:zlib";
 
-import { chatFontStack, type FontWidths, loadFontStack, measurableFontStack, TERMINAL_FONT_STACK, terminalFontStack } from "./fontFamily.ts";
+import { chatFontStack, type FontWidths, HANGUL_FAMILY, loadFontStack, measurableFontStack, MONO_FAMILY, openingFontStack, TERMINAL_FONT_STACK, terminalFontStack } from "./fontFamily.ts";
+
+// woff2's known table tags, by the index its table directory writes for them
+const WOFF2_TAGS = ["cmap", "head", "hhea", "hmtx", "maxp", "name", "OS/2", "post", "cvt ", "fpgm", "glyf", "loca", "prep", "CFF ", "VORG", "EBDT", "EBLC", "gasp", "hdmx", "kern", "LTSH", "PCLT", "VDMX", "vhea", "vmtx", "BASE", "GDEF", "GPOS", "GSUB"];
+
+/** The code points a woff2 file maps to a glyph (its format 4 cmaps), as inclusive ranges. */
+function cmapRanges(file: Buffer): [number, number][] {
+  const view = new DataView(file.buffer, file.byteOffset, file.byteLength);
+  expect(view.getUint32(0)).toBe(0x774f4632); // "wOF2"
+  let at = 48;
+  const base128 = (): number => {
+    let value = 0;
+    for (;;) {
+      const byte = file[at++]!;
+      value = value * 128 + (byte & 0x7f);
+      if (!(byte & 0x80)) return value;
+    }
+  };
+  const tables: { tag: string; length: number }[] = [];
+  for (let index = view.getUint16(12); index > 0; index -= 1) {
+    const flags = file[at++]!;
+    const tag = (flags & 0x3f) === 0x3f ? file.toString("latin1", at, (at += 4)) : WOFF2_TAGS[flags & 0x3f] ?? "?";
+    const length = base128();
+    // glyf and loca are transformed unless their version says not; another table only when it says so
+    const transformed = tag === "glyf" || tag === "loca" ? flags >> 6 === 0 : flags >> 6 !== 0;
+    tables.push({ tag, length: transformed ? base128() : length });
+  }
+  const data = brotliDecompressSync(file.subarray(at, at + view.getUint32(20)));
+  let offset = 0;
+  for (const table of tables) {
+    if (table.tag === "cmap") break;
+    offset += table.length;
+  }
+  const cmap = new DataView(data.buffer, data.byteOffset + offset);
+  const points = new Set<number>();
+  for (let index = 0; index < cmap.getUint16(2); index += 1) {
+    const sub = cmap.getUint32(8 + index * 8);
+    expect(cmap.getUint16(sub)).toBe(4);
+    const segments = cmap.getUint16(sub + 6) / 2;
+    for (let segment = 0; segment < segments; segment += 1) {
+      const end = cmap.getUint16(sub + 14 + segment * 2);
+      const start = cmap.getUint16(sub + 16 + segments * 2 + segment * 2);
+      const delta = cmap.getInt16(sub + 16 + segments * 4 + segment * 2);
+      const rangeAt = sub + 16 + segments * 6 + segment * 2;
+      const rangeOffset = cmap.getUint16(rangeAt);
+      for (let point = start; point <= end && point !== 0xffff; point += 1) {
+        const entry = rangeOffset === 0 ? point : cmap.getUint16(rangeAt + rangeOffset + (point - start) * 2);
+        // a glyph array's 0 is the missing glyph as it stands; any other entry takes the delta too
+        const glyph = rangeOffset !== 0 && entry === 0 ? 0 : (entry + delta) & 0xffff;
+        if (glyph !== 0) points.add(point);
+      }
+    }
+  }
+  const ranges: [number, number][] = [];
+  for (const point of [...points].sort((a, b) => a - b)) {
+    const last = ranges.at(-1);
+    if (last && last[1] === point - 1) last[1] = point;
+    else ranges.push([point, point]);
+  }
+  return ranges;
+}
 
 describe("terminal font stack", () => {
   it("is the built-in stack when nothing is typed", () => {
@@ -28,6 +89,25 @@ describe("terminal font stack", () => {
     // stack behind it, and ends on the Chinese fallbacks this checkout asks for
     const mono = /--font-mono:\s*([^;]+);/.exec(readFileSync(new URL("../styles.css", import.meta.url), "utf8"))![1]!;
     expect(mono).toBe('"Symbols Nerd Font Mono", "JetBrains Mono Web", ui-monospace, "SF Mono", Menlo, Monaco, "PingFang SC", "Hiragino Sans GB", monospace');
+  });
+
+  it("keeps the Chinese system stack unchanged rather than selecting a bundled text face", () => {
+    expect(TERMINAL_FONT_STACK).toBe('"Symbols Nerd Font Mono", ui-monospace, "SF Mono", Menlo, Monaco, monospace, "PingFang SC", "Hiragino Sans GB"');
+  });
+
+  it("bundles the Hangul face with no Latin in its range, so it never sizes a cell", () => {
+    const css = readFileSync(new URL("../components/PaneTerminal.css", import.meta.url), "utf8");
+    const faces = [...css.matchAll(/@font-face\s*\{([^}]*)\}/g)].map((match) => match[1]!).filter((face) => face.includes(`"${HANGUL_FAMILY}"`));
+    expect(faces.map((face) => /font-weight:\s*(\d+)/.exec(face)?.[1])).toEqual(["400", "700"]);
+    for (const face of faces) {
+      const file = /url\("([^"]+)"\)/.exec(face)![1]!;
+      expect(existsSync(new URL(file, new URL("../components/", import.meta.url)))).toBe(true);
+      // the compatibility jamo and the syllables, nothing else: Latin, punctuation, box drawing and the
+      // private use area stay with the cell's font and the icon font
+      expect(/unicode-range:\s*([^;]+);/.exec(face)![1]!.trim()).toBe("U+3131-318E, U+AC00-D7A3");
+      // and the file draws exactly what the range sends it
+      expect(cmapRanges(readFileSync(new URL(file, new URL("../components/", import.meta.url))))).toEqual([[0x3131, 0x318e], [0xac00, 0xd7a3]]);
+    }
   });
 
   it("never lets an unsanitized list through", () => {
@@ -65,8 +145,33 @@ describe("fonts the canvas cannot measure", () => {
     expect(measurableFontStack(TERMINAL_FONT_STACK, page(["Symbols Nerd Font Mono", ...system], system))).toBe(TERMINAL_FONT_STACK);
   });
 
+  it("keeps the bundled Hangul face when it drops an installed D2Coding, so Hangul stays a coding face", () => {
+    const kept = measurableFontStack(terminalFontStack(`"${HANGUL_FAMILY}", D2Coding`), page([HANGUL_FAMILY, ...system, ...installed], system));
+    expect(kept).toBe(terminalFontStack(`"${HANGUL_FAMILY}"`));
+    expect(kept).toContain(`"${HANGUL_FAMILY}"`);
+  });
+
+  it("keeps the bundled code face, which the canvas measures, even where it cannot see an installed JetBrains Mono", () => {
+    const kept = measurableFontStack(terminalFontStack(`"${MONO_FAMILY}", "JetBrains Mono"`), page([MONO_FAMILY, ...system, ...installed], system));
+    expect(kept).toBe(terminalFontStack(`"${MONO_FAMILY}"`));
+  });
+
   it("measures nothing without a page", () => {
     expect(measurableFontStack(TERMINAL_FONT_STACK)).toBe(TERMINAL_FONT_STACK);
+  });
+});
+
+describe("the stack a terminal opens with", () => {
+  const fonts = (loaded: boolean) => ({ check: (font: string) => !font.includes(MONO_FAMILY) || loaded });
+
+  it("leaves the bundled face out until it has loaded, so xterm measures it when the font effect sets it", () => {
+    expect(openingFontStack(TERMINAL_FONT_STACK, fonts(false))).toBe(TERMINAL_FONT_STACK.replace(`"${MONO_FAMILY}", `, ""));
+    expect(openingFontStack(TERMINAL_FONT_STACK, fonts(true))).toBe(TERMINAL_FONT_STACK);
+  });
+
+  it("keeps the stack without a font set, and a stack that does not name the face", () => {
+    expect(openingFontStack(TERMINAL_FONT_STACK, undefined)).toBe(TERMINAL_FONT_STACK);
+    expect(openingFontStack("Menlo, monospace", fonts(false))).toBe("Menlo, monospace");
   });
 });
 
@@ -96,6 +201,24 @@ describe("waiting for a font", () => {
     withFonts(async (font) => { asked.push(font); return []; });
     await loadFontStack('D2Coding, "Cascadia Mono"', 14);
     expect(asked).toEqual(['14px D2Coding, "Cascadia Mono"']);
+  });
+
+  it("leaves the bundled Hangul face out, which never sizes the grid", async () => {
+    const asked: string[] = [];
+    withFonts(async (font) => { asked.push(font); return []; });
+    await loadFontStack(terminalFontStack("D2Coding"), 13);
+    expect(asked).toHaveLength(1);
+    expect(asked[0]).toStartWith('13px "Symbols Nerd Font Mono", D2Coding, ui-monospace, "SF Mono"');
+    expect(asked[0]).not.toContain(HANGUL_FAMILY);
+    expect(asked[0]).toEndWith('monospace, "PingFang SC", "Hiragino Sans GB"');
+  });
+
+  it("leaves the bundled Hangul face out whatever case it was typed in, as CSS matches it", async () => {
+    const asked: string[] = [];
+    withFonts(async (font) => { asked.push(font); return []; });
+    await loadFontStack(terminalFontStack("ovis hangul mono, D2Coding"), 13);
+    expect(asked[0]).toStartWith('13px "Symbols Nerd Font Mono", D2Coding, ui-monospace, "SF Mono"');
+    expect(asked[0]!.toLowerCase()).not.toContain(HANGUL_FAMILY.toLowerCase());
   });
 
   it("resolves when the load fails, so the terminal goes on with its fallback", async () => {

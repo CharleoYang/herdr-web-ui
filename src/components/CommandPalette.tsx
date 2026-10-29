@@ -1,6 +1,6 @@
 import { MachineContext, useMachineApi, useMachineId } from "../lib/machineContext.tsx";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ComponentType, type FocusEvent as ReactFocusEvent, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent } from "react";
-import { Bell, Columns2, CornerLeftUp, Folder, FolderInput, FolderOpen, FolderSearch, History, LoaderCircle, Maximize2, MessageSquarePlus, Minimize2, Monitor, PanelLeft, Pencil, Pin, Plus, Puzzle, RefreshCw, Rows2, Settings, SunMoon, SwitchCamera, X } from "lucide-react";
+import { Bell, Columns2, CornerLeftUp, Folder, FolderInput, FolderOpen, FolderSearch, History, ListFilter, LoaderCircle, Maximize2, MessageSquarePlus, Minimize2, Monitor, PanelLeft, Pencil, Pin, Plus, Puzzle, RefreshCw, Rows2, Settings, SunMoon, SwitchCamera, X } from "lucide-react";
 
 import "./CommandPalette.css";
 
@@ -51,6 +51,8 @@ interface CommandPaletteProps {
   selectedPaneId: string | null;
   view: PaneView;
   actions: AppActions;
+  /** this device may only watch: the PCs refuse it their checkouts, so no branch is read (#2250) */
+  watching?: boolean;
 }
 
 interface PaletteAction {
@@ -149,7 +151,7 @@ function ShortcutHint({ shortcutId }: { shortcutId?: ShortcutId }) {
   return <span className="palette-shortcut" aria-label={keys.join(" + ")}>{keys.map((key) => <kbd className="kbd" key={key}>{key}</kbd>)}</span>;
 }
 
-export function CommandPalette({ open, initialQuery = "", onClose, machines, onSelect, snapshot, online, selectedPaneId, view, actions }: CommandPaletteProps) {
+export function CommandPalette({ open, initialQuery = "", onClose, machines, onSelect, snapshot, online, selectedPaneId, view, actions, watching = false }: CommandPaletteProps) {
   const t = useT();
   const machineId = useMachineId();
   const api = useMachineApi();
@@ -198,10 +200,12 @@ export function CommandPalette({ open, initialQuery = "", onClose, machines, onS
       return new Map(previous).set(id, inventory);
     });
   }, []);
-  const branches = useMemo<MachineBranches>(() => new Map(machines.flatMap((machine) => {
+  // the palette stays mounted while closed: what it read while driving is dropped when the device turns to watching
+  useEffect(() => { if (watching) setInventories((previous) => previous.size === 0 ? previous : new Map()); }, [watching]);
+  const branches = useMemo<MachineBranches>(() => watching ? new Map() : new Map(machines.flatMap((machine) => {
     const inventory = inventories.get(machine.id);
     return inventory?.signature === worktreeWorkspaceSignature(machine.snapshot?.workspaces ?? []) ? [[machine.id, inventory.branches] as const] : [];
-  })), [inventories, machines]);
+  })), [inventories, machines, watching]);
 
   // Terminal attachment can move focus after the palette opens. Escape belongs to
   // this modal even then, and must not leak through to the underlying terminal.
@@ -318,6 +322,8 @@ export function CommandPalette({ open, initialQuery = "", onClose, machines, onS
     ...(zoomPane && zoom && tabPanes > 1 ? [{ id: "zoom", label: t(zoom === "off" ? "Unzoom pane" : "Zoom pane"), icon: zoom === "off" ? Minimize2 : Maximize2, run: () => zoomPane(zoom) }] : []),
     { id: "view", label: t(view === "chat" ? "Switch to terminal" : "Switch to chat"), icon: SwitchCamera, shortcut: "toggle-view", run: actions.toggleView },
     { id: "sidebar", label: t("Toggle sidebar"), icon: PanelLeft, shortcut: "toggle-sidebar", run: actions.toggleSidebar },
+    // the sidebar's Filter field, also where Settings → Appearance → Sidebar filter leaves it out
+    { id: "filter-sidebar", label: t("Filter workspaces and agents"), icon: ListFilter, run: actions.openSidebarFilter },
     { id: "theme", label: t("Toggle theme"), icon: SunMoon, run: actions.toggleTheme },
     { id: "settings", label: t("Settings"), icon: Settings, shortcut: "settings", run: actions.openSettings },
     { id: "add-pc", label: t("Add PC"), icon: Monitor, run: actions.openAddPc },
@@ -636,7 +642,7 @@ export function CommandPalette({ open, initialQuery = "", onClose, machines, onS
   let rowIndex = 0;
   return (
     <div className="modal-scrim palette-scrim" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
-      {machines.filter((machine) => machine.state === "connected").map((machine) => <MachineContext.Provider key={machine.id} value={machine.id}><PaletteBranchReader machine={machine} onChange={onInventory} /></MachineContext.Provider>)}
+      {!watching && machines.filter((machine) => machine.state === "connected").map((machine) => <MachineContext.Provider key={machine.id} value={machine.id}><PaletteBranchReader machine={machine} onChange={onInventory} /></MachineContext.Provider>)}
       <section ref={surface} className="menu command-palette" role="dialog" aria-modal="true" aria-label={t("Command palette")} onKeyDown={onSurfaceKeyDown} onFocus={onSurfaceFocus}>
         <div className="palette-search">
           <input ref={inputRef} className="input" type="search" value={query} placeholder={t("Search panes and actions…")} aria-label={t("Search panes and actions")} aria-controls="palette-results" aria-activedescendant={itemCount ? `palette-item-${activeIndex}` : undefined} onKeyDown={onInputKeyDown} onChange={(event) => { setQuery(event.target.value); setSelection(NO_SELECTION); }} />

@@ -12,7 +12,7 @@ import {
   type ReactNode,
 } from "react";
 import { flushSync } from "react-dom";
-import { ArrowUp, FileText, Folder, FolderGit2, GitBranch, Info, LoaderCircle, MessageSquarePlus, Minimize2, Package, Plus, Puzzle, Square, TriangleAlert, UserRound, X, type LucideIcon } from "lucide-react";
+import { ArrowUp, FileText, Folder, FolderGit2, GitBranch, LoaderCircle, MessageSquarePlus, Minimize2, Package, Plus, Puzzle, Square, TriangleAlert, UserRound, X, type LucideIcon } from "lucide-react";
 
 import "./Composer.css";
 
@@ -36,6 +36,7 @@ import {
   composerStatusWord,
   contextLeftPercent,
   type DraftRefusal,
+  draftSendNote,
   formatTokens,
   imageMention,
   insertLeadingMention,
@@ -273,9 +274,6 @@ export function Composer({
   const mobile = useMediaQuery("(max-width: 640px), (pointer: coarse)");
   const [modelOpen, setModelOpen] = useState(false);
   const [switching, setSwitching] = useState(false);
-  // Claude's windows come off its own status line, no request and no token (server/statusline.ts), so
-  // they show beside the model without the usage hub being switched on; a provider read over the
-  // network still waits for `showUsage`
   const usageEnabled = !mobile && machineId === "local" && providerForAgent(agent) !== null && (settings.showUsage || agent === "claude");
   const { report: usageReport } = useUsage(usageEnabled);
   const usage = usageEnabled && usageReport !== null ? composerUsage(usageReport.providers, agent, settings.usageOrder, settings.usageHidden) : undefined;
@@ -844,7 +842,7 @@ export function Composer({
     try {
       const result = onSend(text, clearDraft, sendAnyway);
       if (!(result instanceof Promise)) { settle(result); composerDrafts.end(draftKey, sendId); return true; }
-      void result.then(settle).catch(() => { if (mounted.current) setNote(t("Not confirmed: it may already have reached the agent. Check the terminal before sending again.")); }).finally(() => composerDrafts.end(draftKey, sendId));
+      void result.then(settle).catch(() => { if (mounted.current) setNote(t("Not confirmed. Check the terminal before sending again.")); }).finally(() => composerDrafts.end(draftKey, sendId));
     } catch {
       composerDrafts.end(draftKey, sendId);
       if (mounted.current) setNote(t("Not confirmed. Check the terminal before sending again."));
@@ -914,30 +912,39 @@ export function Composer({
     }
   }, [awaitCommit, clearCommitWait, t]);
 
-  /** A quick reply, or a typed pick's Confirm, follows the same delivery policy as Send, and leaves the box alone. */
-  const sendBeside = useCallback((deliver: () => ReturnType<typeof onSend>) => {
+  /**
+   * A quick reply, or a typed pick's Confirm, follows the same delivery policy as Send, and leaves the box alone.
+   * `draft`: Send it's terminal draft. Its note, with the draft and its buttons, stays until the send is confirmed,
+   * and one that did not go names the draft (draftSendNote).
+   */
+  const sendBeside = useCallback((deliver: () => ReturnType<typeof onSend>, draft?: string) => {
     if (!connected || sending) return;
-    setNote(null);
-    // a quick reply is not the box's text, so its note offers no send over a draft
+    if (draft === undefined) setNote(null);
     const settle = (result: boolean | string | DraftRefusal): void => {
-      if (mounted.current && typeof result !== "boolean") {
-        setNote(typeof result === "string" ? result
-          : "info" in result ? { info: result.info }
-            : "plain" in result && result.plain === true ? result.note : submitNote("input_draft", result.note));
-      }
+      if (!mounted.current) return;
+      // false sent nothing: Send it's note stays as it was
+      if (draft !== undefined) { if (result === true) setNote(null); else if (result !== false) setNote(draftSendNote(result, draft)); return; }
+      // a quick reply is not the box's text, so its note offers no send over a draft
+      if (typeof result !== "boolean") setNote(typeof result === "string" ? result : "plain" in result && result.plain === true ? result.note : submitNote("input_draft", result.note));
+    };
+    const unconfirmed = (): void => {
+      const note = t("Not confirmed. Check the terminal before sending again.");
+      if (mounted.current) setNote(draft === undefined ? note : draftSendNote(note, draft));
     };
     if (!composerDrafts.begin(draftKey)) return;
     const sendId = composerDrafts.sendOf(draftKey);
     try {
       const result = deliver();
       if (!(result instanceof Promise)) { settle(result); composerDrafts.end(draftKey, sendId); return; }
-      void result.then(settle).catch(() => { if (mounted.current) setNote(t("Not confirmed. Check the terminal before sending again.")); }).finally(() => composerDrafts.end(draftKey, sendId));
+      void result.then(settle).catch(unconfirmed).finally(() => composerDrafts.end(draftKey, sendId));
     } catch {
       composerDrafts.end(draftKey, sendId);
-      if (mounted.current) setNote(t("Not confirmed. Check the terminal before sending again."));
+      unconfirmed();
     }
   }, [connected, draftKey, sending]);
   const sendQuick = useCallback((reply: string) => sendBeside(() => onSend(reply)), [onSend, sendBeside]);
+  /** Send it: the terminal draft a DraftRefusal named goes as it is, as Clear it and send with the draft for the message. */
+  const sendDraft = useCallback((draft: string) => sendBeside(() => onSend(draft, draft), draft), [onSend, sendBeside]);
 
   const onKeyDown = useCallback(
     (event: KeyboardEvent<HTMLTextAreaElement>) => {
@@ -1057,22 +1064,16 @@ export function Composer({
     const reset = formatResetIn(window.resets_at, Date.now());
     return `${windowLabel(window)} ${meterText(window, settings.usageCount)}${reset ? ` · ${t("Resets in {time}", { time: reset })}` : ""}`;
   }).join("\n");
-  // both plan-wide windows beside the model, as Claude's own status line names them: the five-hour
-  // session and the week; a plan with only one of them shows only that one
-  const usageCaption = usageWindows
-    .map((window) => `${window.kind === "session" ? "5h" : "wk"} ${formatPercent(meterPercent(window, settings.usageCount))}`)
-    .join(" · ");
+  const usageCaption = usageWindows.map((window) => `${window.kind === "session" ? "5h" : "wk"} ${formatPercent(meterPercent(window, settings.usageCount))}`).join(" · ");
   const usageAccessible = usage === undefined ? "" : `${t("Subscription usage")}: ${usageName(usage)}, ${usageDetail.replaceAll("\n", ", ")}`;
   const hintText = hint === null ? null
     : hint === "no-room" ? t("{max}-character limit · {count} over", { max: formatChars(MAX_COMPOSER_CHARS), count: formatChars(roomless?.missing ?? 0) })
     : hint === "near-limit" ? composerFull(text.length, MAX_COMPOSER_CHARS) ? t("{max}-character limit", { max: formatChars(MAX_COMPOSER_CHARS) }) : t("{count} characters left", { count: MAX_COMPOSER_CHARS - text.length })
     : hint === "uploading" ? t("Uploading file…") : offlineSentence;
   /** an upload's failure as one line: what failed and the cause it knows, then what the pick left out */
-  const noteLine = note === null ? null : typeof note === "string" ? note : "info" in note ? note.info : "failure" in note
+  const noteLine = note === null ? null : typeof note === "string" ? note : "failure" in note
     ? [note.failure.cause === null ? t("{name} could not be attached", { name: note.attachment.file.name }) : t("{name} could not be attached: {reason}", { name: note.attachment.file.name, reason: note.failure.cause }), note.attachment.leftOut].filter((part) => part !== null).join(" ")
     : note.note;
-  /** said, not alerted: the app does not know this failed, so it does not wear a warning */
-  const noteInfo = note !== null && typeof note === "object" && "info" in note;
   /** the strip under the card: the folder and the branch the caller knows; none, or a phone's screen, no strip */
   const strip = mobile ? null : composerStrip({ cwd, branch, repo: worktreeRepo });
   const worktree = worktreeRepo !== null;
@@ -1140,8 +1141,8 @@ export function Composer({
 
       {/* why the message in the box did not go: on the box's top edge, read with it, its one way on beside it */}
       {note !== null && noteLine !== null && (
-        <div className={`composer-note${noteInfo ? " composer-note-info" : typeof note === "object" && !("failure" in note) ? " composer-note-offer" : ""}`} role={noteInfo ? "status" : "alert"}>
-          {noteInfo ? <Info className="composer-note-icon" aria-hidden="true" /> : <TriangleAlert className="composer-note-icon" aria-hidden="true" />}
+        <div className="composer-note" role="alert">
+          <TriangleAlert className="composer-note-icon" aria-hidden="true" />
           <div className="composer-note-text">
             {noteLine}
             {typeof note === "object" && "failure" in note && (note.failure.advice !== null || note.failure.detail !== null) && <details className="composer-note-details">
@@ -1154,8 +1155,11 @@ export function Composer({
               not tell empty, sent over only in the same Claude terminal the refusal was for */}
           {typeof note === "object" && ("failure" in note
             ? offersRetry(note.failure) && <button type="button" className="composer-note-action" disabled={!connected} onClick={() => retryUpload(note.attachment)}>{t("Try again")}</button>
-            : <button type="button" className="composer-note-action" disabled={!connected || uploading || roomless !== undefined || sending || text.trim().length === 0}
-              onClick={() => "draft" in note ? send(note.draft) : send(undefined, true)}>{"draft" in note ? t("Clear it and send") : t("Send anyway")}</button>)}
+            : <div className="composer-note-actions">
+              {"draft" in note && <button type="button" className="composer-note-action" disabled={!connected || sending} onClick={() => sendDraft(note.draft)}>{t("Send it")}</button>}
+              <button type="button" className="composer-note-action" disabled={!connected || uploading || roomless !== undefined || sending || text.trim().length === 0}
+                onClick={() => "draft" in note ? send(note.draft) : send(undefined, true)}>{"draft" in note ? t("Clear it and send") : t("Send anyway")}</button>
+            </div>)}
         </div>
       )}
 

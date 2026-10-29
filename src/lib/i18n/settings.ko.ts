@@ -1,7 +1,7 @@
 /**
  * Korean for the keys only the settings files use:
  * components/SettingsDialog.tsx (with THEME_NAMES), components/KeyBarSettings.tsx,
- * components/SettingsControls.tsx, lib/paletteSettings.ts.
+ * components/SettingsControls.tsx, components/TelemetryControls.tsx, lib/paletteSettings.ts.
  * Register and fixed terms follow ../i18n.ko.ts; a key another feature also uses goes there.
  */
 export const SETTINGS_KO: Record<string, string> = {
@@ -30,9 +30,9 @@ export const SETTINGS_KO: Record<string, string> = {
   "Codex": "Codex",
   "Amber": "앰버",
   "Catppuccin": "Catppuccin",
-  "Monokai (OMP)": "모노카이 (OMP)",
   "Catppuccin Latte": "Catppuccin Latte",
   "Tokyo Night": "Tokyo Night",
+  "Black": "검정",
   "Tokyo Night Day": "Tokyo Night Day",
   "Gruvbox": "Gruvbox",
   "Gruvbox Light": "Gruvbox Light",
@@ -79,7 +79,7 @@ export const SETTINGS_KO: Record<string, string> = {
   "Full": "전체",
   "Chat font size": "채팅 글자 크기",
   "History page size": "기록 페이지 크기",
-  "Prompts per page; older turns load a page at a time as you scroll up": "페이지당 프롬프트 수. 위로 스크롤하면 이전 턴을 한 페이지씩 불러옵니다",
+  "Prompts per page; older turns load a page at a time as you scroll up. Hermes keeps its own page of messages": "페이지당 프롬프트 수. 위로 스크롤하면 이전 턴을 한 페이지씩 불러옵니다. Hermes는 자체 메시지 단위 페이지로 불러옵니다",
   "Messages, code, prompt cards and the message box in the chat view": "채팅 화면의 메시지, 코드, 프롬프트 카드, 입력창",
   "Decrease chat font size": "채팅 글자 작게",
   "Increase chat font size": "채팅 글자 크게",
@@ -101,7 +101,6 @@ export const SETTINGS_KO: Record<string, string> = {
   "Shortcuts": "단축키",
   "Phone": "폰",
   "Devices": "기기",
-  "Install": "설치",
   "Installed": "설치됨",
   "About": "정보",
   "Star on GitHub": "GitHub에서 Star 누르기",
@@ -113,6 +112,7 @@ export const SETTINGS_KO: Record<string, string> = {
   "hide PCs on this device": "이 기기에서 PC 숨기기",
   "Connect another PC over an SSH alias or user@host. Its workspaces join the sidebar.": "SSH 별칭이나 user@host로 다른 PC를 연결합니다. 연결한 PC의 워크스페이스는 사이드바에 함께 보입니다.",
   "Saved PC data was damaged and could not be read when the app started. It was set aside as {files}; add any missing PC again.": "저장된 PC 데이터가 손상되어 앱을 시작할 때 읽을 수 없었습니다. {files}(으)로 옮겨 두었으니, 빠진 PC는 다시 추가하세요.",
+  "The permission to connect to the PCs saved in herdr was damaged and could not be read when the app started. It was set aside as {files}; choose Connect on those PCs again.": "herdr에 저장된 PC의 연결 허용 정보가 손상되어 앱을 시작할 때 읽을 수 없었습니다. {files}(으)로 옮겨 두었으니, 그 PC에서 연결을 다시 선택하세요.",
   "Update PC bridges automatically": "PC 브리지 자동 업데이트",
   "When an app update needs a newer bridge, PCs that connect with their saved key are updated in the background. PCs that need a password ask first.": "앱 업데이트에 새 브리지가 필요하면, 저장된 키로 연결되는 PC는 뒤에서 업데이트됩니다. 비밀번호가 필요한 PC는 먼저 묻습니다.",
   "Sign out": "로그아웃",
@@ -122,6 +122,8 @@ export const SETTINGS_KO: Record<string, string> = {
   "Sidebar rows": "사이드바 행",
   "One line": "한 줄",
   "Two lines": "두 줄",
+  "Sidebar filter": "사이드바 필터",
+  "Show the Filter field above the sidebar's lists on this device. When off, Filter workspaces and agents in the command palette opens it.": "이 기기에서 사이드바 목록 위에 필터 입력란을 보여 줍니다. 끄면 명령 팔레트의 워크스페이스와 에이전트 필터로 엽니다.",
   "Agents order": "에이전트 정렬",
   "Activity keeps a waiting agent on top, then the one that changed last; herdr's own order is not changed": "활동순은 응답을 기다리는 에이전트를 맨 위에 두고, 그다음 가장 최근에 바뀐 순서로 놓습니다. herdr 자체의 순서는 바뀌지 않습니다",
   "Workspaces": "워크스페이스순",
@@ -218,6 +220,15 @@ export const SETTINGS_KO: Record<string, string> = {
   "A chip above the message box puts the prompt Claude Code suggests next into the box. With a keyboard, Tab does it.": "입력창 위의 칩을 누르면 Claude Code가 제안한 다음 프롬프트가 입력창에 들어갑니다. 키보드에서는 Tab으로 넣습니다.",
   "Show above the message box": "입력창 위에 표시",
   "Restore defaults": "기본값으로 되돌리기",
+  "Ovis sends anonymous usage counts.": "Ovis는 사용 현황을 익명으로 집계합니다.",
+  "What is sent": "보내는 내용",
+  "Anonymous usage counts": "익명 사용 집계",
+  "Turned off on this PC by OVIS_TELEMETRY=0, DO_NOT_TRACK or a CI environment.": "이 PC에서는 OVIS_TELEMETRY=0, DO_NOT_TRACK 또는 CI 환경 때문에 꺼져 있습니다.",
+  "Send anonymous usage counts": "익명 사용 집계 보내기",
+  "Once on install and once per update, with the last browser's app settings, and once a day you open the app, with the kinds of coding agents running in herdr (such as claude or codex). Custom fonts, shortcuts and replies are reported only as customization flags or counts, never their text. Account identifiers, terminal content and files are excluded. The receiver stores the country, not the IP address.": "앱 설치 시 한 번, 업데이트마다 한 번, 마지막으로 사용한 브라우저의 앱 설정과 함께 보내고, 앱을 여는 날마다 한 번, herdr에서 실행 중인 코딩 에이전트의 종류(claude, codex 등)와 함께 보냅니다. 사용자 지정 글꼴, 바로 가기 및 답변은 텍스트가 아니라 사용자 지정 여부 플래그나 개수로만 보고됩니다. 계정 식별자, 터미널 내용 및 파일은 제외됩니다. 받는 쪽은 IP 주소가 아닌 국가를 저장합니다.",
+  "Once a day you open the app:": "앱을 여는 날마다 한 번:",
+  "The receiver adds the country this message comes from (two letters, such as KR). It does not store the address.": "받는 쪽에서 이 메시지를 보낸 국가(KR 같은 두 글자)를 덧붙입니다. 주소는 저장하지 않습니다.",
+  "This version has already been counted. The next event is sent after an update.": "이 버전은 이미 집계되었습니다. 다음 전송은 업데이트 후입니다.",
   "Agent integrations": "에이전트 통합",
   "herdr's integrations let it resume each agent's session after a restart. This page only reads them: run a command in a terminal on the PC herdr runs on, then reopen this page.": "herdr 통합이 있으면 재시작 후 각 에이전트의 세션을 이어서 열 수 있습니다. 이 페이지는 상태를 읽기만 합니다. herdr가 실행되는 PC의 터미널에서 명령을 실행한 뒤 이 페이지를 다시 여세요.",
   "Not found on this PC": "이 PC에서 찾을 수 없음",
@@ -254,6 +265,7 @@ export const SETTINGS_KO: Record<string, string> = {
   "maximize fullscreen full screen focus": "최대화 전체 화면 집중",
   "lens chat terminal conversation": "보기 채팅 터미널 대화",
   "panel drawer hide show": "패널 서랍 숨기기 보기",
+  "search find narrow sidebar": "검색 찾기 좁히기 사이드바",
   "dark light mode appearance colors": "다크 라이트 모드 외관 색상",
   "preferences options config": "환경설정 옵션 구성",
   "remote machine computer connect ssh": "원격 기기 컴퓨터 연결 ssh",
@@ -325,4 +337,5 @@ export const SETTINGS_KO: Record<string, string> = {
   "Reachable": "접속 가능",
   "This request came through Tailscale Funnel, which is open to the public internet.": "이 요청은 공개 인터넷에 열린 Tailscale Funnel을 거쳐\u00a0왔습니다.",
   "The server cannot see whether a proxy, tunnel or router makes it reachable from the internet.": "프록시, 터널 또는 라우터 때문에 인터넷에서 접속할\u00a0수\u00a0있는지 서버는 알\u00a0수\u00a0없습니다.",
+  "Monokai (OMP)": "모노카이 (OMP)",
 };
