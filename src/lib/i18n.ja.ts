@@ -9,6 +9,7 @@ import { FILES_JA } from "./i18n/files.ja.ts";
 import { DEVICES_JA } from "./i18n/devices.ja.ts";
 import { USAGE_JA } from "./i18n/usage.ja.ts";
 import { SETUP_JA } from "./i18n/setup.ja.ts";
+import { GUIDE_JA } from "./i18n/guide.ja.ts";
 import { UPDATES_JA } from "./i18n/updates.ja.ts";
 import { PALETTE_JA } from "./i18n/palette.ja.ts";
 
@@ -142,6 +143,8 @@ const BASE: Record<string, string> = {
   "Browse": "参照",
   "Cancel": "キャンセル",
   "Install": "インストール",
+  "Installed": "インストール済み",
+  "Not installed": "未インストール",
   "Sign in": "ログイン",
   "Starting…": "起動しています…",
   "Start": "開始",
@@ -169,6 +172,16 @@ const BASE: Record<string, string> = {
   // ---- prompt card ----
   "Submit": "送信",
   "Recommended": "推奨",
+  "Could not confirm this browser is paired. Check that cookies are enabled, then try again.": "このブラウザーがペアリング済みであることを確認できませんでした。Cookie が有効か確認して、もう一度お試しください。",
+  "New code": "新しいコード",
+  "Paired: {name}.": "ペアリングしました: {name}。",
+  "QR code that pairs a phone with code {code}": "コード {code} でスマートフォンをペアリングする QR コード",
+  "Pairing code": "ペアリングコード",
+  "Open this address on your phone": "スマートフォンでこのアドレスを開いてください",
+  "It is on this PC, but it does not start. Install it again.": "この PC にありますが、起動しません。もう一度インストールしてください。",
+  "Installing {agent}…": "{agent} をインストール中…",
+  "Install {agent}": "{agent} をインストール",
+  "{agent} is ready": "{agent} の準備ができました",
 
 
   // ---- composer ----
@@ -311,6 +324,7 @@ export const JA_PARTS: Record<string, Record<string, string>> = {
   devices: DEVICES_JA,
   usage: USAGE_JA,
   setup: SETUP_JA,
+  guide: GUIDE_JA,
   updates: UPDATES_JA,
   palette: PALETTE_JA,
 };

@@ -35,7 +35,6 @@ export const USAGE_JA: Record<string, string> = {
   "Import accounts from CLIProxyAPI": "CLIProxyAPIからアカウントを取り込む",
   "The key stays on this PC.": "キーはこのPCにのみ保存されます。",
   "Connected · {count} accounts": "接続済み · {count} アカウント",
-  "Signed in": "ログイン済み",
   "Expired": "期限切れ",
   "Edit": "編集",
   "Remove hub?": "ハブを削除しますか？",
@@ -90,4 +89,5 @@ export const USAGE_JA: Record<string, string> = {
   "Read from Claude's status line instead": "代わりに Claude のステータスラインから読む",
   "Could not change Claude's status line": "Claude のステータスラインを変更できませんでした",
   "On. Claude's limits show once Claude Code next draws its status line.": "オンにしました。Claude Code が次にステータスラインを描くと上限が表示されます。",
+  "Signed in": "ログイン済み",
 };

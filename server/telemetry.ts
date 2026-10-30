@@ -13,8 +13,8 @@
  * send nothing.
  */
 import { randomUUID } from "node:crypto";
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { accessSync, constants, lstatSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { ACTIVE_LATE_DAYS, emptyUsage, harnessOf, NOTICE_VERSION, sameUsage, TELEMETRY_COUNT_MAX, telemetryHarnesses, telemetrySettings, telemetrySurface, telemetryUsage, type InstallMethod, type TelemetryActive, type TelemetryChange, type TelemetryEvent, type TelemetryHarness, type TelemetryIngress, type TelemetrySettings, type TelemetryStatus, type TelemetrySurface, type TelemetryUsage, type TelemetryUsageCount } from "../shared/telemetry.ts";
 import { badRequest, errorResponse, isJsonObject, jsonResponse } from "./http.ts";
 import { updateRequestAllowed } from "./update-api.ts";
@@ -22,6 +22,12 @@ import { updateRequestAllowed } from "./update-api.ts";
 export const TELEMETRY_URL = "https://herdr-web-ui-telemetry.devswha.workers.dev/v1/events";
 export const ACTIVE_URL = "https://herdr-web-ui-telemetry.devswha.workers.dev/v1/active";
 const FILE = "telemetry.json";
+/**
+ * The switch turned off, as a file of its own beside FILE that only the switch writes or removes. Every other
+ * write saves the whole of FILE as it was read, so a server on the same state directory that read the switch on
+ * a moment before it was turned off would write it back on; none of them touches this file, so off holds.
+ */
+const OFF_FILE = "telemetry-off";
 const SEND_TIMEOUT_MS = 10_000;
 /** after a start, long enough for the supervisor to have told what the update replaced */
 const START_DELAY_MS = 15_000;
@@ -184,16 +190,38 @@ function telemetryChange(value: unknown): TelemetryChange | null {
   }
 }
 
-function readSaved(file: string): Saved | null {
+/**
+ * Whether OFF_FILE marks the counts off. It fails closed: only a name that is not there, in a state directory this
+ * process can read, counts as no mark. Anything at the name (a dangling link too) or any failure to tell is off.
+ */
+function offMarked(offFile: string): boolean {
+  try {
+    lstatSync(offFile);
+    return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") return true;
+  }
+  try {
+    accessSync(dirname(offFile), constants.R_OK | constants.X_OK);
+    return false;
+  } catch { return true; }
+}
+
+function readSaved(file: string, offFile: string): Saved | null {
   try {
     const value: unknown = JSON.parse(readFileSync(file, "utf8"));
     if (!isJsonObject(value) || typeof value["install_id"] !== "string" || value["install_id"] === "") return null;
+    // a switch an older build turned off is copied into OFF_FILE whenever it is read, so no late write of FILE can turn it
+    // on; a read that cannot write it now still reads off, and the next read tries again
+    if (value["enabled"] === false && !offMarked(offFile)) {
+      try { writeFileSync(offFile, "", { mode: 0o600 }); } catch { /* read-only for now: still off, marked at a later read */ }
+    }
     // a notice from before it said what is sent now does not count: it is shown again first
     const noticeSeenAt = value["notice_version"] === NOTICE_VERSION && typeof value["notice_seen_at"] === "string" ? value["notice_seen_at"] : null;
     const active = readActive(value["active"]);
     return {
       install_id: value["install_id"],
-      enabled: value["enabled"] !== false,
+      enabled: value["enabled"] !== false && !offMarked(offFile),
       notice_seen_at: noticeSeenAt,
       notice_version: NOTICE_VERSION,
       reported_version: typeof value["reported_version"] === "string" ? value["reported_version"] : null,
@@ -216,6 +244,7 @@ export class Telemetry {
   private activeAbort?: AbortController;
   private activeTimer?: Timer;
   private readonly file: string;
+  private readonly offFile: string;
   /** false when the state file could not be written: then nothing is sent (it could not be remembered) */
   private writable = true;
 
@@ -237,8 +266,11 @@ export class Telemetry {
     setTimer?: (fn: () => void, ms: number) => Timer;
   }) {
     this.file = join(options.stateDir, FILE);
-    const saved = readSaved(this.file);
-    this.saved = saved ?? { install_id: randomUUID(), enabled: true, notice_seen_at: null, notice_version: NOTICE_VERSION, reported_version: null, settings: null, active: [], usage_after_notice: true };
+    this.offFile = join(options.stateDir, OFF_FILE);
+    // a first run's state directory is made before the mark is looked for: one that is not there reads off (offMarked)
+    try { mkdirSync(options.stateDir, { recursive: true, mode: 0o700 }); } catch { /* not made: offMarked reads off */ }
+    const saved = readSaved(this.file, this.offFile);
+    this.saved = saved ?? { install_id: randomUUID(), enabled: !offMarked(this.offFile), notice_seen_at: null, notice_version: NOTICE_VERSION, reported_version: null, settings: null, active: [], usage_after_notice: true };
     if (!saved) {
       try { this.persist(); } catch (error) {
         // the app still starts; telemetry just stays silent
@@ -252,8 +284,15 @@ export class Telemetry {
 
   /** another server on the same state directory may have changed the switch: its file wins */
   private refresh(): void {
-    const latest = readSaved(this.file);
+    const latest = readSaved(this.file, this.offFile);
     if (latest) this.saved = latest;
+    // the file could not be read: what is known of it stays, but an off, or no way to tell, wins
+    else if (offMarked(this.offFile)) this.saved.enabled = false;
+  }
+
+  private markOff(): void {
+    mkdirSync(this.options.stateDir, { recursive: true, mode: 0o700 });
+    writeFileSync(this.offFile, "", { mode: 0o600 });
   }
 
   private persist(): void {
@@ -329,19 +368,26 @@ export class Telemetry {
   change(patch: TelemetryChange): TelemetryStatus {
     const clean = telemetryChange(patch);
     if (!clean) throw new TypeError("Invalid telemetry change");
+    // turned off while an event is on its way: stop it before anything is read or written (a read may write the mark), and
+    // even if OFF_FILE cannot be written
+    if (clean.enabled === false) { this.abort?.abort(); this.activeAbort?.abort(); }
     this.refresh();
+    // off is marked before FILE is written, whatever another server writes to FILE meanwhile
+    if (clean.enabled === false) this.markOff();
     if (clean.enabled !== undefined) this.saved.enabled = clean.enabled;
     // kept for the next install/update event; telling it sends nothing by itself
     if (clean.settings !== undefined) this.saved.settings = clean.settings;
     if (clean.notice_seen && this.saved.notice_seen_at === null) this.saved.notice_seen_at = new Date(this.now()).toISOString();
     this.persist();
+    // and again after: an on from another server between the two writes cannot leave this off without its mark
+    if (clean.enabled === false) this.markOff();
+    // on removes the mark only once FILE says on, so no read in between finds FILE off and no mark (readSaved would mark it)
+    if (clean.enabled === true) rmSync(this.offFile, { force: true });
     if (clean.alert_opened) {
       this.tally("alerts_opened");
       // a tap alone sends nothing: the day's next visit carries it, so no message tells when it was
       if (Object.keys(clean).length === 1) return this.status();
     }
-    // turned off while an event is on its way: stop it rather than let it land
-    if (clean.enabled === false) { this.abort?.abort(); this.activeAbort?.abort(); }
     void this.report();
     // visits already recorded but held back by the notice, the switch or a failure
     void this.flushActive();
@@ -499,6 +545,8 @@ export class Telemetry {
             if (fresh) going.sent_at = this.now();
             this.persist();
           }
+          // last, right before it goes: turned off here or by another server on the same state directory meanwhile
+          if (offMarked(this.offFile)) return;
           try {
             const response = await this.options.fetch(this.options.activeUrl ?? ACTIVE_URL, {
               method: "POST",
@@ -554,6 +602,8 @@ export class Telemetry {
     this.abort = abort;
     this.sending = (async () => {
       try {
+        // right before it goes: turned off by another server on the same state directory since the read above
+        if (offMarked(this.offFile)) return;
         const response = await this.options.fetch(this.options.url ?? TELEMETRY_URL, {
           method: "POST",
           headers: { "content-type": "application/json" },
@@ -566,8 +616,13 @@ export class Telemetry {
         this.persist();
       } catch (error) {
         if (!abort.signal.aborted) console.error(`telemetry: the ${event.event} event was not delivered (${error instanceof Error ? error.message : String(error)})`);
-      } finally { this.sending = null; this.abort = undefined; }
-    })();
+      }
+    })().finally(() => {
+      // after the assignment, even when the off check returned before any await: else the finished send would stand as
+      // in flight and the owed event would wait for a restart
+      this.sending = null;
+      this.abort = undefined;
+    });
     return this.sending;
   }
 }

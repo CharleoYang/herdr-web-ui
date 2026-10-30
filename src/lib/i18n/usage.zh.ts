@@ -35,7 +35,6 @@ export const USAGE_ZH: Record<string, string> = {
   "Import accounts from CLIProxyAPI": "从 CLIProxyAPI 导入账号",
   "The key stays on this PC.": "密钥仅保存在本机。",
   "Connected · {count} accounts": "已连接 · {count} 个账号",
-  "Signed in": "已登录",
   "Expired": "已过期",
   "Edit": "编辑",
   "Remove hub?": "移除中心？",
@@ -90,4 +89,5 @@ export const USAGE_ZH: Record<string, string> = {
   "Read from Claude's status line instead": "改为从 Claude 状态栏读取",
   "Could not change Claude's status line": "无法更改 Claude 状态栏",
   "On. Claude's limits show once Claude Code next draws its status line.": "已开启。Claude Code 下次绘制状态栏时会显示额度。",
+  "Signed in": "已登录",
 };

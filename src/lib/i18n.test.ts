@@ -131,6 +131,7 @@ const PART_FILES: Record<string, string[]> = {
   updates: ["components/UpdateControls.tsx", "lib/updateProgress.ts"],
   palette: ["components/CommandPalette.tsx"],
   setup: ["components/AgentSetupCard.tsx"],
+  guide: ["components/SetupGuide.tsx"],
 };
 
 /** Parts in src/lib/i18n/ hold the keys only one feature uses; the base dictionary holds the rest. */

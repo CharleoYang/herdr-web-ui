@@ -27,7 +27,8 @@ import { handlePlanRequest } from "./plan-routes.ts";
 import { ShellAgentLocator } from "./shell-agent.ts";
 import { handleAgentsRequest } from "./agents-routes.ts";
 import { AgentDetector, catalogLocator, defaultLoginProbe } from "./agent-catalog-detect.ts";
-import { handleAgentCatalogRequest } from "./agent-catalog-routes.ts";
+import { agentCatalogFor, handleAgentCatalogRequest } from "./agent-catalog-routes.ts";
+import { catalogPlatform } from "../shared/agent-catalog.ts";
 import { AgentInstaller, INSTALL_PATH, SIGN_IN_PATH } from "./agent-catalog-install.ts";
 import { forgetPageMedia } from "./file-view.ts";
 import { handleFileRequest } from "./file-routes.ts";
@@ -109,6 +110,8 @@ export interface ServerInstance {
   statusReady: Promise<void>;
   focusReady: Promise<void>;
   alertsSettled: () => Promise<void>;
+  /** Start background version reads; only the real entrypoints opt in. */
+  warmAgentCatalog: () => void;
   /**
    * queues a create request's first message for a pane's agent, as POST /api/workspace/create and /api/tab/create do with
    * `first_message` and `first_message_connection` (`requester`, a connection's id from its first snapshot): for tests that start no agent
@@ -713,6 +716,11 @@ export function createServer(
     /** a create request's first message for a pane's agent, as the create routes queue it (server/core/pending.ts); for tests that run no agent */
     queueFirstMessage,
     alertsSettled: () => push.settled(),
+    warmAgentCatalog: () => {
+      void agentCatalogFor(catalogPlatform(process.platform), agentDetector).catch((error: unknown) => {
+        console.error(`agent catalog warm-up failed: ${error instanceof Error ? error.message : String(error)}`);
+      });
+    },
     stop: () => {
       settlePortalStartup({ ok: false, error: new Error("Server stopped before Portal startup cleanup completed") });
       core.stop(() => {
@@ -726,6 +734,7 @@ export function createServer(
       });
       piReader.close();
       void shellAgents.stop();
+      agentDetector.close();
       server.stop(true);
       releaseFilePool();
       requestLog.close();
@@ -744,6 +753,7 @@ if (import.meta.main) {
   let instance: ReturnType<typeof createServer>;
   try {
     instance = createServer({ updates, herdrUpdate: new HerdrUpdater(), portal, telemetry, registerBridge: true, herdrProfiles: readHerdrProfiles, shellAgents: new ShellAgentLocator(), agentDetector: new AgentDetector({ locate: catalogLocator({ probe: defaultLoginProbe() }) }), stateDir, siblingStateDir: siblingStateDir(stateDir) });
+    instance.warmAgentCatalog();
   } catch (err) {
     const { code, syscall } = err as { code?: string; syscall?: string };
     // only the bind itself: a permission error reading a state file keeps its own message and path

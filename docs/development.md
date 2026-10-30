@@ -270,38 +270,87 @@ record must be a session header. Header cwd/ID strings exceeding 16 KiB are refu
 matched or returned as truncated identities; display-label clipping remains separate.
 
 Pi checks each transcript's path and descriptor identity on every listing. Its server-owned,
-in-memory LRU cache retains at most 256 completed clipped labels and header metadata, never
-transcript content, append prefixes, parser checkpoints or shared in-flight answers. The key is
+in-memory LRU cache retains at most 256 entries: completed clipped labels and header metadata,
+or an unfinished scan's bounded parser and byte offset, never transcript buffers, open descriptors
+or shared in-flight parsers. Each parser bounds nesting to 64 frames, projected text to 2001
+characters (201 for names), and header fields to 16 KiB each. Its retained strings are bounded
+independently of transcript length: conservatively a few hundred KiB per adversarial checkpoint,
+or tens of MiB across the 256-entry cache, plus runtime object/string overhead. Ordinary checkpoints
+keep only a few KiB. The key is
 the absolute path plus device, inode, size, mtime and ctime where available (nanosecond timestamps
 strengthen the millisecond fields where the filesystem exposes them). An unchanged key performs
-no transcript reads; a changed key scans the file again, so appended names, cleared names and
-new first prompts appear on the next open. Each listing drops entries for transcripts no longer
-discovered in its folders; the count bound also evicts older stores. Stopping the server clears
+no transcript reads for completed labels; an unfinished scan resumes at its offset. A changed key
+discards the checkpoint and scans afresh, so appended names, cleared names and new first prompts
+are found without combining different file versions. Each listing drops entries for transcripts no longer
+discovered in its folders; ineligible headers are rejected before cache insertion so foreign files
+cannot churn out eligible checkpoints. The count bound also evicts older stores. Stopping the server clears
 the cache. Coarse timestamps can still hide a same-tick, same-size in-place rewrite whose
 identity and timestamps all stay unchanged.
-The server admits at most two readers and 32 waiting tasks. Chunks are 64 KiB; each listing has a
-two-second deadline, including queue time. The deadline bounds scan work instead of a fixed byte
-cutoff. Concurrent listings keep independent deadlines, even when reading the same transcript.
-Only clipped metadata and a bounded record projection are retained during a scan. A final size
-and nanosecond mtime/ctime check refuses a file changed while it was read; coarse timestamps can
-still hide a same-tick in-place rewrite.
+The server admits at most two readers and 32 waiting tasks. Chunks are 64 KiB. Each listing first
+establishes up to 50 eligible rows, newest first, reading at most one chunk per candidate for its
+header (the existing 400-check discovery bound also limits invalid candidates). Header requests
+use the same reader/queue limits and share a ten-second deadline including queue time. Long headers
+and malformed preambles retain their bounded parser and offset for the next open rather than
+restarting at a fixed cutoff. A traversal also stops after 50 unfinished headers, independently
+of its 50-row limit, and touches at most three quarters of the exported `PI_CACHE_ENTRIES`
+capacity (currently 192 of 256 slots). Every retained entry touch counts, including hits;
+counting only insertions would let later hits promote older entries past this traversal's
+new checkpoints. Label scans revisit only that same set, so one traversal cannot evict its
+own checkpoints. Completed single-chunk headerless files are not cached, just as explicitly
+rejected headers are not cached, so neither consumes this limit. Headerless files larger than
+one chunk retain their completed empty result under the same checked stat key and count toward
+the touch limit, including on a cache hit. This prevents unchanged multi-chunk files from starting
+over and consuming unfinished-header slots on every open. Single-chunk files are checked again
+on later opens, with their I/O still bounded by discovery and the header deadline. A cutoff before discovery is
+exhausted with no established row returns retryable busy, never an empty success. Files beyond these
+bounds may be omitted. In particular, actively growing oversized headers can keep resetting
+their progress and hide older sessions; ordinary Pi headers are only a few hundred bytes.
+A file whose header is not yet complete has no row yet, never a
+guessed identity. Files completed in that first chunk publish their EOF-checked labels immediately.
+The subsequent full label scans share a two-second deadline measured from before the header pass,
+including all queue time. Tests may lengthen both phase deadlines with `piSessionDeadlineMs`.
+No full scan begins or continues past its deadline. Concurrent listings keep
+independent deadlines, even when reading the same transcript.
+Only clipped metadata and a bounded record projection are retained during a scan. A size and
+nanosecond mtime/ctime check validates the first completed header before it can identify a row;
+another at EOF refuses labels from a file changed while it was read. A checkpoint saved at expiry
+is private until a later listing revalidates its original stat key. Coarse timestamps can still
+hide a same-tick in-place rewrite.
 
-A busy reader, elapsed deadline, failed read or changed file returns the standard API error
-envelope, 503 `session_history_busy`, with `Retry-After: 1` and `Cache-Control: no-store`, never
-incomplete rows. The browser keeps its loading state through five bounded automatic retries,
-honouring Retry-After with the same backoff as a busy skill list, then offers a Retry button.
-Retrying an uncached file starts over: a very large or slow file may not finish within the
-request's deadline, and its unfinished scan does not accumulate progress. There is no automatic background
-scan or persisted format. Server stop refuses queued/in-flight requests; a filesystem call
-already in progress keeps its slot and descriptor until it returns and closes. The synthetic
+An elapsed label deadline now returns 200 with every established row, including the older ones.
+Unchanged completed cached labels remain visible. Unfinished files have `title` and `firstMessage`
+both null; the browser's existing session-ID fallback and Resume still work. Later opens resume
+a stable file's scan and fill its labels at EOF. This replaces #2377's all-or-error deadline
+policy. The rejected alternative, stopping at the first expired file, hides older sessions and
+can falsely report an empty store. The separate header byte bound trades a bounded amount of
+additional I/O latency for a complete list of ordinary headers. The header deadline also bounds
+stalled opens, stats, reads and queued requests. On header expiry the already checked rows remain
+visible. If none could be checked, the response is retryable busy, never an empty success; retained
+progress lets later attempts finish a long header. A genuinely empty or wholly ineligible store
+still returns an empty list.
+
+A full header queue, stopped reader, or a listing with no checked rows and incomplete/failed header
+reads returns 503 `session_history_busy`, with `Retry-After: 1`. Once rows are established, label
+read errors, file changes, replacement or deletion keep their null/cached labels; only reader
+shutdown rejects them. Header eligibility and Windows folder identity are checked once, and a
+changed header identity in the label pass cannot replace the established row. Successful and busy
+responses both carry `Cache-Control: no-store`. The browser's five bounded automatic retries and
+Retry button remain for busy failures; the wire shape and client need no change. There is no automatic
+background scan or persisted format. Server stop refuses queued/in-flight requests; a filesystem
+call already in progress keeps its slot and descriptor until it returns and closes. A label scan's
+returned chunk may advance the private checkpoint, but no next label I/O starts after expiry. The synthetic
 `server/pi-session-metadata.test.ts` instruments zero-read cache hits, appended label refresh,
 deleted-entry eviction, resource bounds and a
 server answering a ping while a 20 MiB listing is held at a controlled read gate. Deterministic
-clock/timer cases cover aggregate listing expiry, independent deadlines, queued expiry without
-opening and FIFO admission. The ungated 202-session fixture reads the newest 50 long transcripts
-(about 200 MiB together) whole, with the listing deadline lengthened so a slow runner cannot hit it, then
-repeats with no transcript reads; the isolated
-history API contract covers a similarly sized store and error-only refusal after an earlier row.
+clock/timer cases cover every row at queued, first-chunk, aggregate and mid-file expiry, older
+cached labels during a slow newest scan, eventual labels without
+rereading a prefix, checkpoint invalidation, torn resumed reads, independent deadlines, queued
+expiry without opening and FIFO admission. The 202-session fixture reads the newest 50 long
+transcripts (about 200 MiB together) with an injected 120-second label deadline beyond the test's
+own timeout, then repeats with no transcript reads;
+the isolated history API contract covers partial-label success and non-deadline refusal after
+an earlier row. That contract lengthens only the reader's metadata budgets through
+`piSessionDeadlineMs`, not server or herdr timers.
 
 ## Codex Send now
 

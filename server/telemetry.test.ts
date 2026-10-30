@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { SUPPORTED_AGENT_KINDS } from "../shared/supported-agents.ts";
@@ -200,7 +200,8 @@ describe("telemetry events", () => {
     const { telemetry, sent } = setup({ stateDir: join(parent, "file", "state") });
     await telemetry.report();
     expect(sent).toEqual([]);
-    expect(telemetry.status().enabled).toBe(true);
+    // no state directory to tell whether the counts were turned off reads as off (offMarked fails closed)
+    expect(telemetry.status().enabled).toBe(false);
   });
 
   test("full safe settings persist across restarts and are included in install and update events", async () => {
@@ -773,6 +774,213 @@ describe("daily usage", () => {
     expect(response.status).toBe(200);
     expect((await response.json()).active.usage).toEqual({ ...emptyUsage(), alerts_opened: 1 });
     expect(telemetry.status()).toMatchObject({ enabled: true, notice_seen: true });
+  });
+});
+
+describe("another server on the same state directory", () => {
+  /**
+   * A second server process that has read the state and is about to write it back: its clock (`now`, read between the
+   * two) stops it there until this test writes a line to its stdin. Its lines are written synchronously: a buffered write
+   * might never leave before the blocking read. It then counts a prompt answer or records a visit.
+   */
+  async function pausedWriter(stateDir: string, call: string) {
+    const script = `
+      const { readSync, writeSync } = require("node:fs");
+      const { Telemetry } = await import(${JSON.stringify(join(import.meta.dir, "telemetry.ts"))});
+      let armed = false;
+      const telemetry = new Telemetry({
+        stateDir: ${JSON.stringify(stateDir)}, version: "0.4.1", env: {}, activeUrl: "https://telemetry.test/v1/active",
+        fetch: async () => { writeSync(1, "SENT\\n"); return new Response(null, { status: 204 }); },
+        now: () => {
+          if (armed) { armed = false; writeSync(1, "PAUSED\\n"); readSync(0, Buffer.alloc(1)); }
+          return Date.parse("2026-10-08T12:00:00Z");
+        },
+      });
+      armed = true;
+      ${call}
+      writeSync(1, "DONE\\n");
+    `;
+    const child = Bun.spawn([process.execPath, "-e", script], { stdin: "pipe", stdout: "pipe", stderr: "inherit", env: { ...process.env, HERDR_TEST_MODE: "unit" } });
+    const lines: string[] = [];
+    const reader = child.stdout.getReader();
+    const decoder = new TextDecoder();
+    let buffered = "";
+    /** the child's next output line, bounded so a child that never gets there fails rather than hangs */
+    const next = () => Promise.race([
+      (async () => {
+        while (!buffered.includes("\n")) {
+          const { value, done } = await reader.read();
+          if (done) throw new Error(`the writer ended early: ${lines.join(" ")}`);
+          buffered += decoder.decode(value);
+        }
+        const line = buffered.slice(0, buffered.indexOf("\n"));
+        buffered = buffered.slice(line.length + 1);
+        lines.push(line);
+        return line;
+      })(),
+      new Promise<never>((_resolve, reject) => setTimeout(() => reject(new Error("the writer did not answer")), 10_000).unref?.()),
+    ]);
+    return { child, next, resume: () => { child.stdin.write("\n"); child.stdin.flush(); } };
+  }
+
+  for (const call of ["tally", "active"] as const) {
+    test(`turning the counts off while another server is midway through a ${call === "tally" ? "count" : "visit"} keeps them off, and nothing is sent`, async () => {
+      const { telemetry, actives, stateDir } = setup();
+      seen(telemetry);
+      const writer = await pausedWriter(stateDir, call === "tally" ? "telemetry.tally(\"prompt_answers\");" : "await telemetry.active([\"claude\"]);");
+      try {
+        expect(await writer.next()).toBe("PAUSED");
+        expect(telemetry.change({ enabled: false }).enabled).toBe(false);
+        writer.resume();
+        const after: string[] = [];
+        for (let line = await writer.next(); line !== "DONE"; line = await writer.next()) after.push(line);
+        expect(await writer.child.exited).toBe(0);
+        // the other server's write lands after the opt-out: it must not turn the counts back on
+        expect(after).toEqual([]);
+        expect(telemetry.status().enabled).toBe(false);
+        expect(setup({ stateDir }).telemetry.status().enabled).toBe(false);
+        await telemetry.active(["claude"]);
+        await settled();
+        expect(actives).toEqual([]);
+      } finally { writer.child.kill(); }
+    });
+  }
+
+  test("an off that overlaps an on from another server and ends last keeps the counts off against a late write", async () => {
+    const { telemetry, stateDir } = setup();
+    // its off pauses after it is marked and before the state file is written (the notice it also takes reads the clock)
+    const writer = await pausedWriter(stateDir, `telemetry.change({ enabled: false, notice_seen: true, notice_version: ${NOTICE_VERSION} });`);
+    try {
+      expect(await writer.next()).toBe("PAUSED");
+      expect(telemetry.change({ enabled: true }).enabled).toBe(true);
+      writer.resume();
+      expect(await writer.next()).toBe("DONE");
+      expect(await writer.child.exited).toBe(0);
+      expect(telemetry.status().enabled).toBe(false);
+      // a server that read the switch on before all this writes the state file back
+      const file = join(stateDir, "telemetry.json");
+      writeFileSync(file, JSON.stringify({ ...savedFile(stateDir), enabled: true }));
+      expect(telemetry.status().enabled).toBe(false);
+    } finally { writer.child.kill(); }
+  });
+
+  test.skipIf(process.platform === "win32" || process.getuid?.() === 0)("an older build's off that could not be marked at start is marked at the next read", () => {
+    const stateDir = mkdtempSync(join(tmpdir(), "telemetry-"));
+    dirs.push(stateDir);
+    const file = join(stateDir, "telemetry.json");
+    const older = { install_id: "0b5f3c2e-8a51-4c47-9d0e-3f6a2b1c9e84", enabled: false, notice_seen_at: "2026-10-01T00:00:00.000Z", notice_version: NOTICE_VERSION, reported_version: "0.4.1", settings: null, active: [] };
+    writeFileSync(file, JSON.stringify(older));
+    chmodSync(stateDir, 0o500);
+    const telemetry = (() => { try { return setup({ stateDir }).telemetry; } finally { chmodSync(stateDir, 0o700); } })();
+    expect(telemetry.status().enabled).toBe(false);
+    writeFileSync(file, JSON.stringify({ ...older, enabled: true }));
+    expect(telemetry.status().enabled).toBe(false);
+  });
+
+  test("a switch an older build turned off stays off when a late write of the state file says on", () => {
+    const stateDir = mkdtempSync(join(tmpdir(), "telemetry-"));
+    dirs.push(stateDir);
+    const file = join(stateDir, "telemetry.json");
+    const older = { install_id: "0b5f3c2e-8a51-4c47-9d0e-3f6a2b1c9e84", enabled: false, notice_seen_at: "2026-10-01T00:00:00.000Z", notice_version: NOTICE_VERSION, reported_version: "0.4.1", settings: null, active: [] };
+    writeFileSync(file, JSON.stringify(older));
+    const { telemetry } = setup({ stateDir });
+    expect(telemetry.status().enabled).toBe(false);
+    writeFileSync(file, JSON.stringify({ ...older, enabled: true }));
+    expect(telemetry.status().enabled).toBe(false);
+  });
+
+  test("days still to send stop going once another server turns the counts off", async () => {
+    const stateDir = mkdtempSync(join(tmpdir(), "telemetry-"));
+    dirs.push(stateDir);
+    const days: string[] = [];
+    const { telemetry, clock } = setup({
+      stateDir,
+      fetch: (async (url: string | URL | Request, init?: RequestInit): Promise<Response> => {
+        if (String(url) === TEST_ACTIVE_URL) {
+          days.push((JSON.parse(String(init?.body)) as TelemetryActive).day);
+          // the other server turns the counts off while this message is on its way
+          setup({ stateDir }).telemetry.change({ enabled: false });
+        }
+        return new Response(null, { status: 204 });
+      }) as typeof fetch,
+    });
+    // two days owed: visited before the notice, sent together once it was seen
+    await telemetry.active(["claude"]);
+    clock.now += 86_400_000;
+    await telemetry.active(["claude"]);
+    seen(telemetry);
+    await settled();
+    expect(days).toEqual(["2026-10-08"]);
+  });
+
+  test.skipIf(process.platform === "win32" || process.getuid?.() === 0)("a state directory that cannot be read sends nothing, even with the counts on in memory", async () => {
+    const { telemetry, sent, actives, clock, stateDir, fireTimer } = setup({ grace: 60_000 });
+    seen(telemetry);
+    await telemetry.active(["claude"]);
+    clock.now += 60_000;
+    chmodSync(stateDir, 0o000);
+    try {
+      // the install event and the held visit, both owed, find no answer to whether the counts were turned off
+      await telemetry.report();
+      fireTimer();
+      await settled();
+      expect(sent).toEqual([]);
+      expect(actives).toEqual([]);
+      expect(telemetry.status().enabled).toBe(false);
+    } finally {
+      chmodSync(stateDir, 0o700);
+      telemetry.stop();
+    }
+  });
+
+  test.skipIf(process.platform === "win32")("an off mark that is a dangling link still reads off", async () => {
+    const { telemetry, sent, actives, stateDir } = setup();
+    symlinkSync(join(stateDir, "gone"), join(stateDir, "telemetry-off"));
+    expect(telemetry.status().enabled).toBe(false);
+    telemetry.change({ notice_seen: true, notice_version: NOTICE_VERSION });
+    await telemetry.report();
+    await telemetry.active(["claude"]);
+    await settled();
+    expect(sent).toEqual([]);
+    expect(actives).toEqual([]);
+  });
+
+  test("an install event held back by an off marked just before it goes is sent once the counts are on again", async () => {
+    const stateDir = mkdtempSync(join(tmpdir(), "telemetry-"));
+    dirs.push(stateDir);
+    writeFileSync(join(stateDir, "telemetry.json"), JSON.stringify({ install_id: "0b5f3c2e-8a51-4c47-9d0e-3f6a2b1c9e84", enabled: true, notice_seen_at: "2026-10-01T00:00:00.000Z", notice_version: NOTICE_VERSION, reported_version: null, settings: null, active: [] }));
+    const sent: TelemetryEvent[] = [];
+    let markAtClock = false;
+    const telemetry = new Telemetry({
+      stateDir, version: "0.4.1", env: {}, url: "https://telemetry.test/v1/events", activeUrl: TEST_ACTIVE_URL, platform: "linux", arch: "x64", noticeGraceMs: 0,
+      fetch: (async (_url: string | URL | Request, init?: RequestInit): Promise<Response> => {
+        sent.push(JSON.parse(String(init?.body)) as TelemetryEvent);
+        return new Response(null, { status: 204 });
+      }) as typeof fetch,
+      // another server turns the counts off between this one's read of the state and its send (the clock is read between)
+      now: () => {
+        if (markAtClock) { markAtClock = false; writeFileSync(join(stateDir, "telemetry-off"), ""); }
+        return Date.parse("2026-10-08T12:00:00Z");
+      },
+    });
+    markAtClock = true;
+    await telemetry.report();
+    expect(sent).toEqual([]);
+    telemetry.change({ enabled: true });
+    await telemetry.report();
+    expect(sent.map((event) => event.event)).toEqual(["install"]);
+  });
+
+  test("turning the counts on again from either server turns them on", async () => {
+    const first = setup();
+    seen(first.telemetry);
+    first.telemetry.change({ enabled: false });
+    const second = setup({ stateDir: first.stateDir });
+    expect(second.telemetry.status().enabled).toBe(false);
+    second.telemetry.change({ enabled: true });
+    expect(first.telemetry.status().enabled).toBe(true);
+    await first.telemetry.active(["claude"]);
+    expect(first.actives).toHaveLength(1);
   });
 });
 

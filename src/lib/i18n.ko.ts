@@ -9,6 +9,7 @@ import { FILES_KO } from "./i18n/files.ko.ts";
 import { DEVICES_KO } from "./i18n/devices.ko.ts";
 import { USAGE_KO } from "./i18n/usage.ko.ts";
 import { SETUP_KO } from "./i18n/setup.ko.ts";
+import { GUIDE_KO } from "./i18n/guide.ko.ts";
 import { UPDATES_KO } from "./i18n/updates.ko.ts";
 import { PALETTE_KO } from "./i18n/palette.ko.ts";
 
@@ -140,6 +141,8 @@ const BASE: Record<string, string> = {
   "Browse": "찾아보기",
   "Cancel": "취소",
   "Install": "설치",
+  "Installed": "설치됨",
+  "Not installed": "설치되지 않음",
   "Sign in": "로그인",
   "Starting…": "시작 중…",
   "Start": "시작",
@@ -167,6 +170,16 @@ const BASE: Record<string, string> = {
   // ---- prompt card ----
   "Submit": "제출",
   "Recommended": "추천",
+  "Could not confirm this browser is paired. Check that cookies are enabled, then try again.": "이 브라우저의 페어링을 확인할 수 없습니다. 쿠키가 허용되어 있는지 확인한 뒤 다시 시도하세요.",
+  "New code": "새 코드",
+  "Paired: {name}.": "페어링됨: {name}.",
+  "QR code that pairs a phone with code {code}": "코드 {code}로 폰을 페어링하는 QR 코드",
+  "Pairing code": "페어링 코드",
+  "Open this address on your phone": "폰에서 이 주소를 여세요",
+  "It is on this PC, but it does not start. Install it again.": "이 PC에 있지만 실행되지 않아요. 다시 설치해 주세요.",
+  "Installing {agent}…": "{agent} 설치 중…",
+  "Install {agent}": "{agent} 설치",
+  "{agent} is ready": "{agent} 준비 완료",
 
 
   // ---- composer ----
@@ -309,6 +322,7 @@ export const KO_PARTS: Record<string, Record<string, string>> = {
   devices: DEVICES_KO,
   usage: USAGE_KO,
   setup: SETUP_KO,
+  guide: GUIDE_KO,
   updates: UPDATES_KO,
   palette: PALETTE_KO,
 };

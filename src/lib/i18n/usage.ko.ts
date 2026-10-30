@@ -35,7 +35,6 @@ export const USAGE_KO: Record<string, string> = {
   "Import accounts from CLIProxyAPI": "CLIProxyAPI 계정 가져오기",
   "The key stays on this PC.": "키는 이 PC에만 저장돼요.",
   "Connected · {count} accounts": "연결됨 · 계정 {count}개",
-  "Signed in": "로그인됨",
   "Expired": "만료됨",
   "Edit": "수정",
   "Remove hub?": "허브를 제거할까요?",
@@ -90,4 +89,5 @@ export const USAGE_KO: Record<string, string> = {
   "Read from Claude's status line instead": "대신 Claude 상태 줄에서 읽기",
   "Could not change Claude's status line": "Claude 상태 줄을 바꾸지 못했어요",
   "On. Claude's limits show once Claude Code next draws its status line.": "켜졌어요. Claude Code가 다음에 상태 줄을 그리면 한도가 표시돼요.",
+  "Signed in": "로그인됨",
 };
