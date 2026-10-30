@@ -101,6 +101,7 @@ import { polledPrompt, screenWordsToShow } from "../lib/promptText.ts";
 import type { AgentStatus, CommandOutcome, ConversationMetadata, ConversationPart, ConversationResponse, ConversationTurn, InteractivePrompt, OmoTaskResult, ServerMessage, SlashCommand } from "../../shared/protocol.ts";
 import { chatIsBlank, type ChatRead } from "../lib/greeting.ts";
 import { TurnTime } from "./TurnTime.tsx";
+import { RewindMenu } from "./RewindMenu.tsx";
 import { useT } from "../lib/i18n.ts";
 import { offersRetry, userFailure, type UserFailure } from "../lib/userError.ts";
 import { useAnnouncedText } from "../lib/useAnnouncedText.ts";
@@ -1040,6 +1041,8 @@ interface TurnProps {
   outcomeActions?: OutcomeActions | null;
   /** Claude Code, grok, agy: the message offers to open the terminal, where the agent's own rewind is run (lib/rewindAction.ts) */
   onRewindInTerminal?: (() => void) | null;
+  /** What that button does: Claude's checkpoints open in the chat, the others' rewind stays in the terminal. */
+  rewindLabel?: "Rewind in terminal" | "Rewind to a message";
 }
 
 const TASK_RESULT_ICONS: Record<OmoTaskResult["status"], ComponentType<LucideProps>> = { completed: CircleCheck, failed: CircleX, cancelled: CircleSlash };
@@ -1111,7 +1114,7 @@ function noticeLabel(t: ReturnType<typeof useT>, notice: Extract<ConversationPar
 }
 
 // a turn that did not change keeps its object across polls: skip re-rendering it
-export const Turn = memo(function Turn({ paneId, turn, rowKey, live, waiting, showThinking, whileAsking = false, skills = null, userSkills = null, outcome = null, outcomeActions = null, onRewindInTerminal = null }: TurnProps) {
+export const Turn = memo(function Turn({ paneId, turn, rowKey, live, waiting, showThinking, whileAsking = false, skills = null, userSkills = null, outcome = null, outcomeActions = null, onRewindInTerminal = null, rewindLabel = "Rewind in terminal" }: TurnProps) {
   const t = useT();
   const memory = useContext(ChatRowMemoryContext);
   // what the drawn runs, and the runs that drew no block, were named, by part index; the row's
@@ -1184,7 +1187,7 @@ export const Turn = memo(function Turn({ paneId, turn, rowKey, live, waiting, sh
         {text.length > 0 && <UserMessage text={text} skills={userSkills} />}
         <div className="chat-turn-meta">{time}{text.length > 0 && <CopyButton text={text} label={t("Copy message")} onResult={copied} />}
           {text.length > 0 && onRewindInTerminal !== null && (
-            <button type="button" className="icon-button chat-copy chat-rewind" aria-label={t("Rewind in terminal")} title={t("Rewind in terminal")} onClick={onRewindInTerminal}><Undo2 aria-hidden="true" /></button>
+            <button type="button" className="icon-button chat-copy chat-rewind" aria-label={t(rewindLabel)} title={t(rewindLabel)} onClick={onRewindInTerminal}><Undo2 aria-hidden="true" /></button>
           )}
         </div>
       </div>
@@ -2394,15 +2397,19 @@ export const ChatView = memo(function ChatView({ paneId, presentationKey, finish
   // Nothing is typed: drafts and the agent's own rewind remain in the terminal.
   const offered = rewindOffer({ agent, interactive, connected, ended, conversation: state.source === "conversation" });
   const rewindInTerminal = offered === "terminal" ? onRewindInTerminal ?? null : null;
+  // Claude records its own checkpoints, so its messages open the list here; grok and agy keep the
+  // terminal handoff (#1577), and a live agent's dialog is still the terminal's to drive.
+  const [rewindMenuOpen, setRewindMenuOpen] = useState(false);
+  const rewindEntry = rewindInTerminal === null ? null : agent === "claude" ? () => setRewindMenuOpen(true) : rewindInTerminal;
   const renderTurn = useCallback((row: ChatRow) => {
     if (row.turn === null) return <OutcomeRow outcome={row.outcome} actions={outcomeActions} skills={skillMatcher} />;
     const { turn } = row;
     const live = isLiveWorkTurn(turn, row.index === shownTurns.length - 1, workStatus, finishedBeforeSend);
     return <RenderBoundary resetKey={turnRevision(turn, true)} fallback={() => <p className="chat-inline-state chat-inline-error" data-pane-content-error>{t("This message can't be shown here. The terminal has it.")}</p>}>
       <Turn paneId={paneId} turn={turn} rowKey={row.key} live={live} waiting={isWaitingWorkTurn(live, agentStatus)} showThinking={settings.showThinking} whileAsking={live && prompt !== null} skills={skillMatcher} userSkills={skillMatcher} outcome={row.outcome} outcomeActions={outcomeActions}
-        onRewindInTerminal={turn.role === "user" ? rewindInTerminal : null} />
+        onRewindInTerminal={turn.role === "user" ? rewindEntry : null} rewindLabel={agent === "claude" ? "Rewind to a message" : "Rewind in terminal"} />
     </RenderBoundary>;
-  }, [shownTurns.length, workStatus, finishedBeforeSend, t, paneId, agentStatus, settings.showThinking, prompt, skillMatcher, outcomeActions, rewindInTerminal]);
+  }, [shownTurns.length, workStatus, finishedBeforeSend, t, paneId, agentStatus, settings.showThinking, prompt, skillMatcher, outcomeActions, rewindEntry, agent]);
   // displayPaneTitle falls back to the pane id for a pane with nothing else to call it
   const shownTitle = title?.trim() ?? "";
   const logLabel = shownTitle !== "" && shownTitle !== paneId ? t("conversation of {pane}", { pane: shownTitle }) : t("Conversation");
@@ -2472,6 +2479,10 @@ export const ChatView = memo(function ChatView({ paneId, presentationKey, finish
   const jump = newMessages ? <button type="button" className="btn chat-new-messages chat-virtual-jump" onClick={scrollToBottom}>{t("New messages")} <ArrowDown aria-hidden="true" /></button>
     : away && <button type="button" className="btn chat-new-messages chat-virtual-jump is-icon" aria-label={t("Jump to latest")} title={t("Jump to latest")} onClick={scrollToBottom}><ArrowDown aria-hidden="true" /></button>;
   return <ChatPaneContext.Provider value={paneId}><ChatHistoryContext.Provider value={historyId ?? ""}><ImageViewerContext.Provider value={openViewer}><ToolPathRootContext.Provider value={toolPathRoot(cwd)}>
+    {rewindMenuOpen && <RewindMenu paneId={paneId}
+      onClose={() => setRewindMenuOpen(false)}
+      onRestored={() => { setRewindMenuOpen(false); conversationRefresh.invalidate(); }}
+      onTerminal={() => { setRewindMenuOpen(false); onRewindInTerminal?.(); }} />}
     {/* a reader away from the end has not seen the answer a finish lands there: presented only at the end */}
     <div className="chat-frame" data-pane-content={active && visible && !covered && connected && !ended && loaded && error === null && !away && !newMessages
       && endPresentation?.state === state && endPresentation.key === presentationKey

@@ -138,14 +138,17 @@ describe("OMP BTW history API", () => {
   }, 20_000);
 });
 
-describe("removed Chat rewind API", () => {
-  it("returns 404 for local and machine-prefixed rewind requests", async () => {
+describe("Chat rewind API", () => {
+  it("takes a checkpoint's message id, never a request that types its own rewind", async () => {
+    // #1577 removed a chat-side rewind that drove the dialog from a text request; what is back is a
+    // checkpoint id, so the old shape must stay refused rather than start typing again
     for (const path of ["/api/pane/rewind", "/api/machines/local/pane/rewind"]) {
       const response = await fetch(base() + path, {
         method: "POST", headers: { "content-type": "application/json", "x-herdr-machine": "1" },
         body: JSON.stringify({ pane_id: "not-a-live-pane", text: "nothing to send" }),
       });
-      expect(response.status, path).toBe(404);
+      expect(response.status, path).toBe(400);
+      expect((await response.json()).error.code, path).toBe("missing_message_id");
     }
   });
 });

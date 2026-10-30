@@ -2393,3 +2393,92 @@ ol.markdown-list {
 [data-palette="monokai"] .chat-task-result-body {
   background: var(--bg-input);
 }
+
+/* Claude's checkpoints, opened from a message: a panel over the chat, not a change to its layout */
+.rewind-menu {
+  position: absolute;
+  inset-block-start: 12px;
+  inset-inline-end: 12px;
+  z-index: 30;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-block-size: min(70vh, 520px);
+  inline-size: min(420px, calc(100% - 24px));
+  padding: 10px 12px;
+  overflow: auto;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-strong);
+  border-radius: 10px;
+  box-shadow: 0 10px 30px rgb(0 0 0 / 35%);
+}
+
+.rewind-menu-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  color: var(--text-muted);
+  font-size: var(--fs-xs);
+}
+
+.rewind-menu-head span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.rewind-menu-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.rewind-menu-point {
+  padding: 8px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.rewind-menu-prompt {
+  margin: 0;
+  color: var(--text);
+  font-size: var(--fs-sm);
+  overflow-wrap: anywhere;
+}
+
+.rewind-menu-meta {
+  margin: 2px 0 6px;
+  color: var(--text-muted);
+  font-size: var(--fs-2xs);
+}
+
+.rewind-menu-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.rewind-menu-actions button {
+  padding: 3px 8px;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  font-size: var(--fs-xs);
+  cursor: pointer;
+}
+
+.rewind-menu-actions button:hover:not(:disabled) {
+  background: var(--bg-hover);
+  border-color: var(--border-strong);
+}
+
+.rewind-menu-actions button:disabled {
+  opacity: 0.6;
+  cursor: default;
+}

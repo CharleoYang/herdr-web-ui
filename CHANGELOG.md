@@ -9,6 +9,19 @@ between releases do not reach them. Remote-PC runtime bundles are versioned sepa
 
 ### Added
 
+- Chat can rewind a Claude Code conversation. A message's **Rewind to a message** opens the
+  checkpoints Claude records for the session itself — one per message sent, with the files that
+  message overwrote (`file-history-snapshot` in the session, `file-history/<session>/` beside it) —
+  instead of asking the reader to find that list in the terminal. With the agent still running the
+  panel keeps the terminal handoff from #1577: a chat-driven walk of Claude's dialog was removed
+  there after a Claude update broke it, so the live dialog stays the terminal's to drive. Once the
+  agent has ended, the panel restores a checkpoint directly: the recorded files are copied back,
+  the session is cut before that message, and the original session file is left beside it as
+  `.rewind-<time>.bak`. Records that nobody typed are not offered: a slash command's own record,
+  another session's delivery, herdr's inbox/msg envelopes, a background task's notification and a
+  compaction's opening line. `GET /api/pane/rewind` lists the checkpoints, `POST /api/pane/rewind`
+  takes a `message_id` and refuses one it cannot name.
+
 - OMP Chat projects direct subagent journals into a separate, collapsible Subagents dock above
   the composer. It shows names, recorded models, assignments, recent tool activity and submitted
   results, refreshed every three seconds while visible, independently of the main transcript.

@@ -3,6 +3,7 @@ import type { PreferencesChange, SharedPreferences } from "../../shared/preferen
 import type { SeenFinish } from "../../shared/seen.ts";
 import type { AgentCatalogResponse, AgentTabStarted } from "../../shared/agent-catalog.ts";
 import type { BtwHistory } from "../../shared/omp-btw.ts";
+import type { RewindList, RewindRequest, RewindResult } from "../../shared/rewind.ts";
 import type { OmpAgents } from "../../shared/omp-agents.ts";
 import { resumeConnectionTraces } from "./connectionTrace.ts";
 import { machinePath, type BridgeHealth, type HerdrIdentity, type Machine, type MachineRoster, type SetupAction, type SetupJob, type SetupRequest } from "../../shared/machines.ts";
@@ -941,6 +942,25 @@ export async function removeWorktree(request: RemoveWorktreeRequest, machineId =
 /** GET /api/pane/commands: the slash commands the pane's agent understands (built-in + custom). */
 export async function fetchPaneCommands(paneId: string, machineId = "local"): Promise<SlashCommand[]> {
   return (await getJson<{ commands: SlashCommand[] }>(machinePath(machineId, `pane/commands?pane_id=${encodeURIComponent(paneId)}`))).commands;
+}
+
+/**
+ * GET /api/pane/rewind: the messages this pane's Claude session can be restored to, oldest first,
+ * with whether each restores code and whether the pane's agent is still running (terminal) or has
+ * ended (offline).
+ */
+export async function fetchRewindPoints(paneId: string, machineId = "local"): Promise<RewindList> {
+  return await getJson<RewindList>(machinePath(machineId, `pane/rewind?pane_id=${encodeURIComponent(paneId)}`));
+}
+
+/** POST /api/pane/rewind: restores one checkpoint, in the agent's dialog or directly once it ended. */
+export async function rewindPane(request: RewindRequest, machineId = "local"): Promise<RewindResult> {
+  return await getJson<RewindResult>(machinePath(machineId, "pane/rewind"), {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(request),
+    signal: AbortSignal.timeout(30_000),
+  });
 }
 
 /**

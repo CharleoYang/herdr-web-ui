@@ -9,7 +9,10 @@ import { mergeCatalogSources } from "./catalog-sources.ts";
 import { rememberPaneCommands, scanPaneCommands } from "./commands.ts";
 import { paneFiles } from "./files.ts";
 import { badRequest, conflictResponse, errorResponse, isCount, isJsonObject, jsonResponse, readJsonObject, requestIdContext, setRequestRoute } from "./http.ts";
-import { conversationImage, ConversationReadPending, ConversationUnavailable, forgetPaneTranscriptState, HistoryChanged, paneConversation, paneProcessRoots, paneTranscript, toolOutput } from "./conversation.ts";
+import { conversationImage, ConversationReadPending, ConversationUnavailable, claudePaneSession, forgetPaneTranscriptState, HistoryChanged, paneConversation, paneProcessRoots, paneTranscript, toolOutput } from "./conversation.ts";
+import { readFileSync } from "node:fs";
+import { applyOfflineRewind, claudeHistoryDir, offlineRewindPlan, rewindPoints } from "./rewind.ts";
+import { driveRewind, RewindStopped, rewindMode, type RewindDriver } from "./rewind-run.ts";
 import { OPENCODE_TOOL_REF } from "./opencode.ts";
 import { openCodeFlagVersion, openCodeInstalledVersion } from "./opencode-service.ts";
 import { DevinHistoryChanged } from "./devin.ts";
@@ -327,6 +330,75 @@ export async function handlePaneRequest(request: Request, url: URL, pathname: st
         await paneSendKeys(payload.pane_id, payload.keys);
       }
       return jsonResponse({ ok: true });
+    } catch (error) {
+      return errorResponse(error);
+    }
+  }
+
+  if (pathname === "/api/pane/rewind") {
+    setRequestRoute(pathname);
+    if (request.method === "GET") {
+      const paneId = url.searchParams.get("pane_id");
+      if (!paneId) return badRequest("missing_pane_id", "pane_id query parameter is required");
+      try {
+        const { pane } = await paneContext(paneId);
+        const session = await claudePaneSession(pane);
+        if (session === null) return jsonResponse({ mode: rewindMode(false), points: [], reason: "no_session" });
+        // a session being written: the points read so far are the ones the dialog would show
+        const points = rewindPoints(readFileSync(session.path, "utf8"));
+        return jsonResponse({ mode: rewindMode(session.pid !== null), points, ...(points.length === 0 ? { reason: "no_points" } : {}) });
+      } catch (error) {
+        return errorResponse(error);
+      }
+    }
+    if (request.method !== "POST") return badRequest("method_not_allowed", "use GET or POST");
+    const payload = await readJsonObject<{ pane_id?: unknown; message_id?: unknown; restore?: unknown }>(request);
+    if (payload instanceof Response) return payload;
+    if (typeof payload.pane_id !== "string" || payload.pane_id.length === 0) return badRequest("missing_pane_id", "pane_id is required");
+    if (typeof payload.message_id !== "string" || payload.message_id.length === 0) return badRequest("missing_message_id", "message_id is required");
+    const restore = payload.restore ?? "conversation";
+    if (restore !== "conversation" && restore !== "code" && restore !== "both") return badRequest("invalid_restore", "restore must be conversation, code or both");
+    const paneId = payload.pane_id;
+    try {
+      const { pane, cwd } = await paneContext(paneId);
+      const session = await claudePaneSession(pane);
+      if (session === null) return conflictResponse("rewind_session_missing", "this pane's Claude session cannot be read");
+      const jsonl = readFileSync(session.path, "utf8");
+      const point = rewindPoints(jsonl).find((candidate) => candidate.message_id === payload.message_id);
+      if (point === undefined) return conflictResponse("rewind_point_unknown", "the session holds no such message");
+      if (restore !== "conversation" && point.files === 0) return conflictResponse("rewind_no_code", "this message changed no file to put back");
+      const mode = rewindMode(session.pid !== null);
+      if (mode === "terminal") {
+        // the agent is running: its own dialog does the work, and every step is read back first
+        const driver: RewindDriver = {
+          read: async () => (await paneRead({ paneId, source: "detection", format: "text" })).text,
+          type: async (text) => paneSendText(paneId, text),
+          keys: async (keys) => paneSendKeys(paneId, [...keys]),
+          sleep: async (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+        };
+        try {
+          await driveRewind(driver, point, restore);
+        } catch (error) {
+          if (error instanceof RewindStopped) return conflictResponse(error.reason, error.message);
+          throw error;
+        }
+        forgetPaneTranscriptState(paneId);
+        return jsonResponse({ mode, point, restored: [], backup: null });
+      }
+      const historyDir = claudeHistoryDir(session.path);
+      if (historyDir === null) return conflictResponse("rewind_session_missing", "this session keeps no file checkpoints");
+      const plan = offlineRewindPlan(jsonl, {
+        sessionPath: session.path,
+        messageId: point.message_id,
+        historyDir,
+        cwd,
+        backupSuffix: `${Date.now()}`,
+      });
+      if (plan === null) return conflictResponse("rewind_point_unknown", "the session holds no such message");
+      // the agent has ended: the same edits, made directly — files back, the conversation cut
+      const outcome = applyOfflineRewind(plan, session.path, { files: restore !== "conversation", truncate: restore !== "code" });
+      forgetPaneTranscriptState(paneId);
+      return jsonResponse({ mode, point, restored: outcome.restored, backup: outcome.truncated ? plan.backup : null, ...(outcome.missing.length > 0 ? { missing: outcome.missing } : {}) });
     } catch (error) {
       return errorResponse(error);
     }
