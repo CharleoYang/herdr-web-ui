@@ -36,6 +36,7 @@ export const CHAT_KO: Record<string, string> = {
   "Worked": "작업함",
   "Rewind in terminal": "터미널에서 되감기",
   "Rewind to a message": "메시지로 되감기",
+  "Try in chat": "채팅에서 시도",
   "Restore conversation": "대화 복원",
   "Restore code and conversation": "코드와 대화 복원",
   "Restore code": "코드 복원",

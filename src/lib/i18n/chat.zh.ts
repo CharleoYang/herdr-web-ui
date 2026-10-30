@@ -36,6 +36,7 @@ export const CHAT_ZH: Record<string, string> = {
   "Worked": "已工作",
   "Rewind in terminal": "在终端中回退",
   "Rewind to a message": "回退到某条消息",
+  "Try in chat": "在对话中试一下",
   "Restore conversation": "恢复对话",
   "Restore code and conversation": "恢复代码与对话",
   "Restore code": "恢复代码",

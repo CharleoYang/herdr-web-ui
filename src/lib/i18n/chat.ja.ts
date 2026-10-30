@@ -36,6 +36,7 @@ export const CHAT_JA: Record<string, string> = {
   "Worked": "作業完了",
   "Rewind in terminal": "ターミナルで巻き戻す",
   "Rewind to a message": "メッセージまで巻き戻す",
+  "Try in chat": "チャットで試す",
   "Restore conversation": "会話を復元",
   "Restore code and conversation": "コードと会話を復元",
   "Restore code": "コードを復元",

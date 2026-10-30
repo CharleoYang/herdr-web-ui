@@ -81,7 +81,12 @@ export function RewindMenu({ paneId, onClose, onRestored, onTerminal }: {
                   : choice.label === "Restore code" ? t("Restore code")
                     : t("Restore conversation")
               }</button>)
-              : <button type="button" onClick={onTerminal}>{t("Rewind in terminal")}</button>}
+              : <>
+                <button type="button" onClick={onTerminal}>{t("Rewind in terminal")}</button>
+                {/* the live dialog stays the terminal's by default (#1577); this walks it from here,
+                    refusing at every step it cannot verify, and never confirms a guess */}
+                <button type="button" disabled={working} onClick={() => void restore(point, "conversation")}>{t("Try in chat")}</button>
+              </>}
           </div>
         </li>;
       })}
