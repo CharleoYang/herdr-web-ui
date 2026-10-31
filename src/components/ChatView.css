@@ -1794,9 +1794,14 @@ ol.markdown-list {
   margin: 0;
 }
 
-/* the rail scrolls; the open plan takes its own height instead of a boxed-in scroll area */
+/* the rail scrolls; the open plan takes its own height instead of a boxed-in scroll area.
+   It is not a scroll container here at all: `overflow-y: auto` with nothing to scroll, plus
+   `overscroll-behavior: contain`, swallows the wheel — Chrome honours the containment on a box that
+   cannot scroll, so the list below the fold could not be reached at all. */
 .chat-side .chat-todo-pinned[open] .chat-todo-detail {
   max-height: none;
+  overflow-y: visible;
+  overscroll-behavior-y: auto;
 }
 
 .chat-todo-pinned[open] .chat-todo-detail {

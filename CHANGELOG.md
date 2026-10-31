@@ -87,6 +87,13 @@ between releases do not reach them. Remote-PC runtime bundles are versioned sepa
   default and adjust its code/control contrast to the upstream AA checks.
 
 ### Fixed
+- The todo list in the chat's right rail scrolls under the wheel again. Its detail kept
+  `overflow-y: auto` with `overscroll-behavior: contain` after the rail had already made it take its
+  own height, so it was a scroll container with nothing to scroll and Chrome honoured the
+  containment: the wheel was swallowed there and the rail never moved, leaving the tasks below the
+  fold unreachable. In the rail the detail is no scroll container now; the rail is the only one.
+  Reproduced and verified in Chromium: the same wheel over a 40-item list moved the rail 0 → 278px
+  (its full extent), and 278 → 578 of 739 with the rail docked on a 700px-wide pane.
 - A failed prompt read no longer clears the question card on bridges without prompt push: the card
   stays with its ticked options and typed answer and says it is not updated, as upstream's #1335 does.
 - A conversation read that answers after a hide, disconnect or agent change draws nothing.
