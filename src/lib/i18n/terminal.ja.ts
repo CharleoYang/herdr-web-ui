@@ -93,7 +93,6 @@ export const TERMINAL_JA: Record<string, string> = {
   "Close pane": "ペインを閉じる",
   "Wrap to screen": "画面の幅で折り返す",
   "Original width": "元の幅で表示",
-  "Save": "保存",
   "Jump to bottom": "一番下へ移動",
   "Scroll failed: {reason}": "スクロールに失敗しました: {reason}",
   "Quote in message": "メッセージに引用",

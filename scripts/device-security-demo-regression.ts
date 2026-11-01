@@ -277,6 +277,8 @@ try {
           await context.addInitScript((settings) => localStorage.setItem("ovis:settings", settings), settingsOf(language, theme));
           const press = async (target: Locator): Promise<void> => { if (phone) await target.tap(); else await target.click(); };
           const closeSettings = async (page: Page): Promise<void> => {
+            // Pair a device's code is in the Connect a phone dialog, which closes by itself once the device is in
+            await page.locator(".connect-phone-dialog").waitFor({ state: "detached", timeout: PAIRS_WITHIN_MS });
             await page.keyboard.press("Escape");
             await page.locator(".settings-dialog").waitFor({ state: "detached" });
             await settled(page);

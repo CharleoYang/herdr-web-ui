@@ -93,7 +93,6 @@ export const TERMINAL_KO: Record<string, string> = {
   "Close pane": "패널 닫기",
   "Wrap to screen": "화면 폭에 맞춰 줄바꿈",
   "Original width": "원래 폭으로 보기",
-  "Save": "저장",
   "Jump to bottom": "맨 아래로 이동",
   "Scroll failed: {reason}": "스크롤 실패: {reason}",
   "Quote in message": "메시지에 인용",

@@ -1,0 +1,57 @@
+.connect-phone-dialog {
+  width: min(100%, 520px);
+}
+
+.connect-phone-dialog:focus {
+  outline: none;
+}
+
+.connect-phone-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  overflow-y: auto;
+}
+
+.connect-phone-route,
+.connect-phone-relay,
+.connect-phone-code {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  min-width: 0;
+}
+
+.connect-phone-route[hidden] {
+  display: none;
+}
+
+.connect-phone-route p {
+  margin: 0;
+}
+
+.connect-phone-route a,
+.connect-phone-how a {
+  color: var(--accent);
+}
+
+.connect-phone-route .relay-pairing {
+  display: flex;
+}
+
+.connect-phone-how {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding-top: var(--space-3);
+  border-top: var(--hairline) solid var(--border);
+}
+
+.connect-phone-how p {
+  margin: 0;
+}
+
+/* the toggle stands alone here, with no sentence before it to hang its dot on */
+.connect-phone-how .settings-details-toggle::before {
+  content: none;
+}

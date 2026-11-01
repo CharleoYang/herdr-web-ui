@@ -21,7 +21,9 @@ import { createHash } from "node:crypto";
 import { closeSync, mkdtempSync, openSync, readdirSync, readSync, rmSync, writeFileSync, writeSync } from "node:fs";
 import { open, type FileHandle } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
+import { readStatusline, type StatuslinePayload } from "./statusline.ts";
+import { installStatusline, removeStatusline, StatuslineInstallError, statuslineInstallState, type StatuslineInstallState } from "./statusline-install.ts";
 import type { ProviderUsage, UsageProblem, UsageProviderId, UsageReport, UsageWindow } from "../shared/protocol.ts";
 import { jsonResponse } from "./http.ts";
 import { opencodeDatabasePath } from "./opencode.ts";
@@ -47,6 +49,8 @@ export interface UsageContext {
   keychain(service: string, account?: string): Promise<KeychainRead>;
   /** a command's trimmed stdout, or null when it is missing, fails or hangs */
   run(argv: string[], timeoutMs?: number): Promise<string | null>;
+  /** whether a command is installed on this server's PATH */
+  has(command: string): boolean;
   now(): number;
 }
 
@@ -92,14 +96,20 @@ interface Reading {
   windows: UsageWindow[];
   /** whose numbers these are, when the answer says and the sign-in did not */
   account?: Account | null;
+  /** when a local reading was taken (epoch ms); an endpoint's answer is taken now */
+  checkedAt?: number;
 }
 
 export interface UsageProvider {
   id: UsageProviderId;
   /** every sign-in of this provider on this PC; none when not signed in here */
   signIns(ctx: UsageContext): Promise<Found[]>;
+  /** A token-free reading matched to this sign-in; checked before endpoint expiry/backoff gates. */
+  readLocal?(ctx: UsageContext, signIn: SignIn): Reading | null;
   /** null: signed in, but to an account without this plan */
   read(ctx: UsageContext, signIn: SignIn): Promise<Reading | null>;
+  /** the command a sign-in may be kept behind that this PC lacks, so `signIns` could not look there; null when none */
+  missingCommand?(ctx: UsageContext): string | null;
 }
 
 /** an answer past MAX_READ_BYTES */
@@ -307,6 +317,18 @@ function claudeWindow(value: unknown, kind: UsageWindow["kind"], scope: string |
   return used === null ? null : { kind, scope, used_percent: percent(used), resets_at: resetsAt, starts_at: startOf(resetsAt, seconds) };
 }
 
+/**
+ * Claude's windows from the payload its own status line draws (server/statusline.ts): the five-hour
+ * session and the week, exactly the numbers the CLI shows, with no request and no token. The API
+ * below stays the fallback for a machine whose status line has not written a payload yet.
+ */
+function claudeStatuslineWindows(payload: StatuslinePayload): UsageWindow[] {
+  const windows: UsageWindow[] = [];
+  if (payload.fiveHour) windows.push({ kind: "session", scope: null, used_percent: percent(payload.fiveHour.usedPercent), resets_at: payload.fiveHour.resetsAt, starts_at: startOf(payload.fiveHour.resetsAt, FIVE_HOURS) });
+  if (payload.sevenDay) windows.push({ kind: "week", scope: null, used_percent: percent(payload.sevenDay.usedPercent), resets_at: payload.sevenDay.resetsAt, starts_at: startOf(payload.sevenDay.resetsAt, SEVEN_DAYS) });
+  return windows;
+}
+
 const claude: UsageProvider = {
   id: "claude",
   async signIns(ctx) {
@@ -318,6 +340,12 @@ const claude: UsageProvider = {
       return keychainOrFile(keychain, file, home.source, account).map((found) => ({ ...found, home: home.home }));
     }));
     return found.flat();
+  },
+  readLocal(ctx, signIn) {
+    const local = readStatusline(ctx.home, ctx.now());
+    if (!local?.account || local.account.id !== signIn.account?.id) return null;
+    const windows = claudeStatuslineWindows(local);
+    return windows.length > 0 ? { plan: signIn.plan ?? null, windows, checkedAt: local.readAt } : null;
   },
   async read(ctx, signIn) {
     const body = await requestJson(ctx, "https://api.anthropic.com/api/oauth/usage", {
@@ -663,6 +691,8 @@ const antigravity: UsageProvider = {
       : await fromKeychain(ctx, "gemini", ["antigravity"], antigravitySignIn);
     return keychainOrFile(keychain, file, "keychain");
   },
+  // Linux: the CLI keeps its sign-in in the Secret Service keyring, read here only through secret-tool
+  missingCommand: (ctx) => ctx.platform === "linux" && !ctx.has("secret-tool") ? "secret-tool" : null,
   async read(ctx, signIn) {
     const init: RequestInit = {
       method: "POST",
@@ -928,6 +958,7 @@ export function systemUsageContext(): UsageContext {
     fetch: (url, init) => fetch(url, init),
     keychain: readKeychain,
     run: runCommand,
+    has: (command) => Bun.which(command) !== null,
     now: Date.now,
   };
 }
@@ -950,6 +981,34 @@ interface Search {
 export class UsageService {
   /** A local CLI login ended: rediscover sign-ins, preserving account rate-limit backoffs. */
   invalidate(): void { this.searches.clear(); this.entries.clear(); }
+  /** Whether Claude's status line is wrapped here (server/statusline-install.ts), on this server's home and CLAUDE_CONFIG_DIR. */
+  statusline(): StatuslineInstallState {
+    return statuslineInstallState(this.statuslineOptions());
+  }
+
+  /** Turns the status-line reading on or off; Claude's next reading comes from where it now can. */
+  setStatusline(enabled: boolean): StatuslineInstallState {
+    try {
+      if (enabled) installStatusline(this.statuslineOptions());
+      else removeStatusline(this.statuslineOptions());
+    } finally {
+      this.invalidate();
+    }
+    return this.statusline();
+  }
+
+/** Whether a Claude sign-in found at `source` (claudeHomes) lives in the config directory the switch changes. */
+  private switchesConfigOf(source: string): boolean {
+    const configured = this.ctx.env["CLAUDE_CONFIG_DIR"]?.trim();
+    // "default" is ~/.claude: the same sign-in found there and under CLAUDE_CONFIG_DIR is kept once, as "default"
+    const defaultDir = join(this.ctx.home, ".claude");
+    // the label "default" is a source's only: a configured directory is a path, whatever its name
+    return resolve(source === "default" ? defaultDir : source) === resolve(configured || defaultDir);
+  }
+
+  private statuslineOptions() {
+    return { home: this.ctx.home, configDir: this.ctx.env["CLAUDE_CONFIG_DIR"] };
+  }
   private readonly searches = new Map<UsageProviderId, Search>();
   /** by provider and source */
   private readonly entries = new Map<string, Entry>();
@@ -977,7 +1036,8 @@ export class UsageService {
 
   private async collect(refresh: boolean): Promise<UsageReport> {
     const now = this.ctx.now();
-    const usages = await Promise.all(this.providers.map((provider) => this.collectProvider(provider, now, refresh)));
+    const missing = new Map(this.providers.flatMap((provider) => { const command = provider.missingCommand?.(this.ctx) ?? null; return command === null ? [] : [[provider.id, command] as const]; }));
+    const usages = await Promise.all(this.providers.map((provider) => this.collectProvider(provider, now, refresh, missing.has(provider.id))));
     // one account found in two places is listed once: the reading without a problem, else the first
     const byKey = new Map<string, ProviderUsage>();
     for (const usage of usages.flat()) {
@@ -991,15 +1051,18 @@ export class UsageService {
       if (group.length < 2) continue;
       group.sort((a, b) => a.key.localeCompare(b.key)).forEach((usage, i) => byKey.set(usage.key, { ...usage, account: `#${i + 1}` }));
     }
-    return { providers: [...byKey.values(), ...await this.additional(refresh)] };
+    // a provider with an account found here needs nothing more; one with none names what it could not look with (a hub's accounts are not this PC's)
+    const missingCommands = [...missing].filter(([id]) => !usages.flat().some((usage) => usage.id === id)).map(([provider, command]) => ({ provider, command }));
+    return { providers: [...byKey.values(), ...await this.additional(refresh)], ...(missingCommands.length > 0 ? { missing_commands: missingCommands } : {}) };
   }
 
-  private async collectProvider(provider: UsageProvider, now: number, refresh: boolean): Promise<ProviderUsage[]> {
+  /** `incomplete`: a command it looks with is missing, so the search is not kept: the next report looks again, finding a sign-in once it is installed */
+  private async collectProvider(provider: UsageProvider, now: number, refresh: boolean, incomplete: boolean): Promise<ProviderUsage[]> {
     const search = this.searches.get(provider.id);
     // an account's readAt is never later than its provider's, so a forced search may ask each again
     const forced = refresh && search !== undefined && now - search.readAt >= MIN_REFRESH_MS;
     const usages = (sources: readonly string[]) => sources.map((source) => this.entries.get(source)?.usage ?? null).filter((usage): usage is ProviderUsage => usage !== null);
-    if (search && now < search.nextAt && !forced) return usages(search.sources);
+    if (search && now < search.nextAt && !forced && !incomplete) return usages(search.sources);
 
     let found: Found[];
     try { found = await provider.signIns(this.ctx); } catch { found = []; }
@@ -1015,7 +1078,7 @@ export class UsageService {
     for (const source of search?.sources ?? []) if (!read.some(([found]) => found === source)) this.entries.delete(source);
     for (const [source, entry] of read) this.entries.set(source, entry);
     const sources = read.map(([source]) => source);
-    this.searches.set(provider.id, { readAt: now, nextAt: Math.min(now + FRESH_MS, ...read.map(([, entry]) => entry.nextAt)), sources });
+    this.searches.set(provider.id, { readAt: now, nextAt: incomplete ? now : Math.min(now + FRESH_MS, ...read.map(([, entry]) => entry.nextAt)), sources });
     return usages(sources);
   }
 
@@ -1036,11 +1099,22 @@ export class UsageService {
     }, wait);
     if ("locked" in found) return keep("locked", null, FRESH_MS);
     const signIn: SignIn = found;
-    if (signIn.expiresAt !== null && signIn.expiresAt <= now) return keep("expired", signIn.plan ?? null, RETRY_MS);
+    const local = provider.readLocal?.(this.ctx, signIn) ?? null;
+    const fromLocal = (reading: Reading): Entry => {
+      const resets = reading.windows.flatMap((window) => window.resets_at === null ? [] : [Date.parse(window.resets_at)]);
+      return settle({ id: provider.id, ...identity(reading.account), plan: reading.plan ?? signIn.plan ?? null,
+        windows: reading.windows, problem: null, checked_at: new Date(reading.checkedAt ?? now).toISOString() }, Math.min(FRESH_MS, ...resets.map((reset) => reset - now)));
+    };
+    // a local reading as recent as the endpoint's own cache stands for it; an older one only when the
+    // endpoint cannot answer (an expired token, a refusal, a blocked network), with its own time
+    if (local && now - (local.checkedAt ?? now) < FRESH_MS) return fromLocal(local);
+    // a fallback never replaces a newer endpoint answer kept from before: that one stays, named by the problem
+    const fallback = local !== null && !(kept?.checked_at && Date.parse(kept.checked_at) > (local.checkedAt ?? now)) ? local : null;
+    if (signIn.expiresAt !== null && signIn.expiresAt <= now) return fallback ? fromLocal(fallback) : keep("expired", signIn.plan ?? null, RETRY_MS);
     // a 429 holds for the account, not the place: a sign-in moved or copied elsewhere waits too
     const backoff = found.account ? `${provider.id}:${found.account.id}` : `${provider.id}#${createHash("sha256").update(signIn.token).digest("hex")}`;
     const until = this.backoffs.get(backoff);
-    if (until !== undefined && now < until) return keep("rate_limited", signIn.plan ?? null, until - now);
+    if (until !== undefined && now < until) return fallback ? fromLocal(fallback) : keep("rate_limited", signIn.plan ?? null, until - now);
     this.backoffs.delete(backoff);
     try {
       const reading = await provider.read(this.ctx, signIn);
@@ -1049,12 +1123,22 @@ export class UsageService {
         id: provider.id, ...identity(reading.account), plan: reading.plan ?? signIn.plan ?? null, windows: reading.windows, problem: null, checked_at: new Date(now).toISOString(),
       }, FRESH_MS);
     } catch (error) {
-      if (error instanceof UsageHttpError && (error.status === 401 || error.status === 403)) return keep("expired", signIn.plan ?? null, RETRY_MS);
-      if (error instanceof UsageHttpError && error.status === 429) {
-        const wait = Math.max(RETRY_MS, error.retryAfterMs ?? FRESH_MS);
-        this.backoffs.set(backoff, now + wait);
-        return keep("rate_limited", signIn.plan ?? null, wait);
+      const wait = Math.max(RETRY_MS, error instanceof UsageHttpError ? error.retryAfterMs ?? FRESH_MS : 0);
+      if (error instanceof UsageHttpError && error.status === 429) this.backoffs.set(backoff, now + wait);
+      if (fallback) return fromLocal(fallback);
+      if (error instanceof UsageHttpError && (error.status === 401 || error.status === 403)) {
+        const expired = keep("expired", signIn.plan ?? null, RETRY_MS);
+        // a 403 for a token that has not expired is a refusal, not an expiry: the status line can stand in
+        const refused = provider.id === "claude" && error.status === 403 && (signIn.expiresAt === null || signIn.expiresAt > now);
+        const statusline = this.statusline();
+        // offered only where it can be turned on (never on Windows, never once it is on), and only for the
+        // sign-in in the config directory the switch changes: another one's status line is not wrapped
+        if (refused && expired.usage && statusline.supported && !statusline.installed && this.switchesConfigOf(found.source)) {
+          expired.usage = { ...expired.usage, statusline_offer: true };
+        }
+        return expired;
       }
+      if (error instanceof UsageHttpError && error.status === 429) return keep("rate_limited", signIn.plan ?? null, wait);
       console.warn(`usage: ${provider.id} could not be read: ${error instanceof Error ? error.message : String(error)}`);
       return keep("failed", signIn.plan ?? null, RETRY_MS);
     }
@@ -1092,4 +1176,27 @@ export async function localSignInPlace(ctx: UsageContext, key: string): Promise<
 export async function handleUsageRequest(request: Request, url: URL, service: UsageService): Promise<Response> {
   if (request.method !== "GET") return jsonResponse({ error: { code: "method_not_allowed", message: "Use GET /api/usage" } }, 405, { allow: "GET" });
   return jsonResponse(await service.report(url.searchParams.get("refresh") === "1"), 200, { "cache-control": "no-store" });
+}
+
+/**
+ * GET /api/usage/statusline: whether Claude's limits are read from its status line on this PC.
+ * POST /api/usage/statusline `{ "enabled": boolean }`: turns that on or off. The body names nothing
+ * else (no path, no command): what is installed and where is this server's own decision.
+ */
+export async function handleStatuslineRequest(request: Request, service: UsageService): Promise<Response> {
+  if (request.method === "GET") return jsonResponse(service.statusline(), 200, { "cache-control": "no-store" });
+  if (request.method !== "POST") return jsonResponse({ error: { code: "method_not_allowed", message: "Use GET or POST /api/usage/statusline" } }, 405, { allow: "GET, POST" });
+  const body: unknown = await request.json().catch(() => null);
+  if (typeof body !== "object" || body === null || Array.isArray(body) || Object.keys(body).length !== 1 || typeof (body as Record<string, unknown>)["enabled"] !== "boolean") {
+    return jsonResponse({ error: { code: "invalid_body", message: "Send { \"enabled\": true } or { \"enabled\": false }" } }, 400);
+  }
+  try {
+    return jsonResponse(service.setStatusline((body as { enabled: boolean }).enabled), 200, { "cache-control": "no-store" });
+  } catch (error) {
+    // only the installer's own refusals are told: anything else (a settings.json that will not parse, a
+    // filesystem error) could quote the user's settings, and a saved command can carry a secret
+    if (error instanceof StatuslineInstallError) return jsonResponse({ error: { code: "statusline_failed", message: error.message } }, 409);
+    console.warn(`usage: Claude's status line could not be changed: ${error instanceof Error ? error.message : String(error)}`);
+    return jsonResponse({ error: { code: "statusline_failed", message: "Claude's status line could not be changed; the server's log says why" } }, 500);
+  }
 }

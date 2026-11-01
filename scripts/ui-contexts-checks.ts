@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { chromium, type Browser } from "playwright-core";
 import { createServer } from "../server/index.ts";
 import { herdrRpc, workspaceCreate, workspaceClose } from "../server/herdr/client.ts";
-import { UsageService } from "../server/usage.ts";
+import { systemUsageContext, UsageService } from "../server/usage.ts";
 import { checkPushSettings } from "./push-settings-regression.ts";
 import { checkWakeLock } from "./wake-lock-regression.ts";
 import { checkSecretInput } from "./secret-input-regression.ts";
@@ -23,6 +23,8 @@ import { checkHeaderLensSwitch } from "./header-lens-switch-regression.ts";
 import { checkTerminalComposition } from "./terminal-composition-regression.ts";
 import { checkTabMenu } from "./tab-menu-regression.ts";
 import { checkDefaultView } from "./default-view-regression.ts";
+import { checkSettingSurvivesReload } from "./settings-unload-regression.ts";
+import { checkSettingsAcrossTabs } from "./settings-tabs-regression.ts";
 import { checkTerminalInputSpacing } from "./terminal-input-spacing-regression.ts";
 import { checkComposerReconnect } from "./composer-reconnect-regression.ts";
 import { checkDroplet } from "./droplet-regression.ts";
@@ -81,7 +83,7 @@ export async function runUiContextChecks(): Promise<void> {
     await herdrRpc("pane.report_agent", { pane_id: paneB, source: "manual", agent: "codex", state: "idle" });
 
     // herdr's config is none here, whatever HERDR_CONFIG_PATH the shell passed on: checkTerminalCopy asserts herdr's default
-    server = createServer({ port: 0, hostname: "127.0.0.1", token: "", stateDir: root, usage: new UsageService(undefined, []), herdrConfigPath: join(root, "no-herdr-config.toml") });
+    server = createServer({ port: 0, hostname: "127.0.0.1", token: "", stateDir: root, usage: new UsageService({ ...systemUsageContext(), home: root, env: {} }, []), herdrConfigPath: join(root, "no-herdr-config.toml") });
     const origin = `http://127.0.0.1:${server.port}`;
     browser = await chromium.launch({
       executablePath: chromePath(),
@@ -107,6 +109,8 @@ export async function runUiContextChecks(): Promise<void> {
     await timed("checkTerminalComposition", () => checkTerminalComposition(browser!, origin));
     await timed("checkTabMenu", () => checkTabMenu(browser!, origin));
     await timed("checkDefaultView", () => checkDefaultView(browser!, origin));
+    await timed("checkSettingSurvivesReload", () => checkSettingSurvivesReload(browser!, origin));
+    await timed("checkSettingsAcrossTabs", () => checkSettingsAcrossTabs(browser!, origin));
     await timed("checkTerminalInputSpacing", () => checkTerminalInputSpacing(browser!, origin));
     await timed("checkComposerReconnect", () => checkComposerReconnect(browser!, origin, paneB));
     await timed("checkDroplet", () => checkDroplet(browser!, origin));

@@ -93,7 +93,6 @@ export const TERMINAL_ZH: Record<string, string> = {
   "Close pane": "关闭面板",
   "Wrap to screen": "按屏幕宽度换行",
   "Original width": "按原始宽度显示",
-  "Save": "保存",
   "Jump to bottom": "跳转到底部",
   "Scroll failed: {reason}": "滚动失败：{reason}",
   "Quote in message": "引用到消息",

@@ -17,8 +17,8 @@ import { OPENCODE_TOOL_REF } from "./opencode.ts";
 import { openCodeFlagVersion, openCodeInstalledVersion } from "./opencode-service.ts";
 import { DevinHistoryChanged } from "./devin.ts";
 import { agentRename, HerdrError, layoutSetSplitRatio, paneClear, paneClose, paneFind, paneFocus, paneRead, paneRename, paneResize, paneScroll, paneScrollInfo, paneSelectionRead, paneSendKeys, paneSendText, paneSplit, paneSwap, paneSwapWith, paneZoom } from "./herdr/client.ts";
-import { ompScreenContext } from "./omp-status.ts";
 import { paneContext, resolveAgent, versionSourceOf } from "./pane-context.ts";
+import { ompScreenContext } from "./omp-status.ts";
 import { PasteImageError, readImageBody, savePaneImage } from "./paste.ts";
 import { CLAUDE_REWIND_OPEN_MESSAGE } from "./dialogs/claude.ts";
 import { claudeRewindOpen } from "./prompt.ts";
@@ -256,9 +256,9 @@ export async function handlePaneRequest(request: Request, url: URL, pathname: st
     const ref = url.searchParams.get("ref");
     if (!paneId || !ref) return badRequest("missing_parameter", "pane_id and ref query parameters are required");
     try {
-      const image = await conversationImage(paneId, ref, options.codexHome, options.opencodeDb);
+      const image = await conversationImage(paneId, ref, options.codexHome, options.opencodeDb, options.grokHome);
       if (image === null) return jsonResponse({ error: { code: "image_not_found", message: "no such image in this pane's conversation" } }, 404);
-      // Claude and pi embed immutable bytes and omp names a blob by its digest; Codex files and
+      // Claude and pi embed immutable bytes, and omp, Grok and Copilot name a picture by its digest; Codex files and
       // OpenCode tool-image ordinals can change, and a Codex tool's picture (`codex-tool:`) loads with its row.
       const cacheControl = ref.startsWith("codex-") || ref.startsWith("opencode:") ? "private, no-store" : "private, max-age=86400, immutable";
       return new Response(image.bytes, { headers: { "content-type": image.mediaType, "cache-control": cacheControl, "x-content-type-options": "nosniff" } });
@@ -288,6 +288,7 @@ export async function handlePaneRequest(request: Request, url: URL, pathname: st
         : { ...conversation, metadata: { ...(conversation.metadata ?? { model: null, reasoning_effort: null }), context: screenContext } };
       // no-store keeps the browser's own cache out of it, so the chat sees the 304.
       // weak: the same answer goes out gzipped or plain (compress.ts), which are not the same bytes
+      // the screen's figure is not in `version`, so it is named here: a changed percent is a new answer
       const etag = `W/"${version}${screenContext === null ? "" : `-ctx${screenContext.used}:${screenContext.window}`}"`;
       const headers = { etag, "cache-control": "no-store" };
       if (request.headers.get("if-none-match")?.replace(/^W\//, "") === etag.slice(2)) return new Response(null, { status: 304, headers });

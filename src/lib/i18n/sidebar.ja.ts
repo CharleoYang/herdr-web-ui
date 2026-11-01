@@ -17,7 +17,6 @@ export const SIDEBAR_JA: Record<string, string> = {
   "Agent {status}": "エージェント {status}",
   "Loading agents…": "エージェントを読み込み中…",
   "Herdr workspaces": "herdr ワークスペース",
-  "Agents": "エージェント",
   "Group by agent": "エージェントでグループ化",
   "Group by workspace": "ワークスペースでグループ化",
   "No agents running": "実行中のエージェントはありません",

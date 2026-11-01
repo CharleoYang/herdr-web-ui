@@ -3,7 +3,7 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { appName, CONTENT_SECURITY_POLICY, contentSecurityPolicy, manifestBody, relateManifest, renameManifest, renameShell, requestOrigin, serveStatic } from "./static.ts";
+import { appName, CONTENT_SECURITY_POLICY, contentSecurityPolicy, manifestBody, relateManifest, renameManifest, renameShell, requestOrigin, serveStatic, shellContentSecurityPolicy } from "./static.ts";
 import { writeAssetArchive } from "./asset-archive.ts";
 
 // The sources Vite builds from: public/ is copied into dist/ as it is, and the meta survives the build.
@@ -153,5 +153,27 @@ describe("the client archive", () => {
     expect((await response.json()).related_applications).toEqual([{ platform: "webapp", id: "http://127.0.0.1:7317/" }]);
     const escaped = await serveStatic("/../package.json");
     expect(await escaped.text()).toContain("archived");
+  });
+});
+
+describe("the hosted shell's policy", () => {
+  const directives = (policy: string) => new Map(policy.split("; ").map((directive) => [directive.slice(0, directive.indexOf(" ")), directive]));
+
+  it("differs from the app's only in connect-src, media-src and frame-src", () => {
+    const app = directives(CONTENT_SECURITY_POLICY);
+    const hosted = directives(shellContentSecurityPolicy());
+    expect([...hosted.keys()]).toEqual([...app.keys()]);
+    const changed = [...app.keys()].filter((name) => app.get(name) !== hosted.get(name));
+    expect(changed).toEqual(["connect-src", "media-src", "frame-src"]);
+    expect(hosted.get("connect-src")).toBe("connect-src 'self' wss:");
+    expect(hosted.get("media-src")).toBe("media-src 'self' blob:");
+    expect(hosted.get("frame-src")).toBe("frame-src 'self' blob:");
+  });
+
+  it("keeps the inline styles xterm and the measured layouts need, and the bundled data: fonts", () => {
+    const hosted = directives(shellContentSecurityPolicy());
+    expect(hosted.get("style-src")).toBe("style-src 'self' 'unsafe-inline'");
+    expect(hosted.get("font-src")).toBe("font-src 'self' data:");
+    expect(hosted.get("script-src")).toBe("script-src 'self'");
   });
 });

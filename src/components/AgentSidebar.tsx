@@ -87,6 +87,8 @@ export interface AgentSidebarProps {
   stateWord(machine: Machine): string;
   /** this device only watches: it sees the shared mutes and cannot change them */
   watching?: boolean;
+  /** the native Herdr app owns tab names and ordering on these PCs */
+  appLayout?: (machineId: string) => boolean;
   onSelect(machineId: string, paneId: string): void;
   /** the app's own tab actions: they carry the split halves, the refresh and the notices */
   tabActions: {
@@ -126,7 +128,7 @@ interface PinMenu { key: string; anchor: HTMLElement; point?: { x: number; y: nu
  * right-click (or the context-menu key) opens the menu. A row's ⋯, or a right-click on it, opens its
  * menu, which pins or unpins it, and mutes or unmutes its alerts for every browser and device.
  */
-export function AgentSidebar({ machines, selectedMachineId, selectedPaneId, stateWord, watching = false, onSelect, tabActions, renameRequest = null, onRenameHandled }: AgentSidebarProps) {
+export function AgentSidebar({ machines, selectedMachineId, selectedPaneId, stateWord, watching = false, appLayout, onSelect, tabActions, renameRequest = null, onRenameHandled }: AgentSidebarProps) {
   const t = useT();
   const listId = useId();
   const [collapsed, setCollapsed] = useState(initialFold);
@@ -342,6 +344,7 @@ export function AgentSidebar({ machines, selectedMachineId, selectedPaneId, stat
   };
   // one row edits the name: a tab with two panes draws two rows, and both would otherwise open a field
   const beginRename = (machineId: string, paneId: string, tab: { tab_id: string; label: string; number: number }, place: number): void => {
+    if (appLayout?.(machineId)) return;
     settled.current = null;
     setRenaming({ machineId, paneId, tabId: tab.tab_id, value: customTabLabel(tab, place) ?? "" });
   };
@@ -361,6 +364,7 @@ export function AgentSidebar({ machines, selectedMachineId, selectedPaneId, stat
     void api.closeTab(tabId, machineId).catch((reason: unknown) => noted(machineId, reason));
   };
   const shiftTab = (machineId: string, workspaceId: string, tabId: string, by: number): void => {
+    if (appLayout?.(machineId)) return;
     const tabs = machines.find((machine) => machine.id === machineId)?.snapshot?.tabs.filter((candidate) => candidate.workspace_id === workspaceId) ?? [];
     const at = tabs.findIndex((candidate) => candidate.tab_id === tabId);
     if (at < 0 || at + by < 0 || at + by >= tabs.length) return;
@@ -453,13 +457,13 @@ export function AgentSidebar({ machines, selectedMachineId, selectedPaneId, stat
         const others = (machine.snapshot?.workspaces ?? []).filter((workspace) => workspace.workspace_id !== tab.workspace_id);
         const menuTab = { tab_id: tab.tab_id, label: tab.label, number: tab.number };
         return [
-          { id: "rename-tab", label: t("Rename tab"), icon: Pencil, run: () => beginRename(machine.id, menuRow.entry.pane.pane_id, menuTab, at + 1) },
-          ...(at > 0 ? [{ id: "tab-left", label: t("Move tab left"), icon: ArrowLeft, run: () => shiftTab(machine.id, tab.workspace_id, tab.tab_id, -1) }] : []),
-          ...(at >= 0 && at < tabs.length - 1 ? [{ id: "tab-right", label: t("Move tab right"), icon: ArrowRight, run: () => shiftTab(machine.id, tab.workspace_id, tab.tab_id, 1) }] : []),
-          ...others.map((workspace) => ({
+          ...(appLayout?.(machine.id) ? [] : [{ id: "rename-tab", label: t("Rename tab"), icon: Pencil, run: () => beginRename(machine.id, menuRow.entry.pane.pane_id, menuTab, at + 1) }]),
+          ...(!appLayout?.(machine.id) && at > 0 ? [{ id: "tab-left", label: t("Move tab left"), icon: ArrowLeft, run: () => shiftTab(machine.id, tab.workspace_id, tab.tab_id, -1) }] : []),
+          ...(!appLayout?.(machine.id) && at >= 0 && at < tabs.length - 1 ? [{ id: "tab-right", label: t("Move tab right"), icon: ArrowRight, run: () => shiftTab(machine.id, tab.workspace_id, tab.tab_id, 1) }] : []),
+          ...(appLayout?.(machine.id) ? [] : others.map((workspace) => ({
             id: `tab-to-${workspace.workspace_id}`, label: t("Move to workspace: {workspace}", { workspace: workspace.label }), icon: FolderInput,
             run: () => { void tabActions.moveTabToWorkspace({ machineId: machine.id, tabId: tab.tab_id, workspaceId: workspace.workspace_id }).catch((reason: unknown) => noted(machine.id, reason)); },
-          })),
+          }))),
           { id: "close-tab", label: t("Close tab"), icon: X, danger: true, run: () => closeTabOf(machine.id, tab.tab_id) },
         ];
       })() : []),

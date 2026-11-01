@@ -1,13 +1,12 @@
 import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type FocusEvent, type KeyboardEvent } from "react";
-import { ChevronDown, ChevronRight, Download, Monitor, Plus, Settings, SlidersHorizontal, X } from "lucide-react";
+import { ChevronDown, ChevronRight, Monitor, Plus, Settings, SlidersHorizontal, X } from "lucide-react";
 import { OWN_UPDATE_OFFER, type Machine, type MachineState, type MachineUpdate, type RemoteOvis } from "../../shared/machines.ts";
 import { copyText } from "../lib/clipboard.ts";
-import { MachineContext } from "../lib/machineContext.tsx";
+import { AppLayoutContext, MachineContext } from "../lib/machineContext.tsx";
 import { answerMachineSetup, machineRequest } from "../lib/api.ts";
 import { describeProgress } from "../lib/bridgeProgress.ts";
 import { keepDismissed, noticeKey, readDismissed, waitingMachines, writeDismissed } from "../lib/machineNotice.ts";
 import type { AppActions } from "../lib/actions.ts";
-import { useInstallPrompt } from "../lib/install.ts";
 import { Sidebar } from "./Sidebar.tsx";
 import { AgentSidebar } from "./AgentSidebar.tsx";
 import { SidebarActivityProvider, type SidebarActivity } from "../lib/sidebarActivity.tsx";
@@ -33,11 +32,9 @@ export const STATE_WORD: Readonly<Record<MachineState, string>> = {
 
 /** `activity`: App's live counters per PC and finishes looked at here; both sidebar lists draw from it.
  *  `machines` are the PCs this device shows; `hiddenCount` says how many it keeps out (Settings → Remote PCs) */
-interface Props { machines: Machine[]; hiddenCount?: number; selectedMachineId: string; selectedPaneId: string | null; activity: SidebarActivity; actions: AppActions; watching?: boolean; /** a phone's drawer is out: closing it clears the filter */ drawerOpen?: boolean; /** counts the command palette's Filter workspaces and agents: each new count shows the field and focuses it */ filterRequest?: number; onSelect(machineId: string, paneId: string | null): void; onNew(machineId: string): void; onSetup(machine: Machine, update?: boolean): void; /** a sign-in tab the usage popover opened */ onUsageLogin(paneId: string): void; /** the palette's Rename tab opens its sidebar field once */ renameRequest?: { machineId: string; paneId: string } | null; onRenameHandled?(): void }
+interface Props { machines: Machine[]; hiddenCount?: number; selectedMachineId: string; selectedPaneId: string | null; activity: SidebarActivity; actions: AppActions; watching?: boolean; /** whether the Herdr app owns the PC layout */ appLayout?: (machineId: string) => boolean; /** a phone's drawer is out: closing it clears the filter */ drawerOpen?: boolean; /** counts the command palette's Filter workspaces and agents: each new count shows the field and focuses it */ filterRequest?: number; onSelect(machineId: string, paneId: string | null): void; onNew(machineId: string): void; onSetup(machine: Machine, update?: boolean): void; /** a sign-in tab the usage popover opened */ onUsageLogin(paneId: string): void; /** the palette's Rename tab opens its sidebar field once */ renameRequest?: { machineId: string; paneId: string } | null; onRenameHandled?(): void }
 export function MachineSidebar(props: Props) {
   const t = useT();
-  const { canInstall, installed, install, help } = useInstallPrompt();
-  const [installHelpOpen, setInstallHelpOpen] = useState(false);
   const activity = props.activity;
   // the filter's query lives here and nowhere else: not in storage, not in the address, not past this
   // mount (lib/sidebarFilter.ts). The branch each roster row says comes up from the rosters, which read it.
@@ -186,14 +183,13 @@ export function MachineSidebar(props: Props) {
       {/* a PC kept out on this device is said, with the way to show it again */}
       {hiddenCount > 0 && <button type="button" className="machine-hidden-note" title={t("Choose the PCs this device shows")} onClick={() => { requestSettingsPage({ page: "remote", section: "sidebar-pcs" }); props.actions.openSettings(); }}>{hiddenCount === 1 ? t("1 PC hidden on this device") : t("{n} PCs hidden on this device", { n: hiddenCount })}</button>}
     </div>
-    <AgentSidebar machines={props.machines} selectedMachineId={props.selectedMachineId} selectedPaneId={props.selectedPaneId} stateWord={(machine) => t(STATE_WORD[machine.state])} watching={props.watching} onSelect={props.onSelect} renameRequest={props.renameRequest ?? null} onRenameHandled={props.onRenameHandled} tabActions={{ openTerminalTab: props.actions.openTerminalTab, moveTabToWorkspace: props.actions.moveTabToWorkspace }} />
+    <AgentSidebar machines={props.machines} selectedMachineId={props.selectedMachineId} selectedPaneId={props.selectedPaneId} stateWord={(machine) => t(STATE_WORD[machine.state])} watching={props.watching} appLayout={props.appLayout} onSelect={props.onSelect} renameRequest={props.renameRequest ?? null} onRenameHandled={props.onRenameHandled} tabActions={{ openTerminalTab: props.actions.openTerminalTab, moveTabToWorkspace: props.actions.moveTabToWorkspace }} />
     <footer className="sidebar-footer">
-      {/* browsers without an install prompt (iOS, plain HTTP) get the steps instead */}
-      {!installed && <button className="btn btn-ghost sidebar-footer-action" aria-expanded={canInstall ? undefined : installHelpOpen} onClick={() => { if (canInstall) void install(); else setInstallHelpOpen(!installHelpOpen); }}><Download aria-hidden="true" />{t("Install app")}</button>}
-      {!installed && !canInstall && installHelpOpen && <p className="sidebar-install-help" role="status">{help}</p>}
+      {/* no Install app here: a page knows it is installed only in the app's own window, so a row kept
+          showing in every tab. Settings → Phone & devices → Install offers it (SettingsDialog). */}
       <div className="sidebar-footer-row">
         <button className="btn btn-ghost sidebar-footer-action sidebar-footer-settings" aria-label={t("Settings")} title={t("Settings (⌘⇧,)")} onClick={props.actions.openSettings}><Settings aria-hidden="true" /></button>
-        <UsageMeters onLocalLogin={props.watching ? undefined : props.onUsageLogin} />
+        <UsageMeters watching={props.watching} onLocalLogin={props.watching ? undefined : props.onUsageLogin} />
       </div>
     </footer>
   </div></SidebarFilterProvider></SidebarActivityProvider>;
@@ -294,7 +290,7 @@ function MachineGroup({ machine, headerless = false, ...props }: Props & { machi
     {error && <p className="machine-error" role="alert">{error}</p>}
     {/* under a filter a folded PC's roster is mounted, hidden, so the branches it reads can be found */}
     {(!folded || filtered !== null) && <div className={online ? "" : "machine-offline"} inert={!online} hidden={folded}>
-      {!online && !machine.snapshot ? <p className="tree-state machine-empty" role="status">{t("No saved sessions")}</p> : <MachineContext.Provider value={machine.id}><Sidebar snapshot={machine.snapshot} online={online} selectedPaneId={props.selectedMachineId === machine.id ? props.selectedPaneId : null} actions={actions} watching={props.watching} /></MachineContext.Provider>}
+      {!online && !machine.snapshot ? <p className="tree-state machine-empty" role="status">{t("No saved sessions")}</p> : <MachineContext.Provider value={machine.id}><AppLayoutContext.Provider value={props.appLayout?.(machine.id) === true}><Sidebar snapshot={machine.snapshot} online={online} selectedPaneId={props.selectedMachineId === machine.id ? props.selectedPaneId : null} actions={actions} watching={props.watching} /></AppLayoutContext.Provider></MachineContext.Provider>}
     </div>}
     {/* the header's +, as the list's last row, also while the roster loads: an empty roster has its own New
         workspace, and a filtered list shows only what was looked for */}

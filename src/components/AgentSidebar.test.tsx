@@ -9,6 +9,7 @@ import { SettingsProvider } from "../lib/settings.ts";
 import type { SidebarFilter } from "../lib/sidebarFilter.ts";
 import { SidebarFilterProvider } from "../lib/sidebarFilterContext.ts";
 import { AgentSidebar } from "./AgentSidebar.tsx";
+import { RowMenu } from "./RowMenu.tsx";
 
 const fixture: Machine[] = JSON.parse(JSON.stringify(machinesFixture.machines));
 const paneId = "w1C:p1";
@@ -83,8 +84,8 @@ describe("AgentSidebar phone sheet live row", () => {
     descriptors.clear();
   });
 
-  const view = (machines: Machine[]) => <SettingsProvider>
-    <AgentSidebar machines={machines} selectedMachineId="local" selectedPaneId={paneId} stateWord={(machine) => machine.state} onSelect={() => {}} />
+  const view = (machines: Machine[], appLayout = false) => <SettingsProvider>
+    <AgentSidebar machines={machines} selectedMachineId="local" selectedPaneId={paneId} stateWord={(machine) => machine.state} onSelect={() => {}} appLayout={() => appLayout} tabActions={{ openTerminalTab: async () => {}, moveTabToWorkspace: async () => {} }} />
   </SettingsProvider>;
 
   async function open() {
@@ -103,6 +104,15 @@ describe("AgentSidebar phone sheet live row", () => {
       update: async (machines: Machine[]) => { await act(async () => { mounted.update(view(machines)); }); },
     };
   }
+
+  it("keeps native-app tab names and ordering read-only while preserving Close", async () => {
+    const { mounted } = await open();
+    const menuIds = () => (mounted.root.findByType(RowMenu).props.items as { id: string }[]).map((item) => item.id);
+    expect(menuIds()).toContain("rename-tab");
+    await act(async () => { mounted.update(view(roster(), true)); });
+    expect(menuIds()).toContain("close-tab");
+    expect(menuIds().some((id) => id === "rename-tab" || id === "tab-left" || id === "tab-right" || id.startsWith("tab-to-"))).toBe(false);
+  });
 
   it("updates the open sheet when a plugin value changes", async () => {
     // Given an open sheet with the original quota.
