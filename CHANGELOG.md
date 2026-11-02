@@ -94,6 +94,17 @@ between releases do not reach them. Remote-PC runtime bundles are versioned sepa
   generated upstream theme table. Preserve saved theme selections; keep Monokai as the local
   default and adjust its code/control contrast to the upstream AA checks.
 
+### Changed
+- A Claude Code or OpenCode pane's subagents moved to the chat's rail, beside the conversation: the
+  dock that held OMP's checkpoints now lists them too (`SubagentsPanel`), reading the same
+  `/api/pane/omo-tasks` the status line used. The status line's background-task list and its count
+  keep the pane's background commands alone — `shell` tasks — so one list no longer mixed commands
+  and agents. The pane snapshot grew `subagents`, how many of `background_tasks` are subagents, and
+  a status frame about the tasks says it too. Verified in Chromium on a live Claude pane running one
+  subagent and three commands: the chip reads `3 个后台任务` (was 4), its menu lists `shell` rows
+  only, and the rail's dock shows `子 Agent 1 · 1 个运行中` with the running row opening its
+  transcript.
+
 ### Fixed
 - A pane whose agent has named its session and not written it yet keeps its chat. omp writes its
   session file with the first answer, and the read refused as `ConversationNotStarted` until then —

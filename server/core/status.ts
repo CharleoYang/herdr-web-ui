@@ -276,7 +276,18 @@ export function createStatusHub<Owner, Lease>({ options, devices, preferences, c
     options.openCodeState?.reconcile(named.panes, promptCheckpoint);
     return named;
   };
-  const backgroundOf = (paneId: string): number => omo.backgroundOf(paneId) || claudeAgents.countOf(paneId) || opencodeAgents.countOf(paneId);
+  /**
+   * A pane's running background children: an OmO pane's `task` children, or a Claude Code or
+   * OpenCode pane's subagents and background commands. `subagents` says how many of them are
+   * subagents: the chat lists the rest as background tasks and the subagents in the rail's dock.
+   */
+  const countsOf = (paneId: string): { running: number; subagents: number } => {
+    const omoRunning = omo.backgroundOf(paneId);
+    if (omoRunning > 0) return { running: omoRunning, subagents: 0 };
+    const claude = claudeAgents.countsOf(paneId);
+    const opencode = opencodeAgents.countsOf(paneId);
+    return claude.running > 0 ? { running: claude.running, subagents: claude.subagents } : { running: opencode.running, subagents: opencode.subagents };
+  };
   /** the snapshot clients get: finishes settled, OmO panes named, background tasks, waits and plan progress */
   const clientSnapshot = async (): Promise<SessionSnapshot> => {
     // the order this read can show is the one of the moves confirmed before it starts: taken before any wait,
@@ -297,10 +308,10 @@ export function createStatusHub<Owner, Lease>({ options, devices, preferences, c
       ...snapshot,
       ...(lifetime === undefined ? {} : { herdr_lifetime: lifetime }),
       panes: snapshot.panes.map((pane) => {
-        const background = backgroundOf(pane.pane_id);
+        const { running: background, subagents } = countsOf(pane.pane_id);
         const waiting = waits.waiting(pane.pane_id);
         const plan = plans.summaryOf(pane.pane_id);
-        return background > 0 || waiting || plan !== null ? { ...pane, ...(background > 0 ? { background_tasks: background } : {}), ...(waiting ? { background_wait: true as const } : {}), ...(plan !== null ? { plan } : {}) } : pane;
+        return background > 0 || waiting || plan !== null ? { ...pane, ...(background > 0 ? { background_tasks: background } : {}), ...(subagents > 0 ? { subagents } : {}), ...(waiting ? { background_wait: true as const } : {}), ...(plan !== null ? { plan } : {}) } : pane;
       }),
     }, completions);
     return order ? { ...settled, ...order } : settled;
@@ -324,7 +335,7 @@ export function createStatusHub<Owner, Lease>({ options, devices, preferences, c
       .catch((error) => console.error(`telemetry: the visit was not counted (${error instanceof Error ? error.message : String(error)})`));
   }
   /** A pane's status frame: every one says whether the pane waits on its turn's background work. */
-  const paneStatus = (paneId: string, status: AgentStatus, about: { background_tasks?: number; plan?: PlanSummary | null } = {}): ServerMessage =>
+  const paneStatus = (paneId: string, status: AgentStatus, about: { background_tasks?: number; subagents?: number; plan?: PlanSummary | null } = {}): ServerMessage =>
     ({ type: "pane-status", pane_id: paneId, agent_status: status, ...finishes.status(paneId, status), ...about, ...(waits.waiting(paneId) ? { background_wait: true as const } : {}) });
   const machines = options.machines === false ? null : new MachineManager(options.stateDir ?? defaultStateDir(), push, completions, clientSnapshot, { bootId: options.orderSequence?.epoch, localFinishEpoch: () => finishes.epoch });
   if (machines && options.herdrProfiles) machines.watchHerdrProfiles(options.herdrProfiles);
@@ -391,7 +402,8 @@ export function createStatusHub<Owner, Lease>({ options, devices, preferences, c
     const status = completions.current(paneId);
     // a pane never reported here carries its count in the next snapshot
     if (status === undefined) return;
-    broadcastAll(paneStatus(paneId, status, { background_tasks: running }));
+    const subagents = countsOf(paneId).subagents;
+    broadcastAll(paneStatus(paneId, status, { background_tasks: running, ...(subagents > 0 ? { subagents } : {}) }));
     if (changed) push.onStatus(paneId, alertStatus(status, waits.waiting(paneId))).catch(logPushError);
   }
 
@@ -477,7 +489,8 @@ export function createStatusHub<Owner, Lease>({ options, devices, preferences, c
       try { void tracker.poll(paneId); } finally { settling = null; }
       waits.status(paneId, status);
     } else waits.forget(paneId);
-    broadcastAll(paneStatus(paneId, status, tracker !== null ? { background_tasks: tracker.countOf(paneId) } : {}));
+    const counts = tracker !== null ? countsOf(paneId) : null;
+    broadcastAll(paneStatus(paneId, status, counts !== null ? { background_tasks: counts.running, ...(counts.subagents > 0 ? { subagents: counts.subagents } : {}) } : {}));
     push.onStatus(paneId, alertStatus(status, waits.waiting(paneId))).catch(logPushError);
     // an OpenCode turn whose session is not known yet: its pane is looked up now, not at the next snapshot, so a
     // turn that ended on its subagents is held while the finish alert still waits (and is called off)

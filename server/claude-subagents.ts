@@ -1068,7 +1068,7 @@ const time = (value: string | null): number => value === null ? 0 : Date.parse(v
 /** what each session's last read said of each agent: kept while the transcript is read in parts */
 const previous = new Map<string, Map<string, OmoTask>>();
 
-export function claudeSubagentState(parentPath: string, live: boolean, now = Date.now(), since: number | null = null): { tasks: OmoTask[]; settled: boolean; behind: boolean; watch: string[]; running: number; turnRunning: number; promptAt: number | null; resting: boolean } {
+export function claudeSubagentState(parentPath: string, live: boolean, now = Date.now(), since: number | null = null): { tasks: OmoTask[]; settled: boolean; behind: boolean; watch: string[]; running: number; subagents: number; turnRunning: number; promptAt: number | null; resting: boolean } {
   const dir = subagentsDir(parentPath);
   const known = staleAgents.get(dir);
   const skip = staleFresh(known, now) ? known!.ids : null;
@@ -1083,7 +1083,7 @@ export function claudeSubagentState(parentPath: string, live: boolean, now = Dat
   // each has a budget of its own: a long transcript must not keep the agents from being read.
   // Read with no subagent too: the session's own background commands are in it
   const parent = scanParent(parentPath);
-  if (parent === null && files.length === 0) return { tasks: [], settled: true, behind: false, watch: [], running: 0, turnRunning: 0, promptAt: null, resting: false };
+  if (parent === null && files.length === 0) return { tasks: [], settled: true, behind: false, watch: [], running: 0, subagents: 0, turnRunning: 0, promptAt: null, resting: false };
   const budget = { left: READ_BUDGET };
   let behind = false;
   const running: OmoTask[] = [];
@@ -1180,7 +1180,7 @@ export function claudeSubagentState(parentPath: string, live: boolean, now = Dat
   ended.sort((a, b) => last(b) - last(a));
   // read to its end only: a part not read yet may hold the next turn
   const resting = parent !== null && !parent.behind && parent.whole && parent.restAt !== null;
-  return { tasks: [...running, ...ended.slice(0, RECENT_LIMIT)], settled, behind: behind && budget.left < READ_BUDGET, watch: files.map(({ id }) => id), running: running.length, turnRunning, promptAt, resting };
+  return { tasks: [...running, ...ended.slice(0, RECENT_LIMIT)], settled, behind: behind && budget.left < READ_BUDGET, watch: files.map(({ id }) => id), running: running.length, subagents: running.filter((task) => task.detail_kind === "claude-subagent").length, turnRunning, promptAt, resting };
 
   function keep(task: OmoTask, dispatched = time(task.started_at)): void {
     all.set(task.id, task);
@@ -1250,7 +1250,7 @@ interface Tracked {
   key: string; path: string | null; startedAt: number | null; pid: number | null;
   /** when its transcript, and its process, were last looked for */
   at: number; pidAt: number;
-  live: boolean; running: number; turnRunning: number; promptAt: number | null; resting: boolean; holding?: boolean; sig: string | null;
+  live: boolean; running: number; subagents: number; turnRunning: number; promptAt: number | null; resting: boolean; holding?: boolean; sig: string | null;
   reset?: boolean;
   /** the turns of the transcript read, and the busy signals matched to them */
   turns?: Turns;
@@ -1346,6 +1346,15 @@ export class ClaudeSubagentStatus {
 
   countOf(paneId: string): number {
     return this.panes.get(paneId)?.running ?? 0;
+  }
+
+  /**
+   * The pane's running children, and how many of them are subagents: the rest are its background
+   * commands (the chat lists those as background tasks, and its subagents in the rail's dock).
+   */
+  countsOf(paneId: string): { running: number; subagents: number } {
+    const tracked = this.panes.get(paneId);
+    return { running: tracked?.running ?? 0, subagents: tracked?.subagents ?? 0 };
   }
 
   /** Signals that waited for their turn in vain hold the pane's queue: nothing proves they began no turn. */
@@ -1480,7 +1489,7 @@ export class ClaudeSubagentStatus {
     // another process's transcript: what it holds is that process's, and a rest in it ends no turn of this one
     if (reset && found) this.deferred.set(pane.pane_id, [...this.deferred.get(pane.pane_id) ?? [], { source: "herdr", at: this.now() }]);
     // the count it had goes on from here: another session with none says so at the next poll
-    this.panes.set(pane.pane_id, { read: same && !reset ? current.read : ++taskReadSequence, key, path: found?.path ?? (same ? current.path : null), startedAt: found ? found.startedAt : same ? current.startedAt : null, pid: found ? found.pid ?? null : same ? current.pid : null, at: this.now(), pidAt: this.now(), live: true, running: current?.running ?? 0, turnRunning: current?.turnRunning ?? 0, promptAt: current?.promptAt ?? null, resting: current?.resting ?? false, turns: reset ? undefined : current?.turns, sig: null, watch: same && !found ? current.watch : [], reset });
+    this.panes.set(pane.pane_id, { read: same && !reset ? current.read : ++taskReadSequence, key, path: found?.path ?? (same ? current.path : null), startedAt: found ? found.startedAt : same ? current.startedAt : null, pid: found ? found.pid ?? null : same ? current.pid : null, at: this.now(), pidAt: this.now(), live: true, running: current?.running ?? 0, subagents: current?.subagents ?? 0, turnRunning: current?.turnRunning ?? 0, promptAt: current?.promptAt ?? null, resting: current?.resting ?? false, turns: reset ? undefined : current?.turns, sig: null, watch: same && !found ? current.watch : [], reset });
   }
 
   private observeSession(pane: HerdrPane): void {
@@ -1515,6 +1524,7 @@ export class ClaudeSubagentStatus {
     for (const [paneId, tracked] of this.panes) {
       if (only !== undefined && paneId !== only) continue;
       let running = 0;
+      let subagents = 0;
       let turnRunning = 0;
       let promptAt: number | null = null;
       let resting = false;
@@ -1523,7 +1533,7 @@ export class ClaudeSubagentStatus {
         const before = subagentsSignature(tracked.path, tracked.watch, scanAt);
         if (`${before.sig}:${tracked.startedAt}` === tracked.sig) continue;
         const state = claudeSubagentState(tracked.path, true, this.now(), tracked.startedAt);
-        ({ running, turnRunning, promptAt, resting } = state);
+        ({ running, subagents, turnRunning, promptAt, resting } = state);
         const parent = parents.get(tracked.path);
         let waiting = false;
         if (parent === undefined) resting = false;
@@ -1547,10 +1557,11 @@ export class ClaudeSubagentStatus {
       }
       // a held queue let go of (a rest written past it) is told too, though the pane rested all along
       const holding = this.holdsQueue(paneId);
-      if (!tracked.reset && running === tracked.running && turnRunning === tracked.turnRunning && promptAt === tracked.promptAt && resting === tracked.resting && holding === (tracked.holding ?? false)) continue;
+      if (!tracked.reset && running === tracked.running && subagents === tracked.subagents && turnRunning === tracked.turnRunning && promptAt === tracked.promptAt && resting === tracked.resting && holding === (tracked.holding ?? false)) continue;
       tracked.holding = holding;
       tracked.reset = false;
       tracked.running = running;
+      tracked.subagents = subagents;
       tracked.turnRunning = turnRunning;
       tracked.promptAt = promptAt;
       tracked.resting = resting;

@@ -232,7 +232,6 @@ export const COMPOSER_JA: Record<string, string> = {
   "Deny": "拒否",
   "Tab switched OpenCode's agent from {from} to {to}. Nothing more was typed. Check the terminal before sending again.": "Tab キーで OpenCode のエージェントが {from} から {to} に切り替わりました。それ以上は入力していません。再送信する前にターミナルを確認してください。",
   "OpenCode attached another skill. Your chat text stayed here. Check the terminal before sending again.": "OpenCode が別のスキルを添付しました。チャットのテキストはここに残っています。再送信する前にターミナルを確認してください。",
-  "Wait until the agent is idle to switch models": "エージェントが空くまで待ってから切り替えてください",
   // comments on a reply (components/ReplyComments.tsx, #511)
   "Comment on the reply": "返答にコメント",
   "Add a comment": "コメントを追加",

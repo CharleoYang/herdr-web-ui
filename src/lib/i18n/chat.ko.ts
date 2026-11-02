@@ -165,6 +165,7 @@ export const CHAT_KO: Record<string, string> = {
   "Running": "실행 중",
   "{n} recently ended": "최근 끝난 작업 {n}개",
   "{n} more running": "그 밖에 {n}개 실행 중",
+  "Couldn't load the subagents": "하위 에이전트를 불러오지 못했습니다",
   "Nothing running right now": "지금 실행 중인 작업이 없습니다",
   "{done} of {total} done": "{total}개 중 {done}개 완료",
   "{n} running": "{n}개 실행 중",

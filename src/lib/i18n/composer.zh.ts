@@ -232,7 +232,6 @@ export const COMPOSER_ZH: Record<string, string> = {
   "Deny": "拒绝",
   "Tab switched OpenCode's agent from {from} to {to}. Nothing more was typed. Check the terminal before sending again.": "Tab 键将 OpenCode 的 Agent 从 {from} 切换为 {to}。未继续输入。请先检查终端，再重新发送。",
   "OpenCode attached another skill. Your chat text stayed here. Check the terminal before sending again.": "OpenCode 附加了另一个 Skill。聊天文本仍保留在这里。请先检查终端，再重新发送。",
-  "Wait until the agent is idle to switch models": "等代理空闲后再切换模型",
   // comments on a reply (components/ReplyComments.tsx, #511)
   "Comment on the reply": "评论回复",
   "Add a comment": "添加评论",

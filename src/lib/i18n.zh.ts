@@ -37,6 +37,7 @@ const BASE: Record<string, string> = {
   "No submitted result recorded.": "未记录已提交的结果。",
   "OMP subagents": "OMP 子 Agent",
   "Showing the first {count} characters.": "仅显示前 {count} 个字符。",
+  "Wait until the agent is idle to switch models": "等代理空闲后再切换模型",
   "Subagents": "子 Agent",
   "Submitted result": "已提交的结果",
   "Unfinished checkpoints · not a live process status": "未完成的检查点 · 不是实时进程状态",

@@ -35,6 +35,7 @@ const BASE: Record<string, string> = {
   "No submitted result recorded.": "送信された結果の記録はありません。",
   "OMP subagents": "OMP サブ Agent",
   "Showing the first {count} characters.": "先頭の {count} 文字のみ表示しています。",
+  "Wait until the agent is idle to switch models": "エージェントが空くまで待ってから切り替えてください",
   "Subagents": "サブ Agent",
   "Submitted result": "送信された結果",
   "Unfinished checkpoints · not a live process status": "未完了のチェックポイント · 実行中プロセスの状態ではありません",

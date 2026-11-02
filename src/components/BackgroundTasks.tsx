@@ -14,6 +14,9 @@ import type { OmoRun, OmoRunNode, OmoTask, PlanStep, PlanSummary } from "../../s
 
 const POLL_MS = 3000;
 
+/** A task the pane's agent ran in the background as a command, not as an agent: from Claude Code or OpenCode, its `cat` and builders */
+const isBackgroundCommand = (task: OmoTask): boolean => task.category === "shell";
+
 const ICONS: Record<OmoTask["status"], ComponentType<LucideProps>> = {
   running: CircleDot, completed: CircleCheck, failed: CircleX, cancelled: CircleSlash, lost: CircleAlert,
 };
@@ -33,8 +36,10 @@ const NODE_ICONS: Record<OmoRunNode["state"], ComponentType<LucideProps>> = {
  * ended is one line that says how many ended and how many went wrong, and opens on request.
  * The server keeps the newest ten ended tasks and five ended workflows of the last day, so the
  * line counts those, and says "recently", not "in the last day".
- * A Claude Code or OpenCode pane's tasks are its subagents (`subagents`). Most such panes have
- * none, so it asks when the pane is shown (and when its count changes), and appears only when
+ * A Claude Code or OpenCode pane's tasks are its subagents and its background commands
+ * (`subagents`). This list shows the commands, which is what its count carries there; the
+ * subagents are the rail's dock (SubagentsPanel), read from the same route. Most such panes have
+ * neither, so it asks when the pane is shown (and when its count changes), and appears only when
  * there are or were some.
  */
 export function BackgroundTasks({ paneId, count, omo, subagents = false, plan = null }: { paneId: string; count: number; omo: boolean; subagents?: boolean; plan?: PlanSummary | null }) {
@@ -64,7 +69,7 @@ export function BackgroundTasks({ paneId, count, omo, subagents = false, plan = 
     // ended before that are told by nothing else, as the count changes only for running ones.
     const ask = (left: number): void => {
       const again = (): void => { if (alive && left > 0) timer = setTimeout(() => ask(left - 1), POLL_MS); };
-      fetchPaneOmoActivity(paneId).then((found) => { if (!alive) return; if (found.tasks.length > 0) setSeen(true); else again(); }, again);
+      fetchPaneOmoActivity(paneId).then((found) => { if (!alive) return; if (found.tasks.some(isBackgroundCommand)) setSeen(true); else again(); }, again);
     };
     ask(3);
     return () => { alive = false; clearTimeout(timer); };
@@ -177,8 +182,11 @@ export function BackgroundTasks({ paneId, count, omo, subagents = false, plan = 
     return () => observer.disconnect();
   }, [open]);
 
-  const running = tasks?.filter((task) => task.status === "running") ?? [];
-  const ended = tasks?.filter((task) => task.status !== "running") ?? [];
+  // A Claude Code or OpenCode pane's subagents are the rail's (SubagentsPanel): this list holds the
+  // commands it runs in the background, and the chip counts those alone
+  const listed = (task: OmoTask): boolean => !subagents || isBackgroundCommand(task);
+  const running = tasks?.filter((task) => task.status === "running" && listed(task)) ?? [];
+  const ended = tasks?.filter((task) => task.status !== "running" && listed(task)) ?? [];
   const words: Record<OmoTask["status"], string> = {
     running: t("running"), completed: t("done"), failed: t("failed"), cancelled: t("cancelled"), lost: t("lost"),
   };
@@ -243,7 +251,7 @@ export function BackgroundTasks({ paneId, count, omo, subagents = false, plan = 
 
   const goingRuns = runs.filter(runGoing);
   const endedRuns = runs.filter((run) => !runGoing(run));
-  const summary = endedSummary(tasks ?? [], runs);
+  const summary = endedSummary([...running, ...ended], runs);
 
   // a plan cleared or a PC gone while the list is open: nothing is left to list, so the control goes
   useEffect(() => { if (open && !planShown && !tasksShown) setOpen(false); }, [open, planShown, tasksShown]);
@@ -290,7 +298,7 @@ export function BackgroundTasks({ paneId, count, omo, subagents = false, plan = 
       {tasks === null && !failed && <p className="bg-tasks-note">{t("Loading…")}</p>}
       {failed && tasks === null && <p className="bg-tasks-note">{t("Couldn't load the background tasks")}</p>}
       {failed && tasks !== null && <p className="bg-tasks-note" role="status">{t("Couldn't refresh: this is the list as it last read")}</p>}
-      {tasks !== null && tasks.length === 0 && runs.length === 0 && <p className="bg-tasks-note">{t("No background tasks to show yet")}</p>}
+      {tasks !== null && running.length === 0 && ended.length === 0 && runs.length === 0 && <p className="bg-tasks-note">{t("No background tasks to show yet")}</p>}
       {/* said only of a fresh read that agrees with the pushed count: a stale list must not deny a task that just started */}
       {tasks !== null && !failed && count === 0 && running.length === 0 && goingRuns.length === 0 && summary.ended > 0 && <p className="bg-tasks-note">{t("Nothing running right now")}</p>}
       {goingRuns.length > 0 && <><div className="menu-heading">{t("Workflows")}</div><ul className="bg-task-list">{goingRuns.map(runView)}</ul></>}

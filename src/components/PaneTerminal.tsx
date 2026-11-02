@@ -98,6 +98,8 @@ export interface PaneTerminalProps {
   agentStatus?: AgentStatus;
   /** an OmO pane's running background tasks: the composer's status line offers their list */
   backgroundTasks?: number;
+  /** how many of a Claude Code or OpenCode pane's running background tasks are subagents: the chat's rail lists those, not the status line */
+  subagents?: number;
   /** the plan the pane's agent keeps (null on an offline PC): the composer's chip opens it */
   plan?: PlanSummary | null;
   /** the pane's turn ended on work still running in the background: the composer says BG */
@@ -168,6 +170,7 @@ export function PaneTerminal({
   title = null,
   agentStatus,
   backgroundTasks = 0,
+  subagents = 0,
   plan = null,
   backgroundWait = false,
   cwd = null,
@@ -1324,6 +1327,7 @@ export function PaneTerminal({
           agent={agent}
           agentStatus={agentStatus}
           backgroundTasks={backgroundTasks}
+          subagents={subagents}
           plan={plan}
           backgroundWait={backgroundWait}
           metadata={chatMetadata?.pane === paneId ? chatMetadata.value : null}

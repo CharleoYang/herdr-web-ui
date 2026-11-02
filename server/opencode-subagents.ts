@@ -57,6 +57,8 @@ export interface OpencodeSubagentState {
   /** running ones first (oldest first), then up to ten that ended in the last day (newest first) */
   tasks: OmoTask[];
   running: number;
+  /** of those running, how many are subagents: the rest are its background commands */
+  subagents: number;
   /** of those running, how many the turn going on (or last ended) started: server/background-wait.ts */
   turnRunning: number;
   /** when the person last gave the parent session a prompt: that turn began there */
@@ -65,7 +67,7 @@ export interface OpencodeSubagentState {
   unlisted: number;
 }
 
-const NOTHING: OpencodeSubagentState = { tasks: [], running: 0, turnRunning: 0, promptAt: null, unlisted: 0 };
+const NOTHING: OpencodeSubagentState = { tasks: [], running: 0, subagents: 0, turnRunning: 0, promptAt: null, unlisted: 0 };
 
 /** A child's newest run row, as much of it as tells how the run went. */
 interface ChildRun {
@@ -295,7 +297,7 @@ function rereadPage(db: Database, scan: Scan, columns: Set<string>): void {
   scan.reread += SUBAGENT_PAGE;
   if (scan.reread < scan.ids.length) return;
   scan.shown = [...[...scan.going].sort((a, b) => a.created - b.created).map((run) => ({ run, at: null as number | null, end: null })), ...scan.stopped];
-  scan.state = { tasks: [], running: scan.running, turnRunning: scan.turnRunning, promptAt: scan.promptAt, unlisted: scan.running - scan.going.length };
+  scan.state = { tasks: [], running: scan.running, subagents: scan.running, turnRunning: scan.turnRunning, promptAt: scan.promptAt, unlisted: scan.running - scan.going.length };
   scan.finished = !scan.detail;
 }
 
@@ -334,7 +336,7 @@ function scanResult(scan: Scan): OpencodeSubagentState {
     .sort((a, b) => started(a) - started(b)).slice(-RUNNING_LIMIT);
   const settled = [...tasks.filter((task) => task.status !== "running"), ...scan.shells.filter((task) => task.status !== "running")]
     .sort((a, b) => ended(b) - ended(a)).slice(0, RECENT_LIMIT);
-  return { ...state, running: state.running + scan.shellRunning, unlisted: state.running + scan.shellRunning - running.length, tasks: [...running, ...settled] };
+  return { ...state, running: state.running + scan.shellRunning, subagents: state.subagents, unlisted: state.running + scan.shellRunning - running.length, tasks: [...running, ...settled] };
 }
 
 /** The event loop let go between two steps of a read. */
@@ -396,7 +398,7 @@ export interface OpencodeSubagentDeps {
   now?: () => number;
 }
 
-interface Tracked { session: string; live: boolean; running: number; turnRunning: number; promptAt: number | null; reset: boolean }
+interface Tracked { session: string; live: boolean; running: number; subagents: number; turnRunning: number; promptAt: number | null; reset: boolean }
 
 /**
  * The running subagents of every OpenCode pane, for the pane's count. The session is the one
@@ -431,6 +433,12 @@ export class OpencodeSubagentStatus {
 
   countOf(paneId: string): number {
     return this.panes.get(paneId)?.running ?? 0;
+  }
+
+  /** The pane's running children, and how many of them are subagents: the rest are background commands. */
+  countsOf(paneId: string): { running: number; subagents: number } {
+    const tracked = this.panes.get(paneId);
+    return { running: tracked?.running ?? 0, subagents: tracked?.subagents ?? 0 };
   }
 
   /** The store and session the pane holds, or last held, and whether it still runs OpenCode on it. */
@@ -505,7 +513,7 @@ export class OpencodeSubagentStatus {
     // maybe after it ended: what that turn was seen do is this session's
     if (tracked !== undefined) this.deps.onReset?.(pane.pane_id, false);
     else if (before != null && before !== "opencode") this.deps.onReset?.(pane.pane_id, true);
-    this.panes.set(pane.pane_id, { session, live: true, running: tracked?.running ?? 0, turnRunning: tracked?.turnRunning ?? 0, promptAt: tracked?.promptAt ?? null, reset: tracked !== undefined });
+    this.panes.set(pane.pane_id, { session, live: true, running: tracked?.running ?? 0, subagents: tracked?.subagents ?? 0, turnRunning: tracked?.turnRunning ?? 0, promptAt: tracked?.promptAt ?? null, reset: tracked !== undefined });
     return true;
   }
 
@@ -575,10 +583,11 @@ export class OpencodeSubagentStatus {
 
   /** A pane's counts as read: told when they changed, or when its binding was reset since. */
   private tell(paneId: string, tracked: Tracked, state: OpencodeSubagentState): void {
-    const { running, turnRunning, promptAt } = state;
-    if (!tracked.reset && running === tracked.running && turnRunning === tracked.turnRunning && promptAt === tracked.promptAt) return;
+    const { running, subagents, turnRunning, promptAt } = state;
+    if (!tracked.reset && running === tracked.running && subagents === tracked.subagents && turnRunning === tracked.turnRunning && promptAt === tracked.promptAt) return;
     tracked.reset = false;
     tracked.running = running;
+    tracked.subagents = subagents;
     tracked.turnRunning = turnRunning;
     tracked.promptAt = promptAt;
     this.deps.onChange(paneId, running, turnRunning, promptAt);

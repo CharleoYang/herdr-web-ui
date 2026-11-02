@@ -638,6 +638,8 @@ describe("ClaudeSubagentStatus", () => {
       if (order !== "early") { resolve({ path: s.path, startedAt: null }); await refresh; }
       waits.tick();
       expect(status.countOf("p1")).toBe(1);
+      // the one running child is a command, not a subagent
+      expect(status.countsOf("p1")).toEqual({ running: 1, subagents: 0 });
       expect(waits.waiting("p1")).toBe(order === "early" || order === "late");
       now++;
       waits.tick();
@@ -1459,7 +1461,7 @@ describe("claudeSubagents, background commands", () => {
     const file = s.agent("review", { steps: [[2, 1]] });
     s.prompt(10);
     appendFileSync(file, json({ isSidechain: true, type: "user", timestamp: at(11), message: { role: "user", content: [{ type: "tool_result", tool_use_id: "t", content: "read complete" }] } }));
-    expect(claudeSubagentState(s.path, true, NOW)).toMatchObject({ running: 1, turnRunning: 0 });
+    expect(claudeSubagentState(s.path, true, NOW)).toMatchObject({ running: 1, subagents: 1, turnRunning: 0 });
   });
 
   it.each(["compaction", "task notification"])("does not treat an old subagent's %s as a new dispatch on warm or cold reads", (kind) => {
@@ -1501,6 +1503,18 @@ describe("claudeSubagents, background commands", () => {
       { id: "b1", title: "Run the full suite", category: "shell", model: null, status: "running", started_at: at(2), ended_at: null, turns: null, tool_calls: null, tokens: null, detail_kind: null },
       { id: "b2", title: "sleep 30", category: "shell", model: null, status: "running", started_at: at(3), ended_at: null, turns: null, tool_calls: null, tokens: null, detail_kind: null },
     ]);
+  });
+
+  it("counts a running subagent apart from the commands its session runs in the background", () => {
+    const s = session();
+    s.prompt(1);
+    s.agent("review", { description: "Review the parser", steps: [[2, 1]] });
+    s.bash("b1", 2, { description: "Run the full suite", command: "bun run test" });
+    const state = claudeSubagentState(s.path, true, NOW);
+    // both run: the chat lists the command as a background task, and the subagent in its dock
+    expect(state).toMatchObject({ running: 2, subagents: 1 });
+    expect(state.tasks.find((task) => task.id === "review")?.detail_kind).toBe("claude-subagent");
+    expect(state.tasks.find((task) => task.id === "b1")?.detail_kind).toBeNull();
   });
 
   it("ends a command by its notice, whatever the status, and by TaskStop or KillShell", () => {

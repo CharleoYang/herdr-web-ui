@@ -132,6 +132,20 @@ describe("SessionPlans", () => {
     expect("plan" in paneAfterStatus(planned, frame(null))).toBe(false);
   });
 
+  it("keeps a pane's subagents with its background tasks, as its frames say", () => {
+    const frame = (tasks?: number, subagents?: number) => ({ type: "pane-status" as const, pane_id: "p1", agent_status: "working" as const, ...(tasks === undefined ? {} : { background_tasks: tasks }), ...(subagents === undefined ? {} : { subagents }) });
+    const counted = paneAfterStatus({ ...pane("p1", "claude"), background_tasks: 3, subagents: 2 }, frame(2, 2));
+    expect(counted).toMatchObject({ background_tasks: 2, subagents: 2 });
+    // a frame that names the tasks and no subagents: none of them are (the subagent ended, a command still runs)
+    const commands = paneAfterStatus(counted, frame(1));
+    expect(commands).toMatchObject({ background_tasks: 1 });
+    expect("subagents" in commands).toBe(false);
+    // a frame about neither (a plan's, or a status's) leaves both as they were
+    expect(paneAfterStatus(counted, frame())).toMatchObject({ background_tasks: 2, subagents: 2 });
+    // every task ended: neither is left
+    expect("background_tasks" in paneAfterStatus(counted, frame(0))).toBe(false);
+  });
+
   it("tells a pane's summary as its plan moves, reads nothing while its transcript is as it was, and clears it when the pane runs something else", async () => {
     const s = claude();
     const changes: [string, PlanSummary | null][] = [];

@@ -21,6 +21,7 @@ import { loadChatTimeline, loadedChatTimeline, useChatTimeline } from "./chatTim
 import { ChatMinimap } from "./ChatMinimap.tsx";
 import { BtwPanel } from "./BtwPanel.tsx";
 import { OmpAgentsPanel } from "./OmpAgentsPanel.tsx";
+import { SubagentsPanel } from "./SubagentsPanel.tsx";
 import { minimapTurns } from "../lib/chatMinimap.ts";
 import type { LegendListRef } from "@legendapp/list/react";
 import { appendChatRowSlots, continuesHistory, createChatRowSlots, prependChatRowSlots } from "../lib/chatRows.ts";
@@ -2519,6 +2520,9 @@ export const ChatView = memo(function ChatView({ paneId, presentationKey, finish
         both open. A pane with neither draws no rail (the empty aside is not shown) */}
     <aside className="chat-side" aria-label={t("Pane details")}>
       {state.conversationSource === "omp-transcript" && <OmpAgentsPanel key={`agents:${machineId}:${paneId}:${historyId}`} paneId={paneId} visible={visible} expanded />}
+      {/* a Claude Code or OpenCode pane's subagents: the same dock, read from the pane's own tasks,
+          so the composer's status line keeps only its background commands */}
+      {(state.conversationSource === "claude-transcript" || state.conversationSource === "opencode-transcript") && <SubagentsPanel key={`subagents:${machineId}:${paneId}:${historyId}`} paneId={paneId} visible={visible} expanded />}
       {state.source === "conversation" && settings.showTodos && currentTodos !== null && <TodoPanel items={currentTodos} open={settings.foldTodos ? todosOpen : true} collapsible={settings.foldTodos} onToggle={setTodosOpen} />}
     </aside>
     </div>

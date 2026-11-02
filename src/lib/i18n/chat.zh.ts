@@ -165,6 +165,7 @@ export const CHAT_ZH: Record<string, string> = {
   "Running": "运行中",
   "{n} recently ended": "最近结束 {n} 个",
   "{n} more running": "另有 {n} 个正在运行",
+  "Couldn't load the subagents": "无法加载子 Agent",
   "Nothing running right now": "当前没有正在运行的任务",
   "{done} of {total} done": "已完成 {done}/{total}",
   "{n} running": "{n} 个运行中",

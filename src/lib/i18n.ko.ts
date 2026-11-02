@@ -33,6 +33,7 @@ const BASE: Record<string, string> = {
   "No submitted result recorded.": "제출된 결과 기록이 없습니다.",
   "OMP subagents": "OMP 하위 Agent",
   "Showing the first {count} characters.": "처음 {count}자만 표시합니다.",
+  "Wait until the agent is idle to switch models": "에이전트가 쉴 때까지 기다린 뒤 전환하세요",
   "Subagents": "하위 Agent",
   "Submitted result": "제출된 결과",
   "Unfinished checkpoints · not a live process status": "미완료 체크포인트 · 실시간 프로세스 상태가 아님",

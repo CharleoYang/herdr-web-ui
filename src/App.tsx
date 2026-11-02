@@ -892,6 +892,7 @@ export function App() {
                         agent={item?.agent ?? null}
                         agentStatus={item?.agent_status}
                         backgroundTasks={item?.background_tasks ?? 0}
+                        subagents={(item as HerdrPane | undefined)?.subagents ?? 0}
                         // an offline PC's cached plan cannot be read
                         plan={machine?.state === "connected" ? (item as HerdrPane | undefined)?.plan ?? null : null}
                         backgroundWait={item?.background_wait === true}

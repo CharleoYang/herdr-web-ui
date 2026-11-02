@@ -85,6 +85,8 @@ export interface ComposerProps {
   agentStatus?: AgentStatus;
   /** an OmO pane's running background tasks: the status line opens their list */
   backgroundTasks?: number;
+  /** how many of them are subagents (a Claude Code or OpenCode pane's): the rail's dock lists those, so the status line leaves them out */
+  subagents?: number;
   /** the plan the pane's agent keeps, as far as it got: the same chip opens its steps */
   plan?: PlanSummary | null;
   /** the pane's turn ended on work still running in the background: its word is BG, not DONE (lib/status.ts paneStatus) */
@@ -247,6 +249,7 @@ export function Composer({
   agent,
   agentStatus,
   backgroundTasks = 0,
+  subagents = 0,
   plan = null,
   backgroundWait = false,
   metadata,
@@ -1433,7 +1436,7 @@ export function Composer({
               <MessageSquarePlus aria-hidden="true" />
             </button>
           )}
-          <BackgroundTasks paneId={paneId} count={backgroundTasks} omo={agent === "omo"} subagents={agent === "claude" || agent === "opencode"} plan={plan} />
+          <BackgroundTasks paneId={paneId} count={Math.max(0, backgroundTasks - subagents)} omo={agent === "omo"} subagents={agent === "claude" || agent === "opencode"} plan={plan} />
           {agent === "claude" && <Artifacts paneId={paneId} status={agentStatus} />}
         </div>
         {/* between the two control groups of the card's last row. The agent's name, its separator and the
@@ -1477,7 +1480,7 @@ export function Composer({
               </span>}
             </span>
             {/* the chip is a button in the left controls; its count is still said here, where a change is announced */}
-            {backgroundTasks > 0 && <span className="composer-task-count visually-hidden">{t(backgroundTasks === 1 ? "{n} background task" : "{n} background tasks", { n: backgroundTasks })}</span>}
+            {backgroundTasks - subagents > 0 && <span className="composer-task-count visually-hidden">{t(backgroundTasks - subagents === 1 ? "{n} background task" : "{n} background tasks", { n: backgroundTasks - subagents })}</span>}
           </span>
           {hintText !== null && (
             <span ref={hintRef} className={`composer-status-hint${hint === "no-room" ? " is-over" : ""}`} title={hintText}>

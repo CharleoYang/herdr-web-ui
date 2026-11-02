@@ -143,6 +143,8 @@ describe("an OpenCode session's subagents are its child sessions", () => {
       ["sh_ok", "completed"], ["sh_bad", "failed"], ["ses_done", "completed"],
     ]);
     expect(state.running).toBe(2);
+    // of the two running, one is a subagent and one a command: the chat lists them apart
+    expect(state.subagents).toBe(1);
     // a command never counts for the turn: the parent does not wait on it
     expect(state.turnRunning).toBe(1);
     expect(state.tasks.find((task) => task.id === "sh_run")).toEqual({
@@ -367,7 +369,7 @@ describe("an OpenCode session's subagents are its child sessions", () => {
     const v1 = new Database(path, { create: true });
     opened.push(v1);
     v1.exec("CREATE TABLE session (id text PRIMARY KEY, title text); CREATE TABLE message (id text PRIMARY KEY, session_id text, data text);");
-    expect(opencodeSubagentState(path, "ses_parent", true, NOW)).toEqual({ tasks: [], running: 0, turnRunning: 0, promptAt: null, unlisted: 0 });
+    expect(opencodeSubagentState(path, "ses_parent", true, NOW)).toEqual({ tasks: [], running: 0, subagents: 0, turnRunning: 0, promptAt: null, unlisted: 0 });
     const garbage = join(root, "garbage.db");
     writeFileSync(garbage, "not a database at all, just text");
     expect(opencodeSubagentState(garbage, "ses_parent", true, NOW)).toBeNull();
