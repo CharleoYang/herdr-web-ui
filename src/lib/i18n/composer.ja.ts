@@ -89,7 +89,7 @@ export const COMPOSER_JA: Record<string, string> = {
   "Not sent: this PC has not said yet what it supports. Send it again.": "未送信: この PC が対応する機能をまだ知らせていません。もう一度送信してください。",
   "Not confirmed: the pane did not confirm this message. Check the terminal before sending it again.": "未確認: ペインがこのメッセージを確認しませんでした。再送信する前にターミナルを確認してください。",
   "Not sent: {message}": "未送信: {message}",
-  "Not confirmed: the terminal draft was cleared or may have changed. Your message stayed here. Check the terminal before sending again.": "未確認: ターミナルの下書きが消去されたか、変更された可能性があります。メッセージはここに残っています。再送信する前にターミナルを確認してください。",
+  "Not confirmed: the message may be in the terminal's input line, unsent, or its draft was cleared. Your message stayed here. Check the terminal before sending again.": "未確認: メッセージはターミナルの入力行に入力されたまま送信されていないか、下書きが消去された可能性があります。メッセージはここに残っています。再送信する前にターミナルを確認してください。",
   "Type the numbers you choose, e.g. 1 3": "選ぶ番号を入力 (例: 1 3)",
   "Type your reply…": "返答を入力…",
   "Type {range} or your own reply…": "{range} または返答を入力…",

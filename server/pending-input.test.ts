@@ -46,6 +46,31 @@ function fixture() {
 }
 
 describe("bridge pending input", () => {
+  it("names the panes holding a queued message, with the oldest of each, so the delivery can look again", () => {
+    const f = fixture();
+    expect(f.queue.queuedPanes()).toEqual([]);
+    f.enqueue(1, "a", "p1");
+    f.advance(5_000);
+    f.enqueue(2, "a", "p1");
+    f.enqueue(3, "b", "p2");
+    // the oldest of p1 is the one that decides how long the pane has waited
+    expect(f.queue.queuedPanes().sort((x, y) => x.paneId.localeCompare(y.paneId)))
+      .toEqual([{ paneId: "p1", since: 1_000 }, { paneId: "p2", since: 6_000 }]);
+    // a message claimed for sending is no longer queued: the pane's next one, accepted later, is
+    f.queue.status("p1", "done");
+    const first = f.queue.next("p1");
+    expect(first).not.toBeNull();
+    f.queue.claim(first!, true);
+    expect(f.queue.queuedPanes().sort((x, y) => x.paneId.localeCompare(y.paneId)))
+      .toEqual([{ paneId: "p1", since: 6_000 }, { paneId: "p2", since: 6_000 }]);
+    // and a pane whose only message is being sent is not named at all
+    const only = fixture();
+    only.enqueue(1, "a", "p3");
+    only.queue.status("p3", "done");
+    only.queue.claim(only.queue.next("p3")!, true);
+    expect(only.queue.queuedPanes()).toEqual([]);
+  });
+
   it.each(["submit_changed", "submit_partial", "submit_failed", "disconnected", "timeout", "unknown_failure"])(
     "retains ambiguous held-copy disposition across generations and dismissal: %s", async (code) => {
       const f = fixture(), item = f.enqueue(1);

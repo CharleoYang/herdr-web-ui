@@ -106,6 +106,16 @@ between releases do not reach them. Remote-PC runtime bundles are versioned sepa
   transcript.
 
 ### Fixed
+- A queued message is looked at again every 15 seconds while it waits. Its send used to ride on an
+  event of its pane (a turn ending, an attach, a readiness signal); when that event never came — a
+  status left at `working`, an attach restored without one — nothing typed it and nothing said why.
+  A look with nothing to do is one map read, and a message that has waited over a minute now says
+  so in the server log, with its pane's status (`pending message on <pane> has waited 92s: its agent
+  reports working`).
+- A message whose paste reached the pane but whose Enter did not now says that. The send reported
+  the Enter's own failure (`not_transmitted`, `read_only`), whose note says nothing was typed —
+  while the text sat in the terminal's input line. It is `submit_partial` now, and the note reads
+  "the message may be in the terminal's input line, unsent, or its draft was cleared".
 - A pane whose agent has named its session and not written it yet keeps its chat. omp writes its
   session file with the first answer, and the read refused as `ConversationNotStarted` until then —
   a subclass of "unavailable", so the chat handed the whole pane to the terminal fallback

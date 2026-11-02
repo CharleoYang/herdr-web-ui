@@ -335,6 +335,8 @@ export function createSubmitText({ options, lastTyped, attachments, terminalAtta
     // before anything reads the pane, types or clears: closeMention and mirrorInput trust this framing
     ({ text, payload } = submitFraming(text, payload, fromTerminal));
     let clearedDraft = false;
+    /** the message is in the pane's input line: a later failure is a missing Enter, not a missing message */
+    let pasted = false;
     let sentText = text;
     let command: ReturnType<typeof prepareCommandSend>;
     let beforeScreen: string | undefined;
@@ -625,6 +627,7 @@ export function createSubmitText({ options, lastTyped, attachments, terminalAtta
       const shaped = await mirrorInput(closeMention(payload), async () => await terminalAttach() ? null : await paneAgentOf(paneId));
       inTime();
       await paneSendText(paneId, shaped, undefined, mayType).catch(refusal);
+      pasted = true;
       // fixed wait: a TUI busy with the paste takes an Enter in the same chunk for a newline (SUBMIT_DELAY_MS)
       await Bun.sleep(options.submitDelayMs ?? SUBMIT_DELAY_MS);
       authorize();
@@ -634,6 +637,12 @@ export function createSubmitText({ options, lastTyped, attachments, terminalAtta
     } catch (error) {
       if (clearedDraft) {
         throw new HerdrError("submit_partial", "Claude Code's terminal draft was cleared or may have changed, but sending was not confirmed. Your chat text stayed here. Check the terminal before sending again.");
+      }
+      // The text is in the pane's input line and its Enter did not follow (the sender lost access, the
+      // write was refused): saying "nothing was typed" would send the user looking for a missing message
+      // that is in fact waiting to be sent. The chat keeps its text either way.
+      if (pasted && !(error instanceof HerdrError && error.code === "submit_partial")) {
+        throw new HerdrError("submit_partial", "The message was typed into the terminal's input line, but its Enter was not confirmed. Your chat text stayed here. Check the terminal before sending again.");
       }
       throw error;
     }

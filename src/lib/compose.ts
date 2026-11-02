@@ -134,7 +134,7 @@ export function openCodeRefusalNote(code: string, message: string, tt: (text: st
 export function submitNote(code: string, message: string, agent?: string | null): string {
   const opencode = openCodeRefusalNote(code, message);
   if (opencode !== null) return opencode;
-  if (code === "submit_partial") return t("Not confirmed: the terminal draft was cleared or may have changed. Your message stayed here. Check the terminal before sending again.");
+  if (code === "submit_partial") return t("Not confirmed: the message may be in the terminal's input line, unsent, or its draft was cleared. Your message stayed here. Check the terminal before sending again.");
   // #511: pasted for an agent that left before its Enter: the text may sit in the input line
   if (code === "pasted_not_sent") return t("Not sent: the message is in the terminal's input line. Clear it there, or press Enter there to send it.");
   if (code === "agent_blocked") return t("Not sent: the agent is waiting for an answer in the terminal. Answer it first.");

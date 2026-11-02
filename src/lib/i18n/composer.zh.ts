@@ -89,7 +89,7 @@ export const COMPOSER_ZH: Record<string, string> = {
   "Not sent: this PC has not said yet what it supports. Send it again.": "未发送：这台电脑尚未告知它支持的功能。请重新发送。",
   "Not confirmed: the pane did not confirm this message. Check the terminal before sending it again.": "未确认：窗格未确认此消息。重新发送前请检查终端。",
   "Not sent: {message}": "未发送：{message}",
-  "Not confirmed: the terminal draft was cleared or may have changed. Your message stayed here. Check the terminal before sending again.": "未确认：终端草稿已被清除或可能发生了变化。您的消息仍保留在这里。再次发送前请检查终端。",
+  "Not confirmed: the message may be in the terminal's input line, unsent, or its draft was cleared. Your message stayed here. Check the terminal before sending again.": "未确认：消息可能已输入到终端的输入行但未发送，或者草稿已被清除。您的消息仍保留在这里。再次发送前请检查终端。",
   "Type the numbers you choose, e.g. 1 3": "输入所选编号，例如 1 3",
   "Type your reply…": "输入你的回复…",
   "Type {range} or your own reply…": "输入 {range} 或你自己的回复…",

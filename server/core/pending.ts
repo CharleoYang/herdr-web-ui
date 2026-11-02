@@ -761,6 +761,27 @@ export function createPendingDelivery({ options, clients, attachments, sight, se
   }
   const drainAgain = new Set<string>();
   /**
+   * A queued message is typed on an event of its pane: a status change (its turn ended), an attach,
+   * a readiness signal. An event can fail to come — a status that never leaves working, an attach
+   * restored without one — and then nothing types the message, with nothing on screen saying why.
+   * While a pane holds a queued message, look again every QUEUE_LOOK_MS: a look with nothing to do
+   * is one map read, and one that waits over QUEUE_LOG_MS says so once, with the pane's status.
+   */
+  const QUEUE_LOOK_MS = 15_000;
+  const QUEUE_LOG_MS = 60_000;
+  const queueLooked = new Set<string>();
+  const queueLook = setInterval(() => {
+    for (const { paneId, since } of pending.queuedPanes()) {
+      const waited = Date.now() - since;
+      if (waited >= QUEUE_LOG_MS && !queueLooked.has(paneId)) {
+        queueLooked.add(paneId);
+        console.warn(`pending message on ${paneId} has waited ${Math.round(waited / 1000)}s: its agent reports ${pending.current(paneId) ?? "no status"}`);
+      }
+      drainPending(paneId);
+    }
+  }, QUEUE_LOOK_MS);
+  queueLook.unref?.();
+  /**
    * A create request's first message for the pane's agent, queued as the request's own send: typed once
    * the agent is ready through `requester`, the id of the page connection that sent the request, while it
    * has the pane attached (drainPending), and listed to every connection attached to the pane. Without a

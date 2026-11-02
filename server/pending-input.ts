@@ -192,6 +192,21 @@ export class PendingInputs<Owner, Lease> {
   /** The pending message `id`, still held here, was accepted for an agent alone: a saved copy's resend keeps that whatever it says. */
   agentOnly(paneId: string, id: string): boolean { const item = this.records.get(id); return item?.paneId === paneId && item.message.agent_only === true; }
 
+  /**
+   * The panes holding a queued message and when the oldest of each was accepted: the delivery
+   * looks again on these, so a message is not left waiting for an event that never comes.
+   */
+  queuedPanes(): Array<{ paneId: string; since: number }> {
+    const oldest = new Map<string, number>();
+    for (const item of this.records.values()) {
+      if (item.message.state !== "queued") continue;
+      const at = Date.parse(item.message.created_at) || 0;
+      const seen = oldest.get(item.paneId);
+      if (seen === undefined || at < seen) oldest.set(item.paneId, at);
+    }
+    return [...oldest].map(([paneId, since]) => ({ paneId, since }));
+  }
+
   next(paneId: string): PendingRecord<Owner, Lease> | null {
     if (!ready(this.statuses.get(paneId)) || this.gates.has(paneId)
       || [...this.records.values()].some((item) => item.paneId === paneId && (item.inFlight || item.message.state === "uncertain"))) return null;

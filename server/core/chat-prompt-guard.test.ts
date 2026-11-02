@@ -45,6 +45,17 @@ it("writes and types nothing of a chat message whose sender may no longer type o
   expect(keys).not.toHaveBeenCalled();
 });
 
+it("says the message is in the input line when its Enter did not follow, not that nothing was typed", async () => {
+  spyOn(client, "agentPrompt").mockRejectedValue(new client.HerdrError("agent_not_found", "no agent"));
+  const typed = spyOn(client, "paneSendText").mockResolvedValue();
+  // the paste went through and the Enter did not: the pane holds the text, unsent
+  spyOn(client, "paneSendKeys").mockRejectedValue(new client.HerdrError("not_transmitted", "the connection dropped"));
+  const failed = await submitter()(pane.pane_id, "hello", "hello", Date.now()).then(() => null, (error: unknown) => error);
+  expect(typed).toHaveBeenCalledTimes(1);
+  expect((failed as client.HerdrError).code).toBe("submit_partial");
+  expect((failed as client.HerdrError).message).toMatch(/input line/);
+});
+
 it("still types a chat message into a pane herdr finds no agent in", async () => {
   spyOn(client, "agentPrompt").mockRejectedValue(new client.HerdrError("agent_not_found", "no agent"));
   const typed = spyOn(client, "paneSendText").mockResolvedValue();
