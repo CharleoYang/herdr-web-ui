@@ -88,6 +88,13 @@ const READER_ALLOWANCE_PX = 1;
 // no input this page sees (a screen reader's, a Firefox scrollbar's) leaves the end only past it, and
 // only over a transcript that did not shrink under it (onScroll, #2042).
 const LAYOUT_ALLOWANCE_PX = 48;
+/**
+ * How long after a chat mounts its list's first measurements may still move the view. The list lays
+ * rows out from estimated heights and replaces them with measured ones, so rows above give way and
+ * the view rises without anyone touching it; within this window and before any reader input that is
+ * the mount settling, not reading away from the end.
+ */
+const MOUNT_SETTLE_MS = 1_200;
 /** The pane this chat shows, for what its rows fetch on request (a tool call's whole output). */
 const ChatPaneContext = createContext<string | null>(null);
 const ChatHistoryContext = createContext("");
@@ -1379,6 +1386,8 @@ export const ChatView = memo(function ChatView({ paneId, presentationKey, finish
   const timeline = useRef<LegendListRef>(null);
   const ChatTimeline = useChatTimeline();
   const stickToBottom = useRef(true);
+  /** when this chat mounted (or moved to another pane): see MOUNT_SETTLE_MS */
+  const mountedAt = useRef(0);
   // the timeline's hold on a following reader's own click layout (ChatTimeline manualLayout)
   const manualLayout = useRef(false);
   // Explicit paging stays away even inside the ordinary near-bottom tolerance.
@@ -1513,6 +1522,7 @@ export const ChatView = memo(function ChatView({ paneId, presentationKey, finish
 
   useLayoutEffect(() => {
     shownPane.current = paneId;
+    mountedAt.current = performance.now();
     stopRestore.current?.();
     restoring.current = readChatPosition(paneStorageId(machineId, paneId)) ?? null;
     history.current = undefined; setHistoryId(undefined);
@@ -1636,7 +1646,7 @@ export const ChatView = memo(function ChatView({ paneId, presentationKey, finish
           else { if (history.current !== undefined) navigated(); dropOlder(); }
           generation = olderGeneration.current;
           history.current = conversation.history_id; setHistoryId(conversation.history_id);
-          if (!continued) { pagingAway.current = false; stickToBottom.current = true; lastRowOffset.current = null; lastScrollHeight.current = 0; setNewMessages(false); setAway(false); }
+          if (!continued) { pagingAway.current = false; stickToBottom.current = true; lastRowOffset.current = null; lastScrollHeight.current = 0; mountedAt.current = performance.now(); setNewMessages(false); setAway(false); }
         }
         // a 304 hands back the answer already shown: nothing to compare or lay out again
         if (conversation === lastAnswer.current) { setError(null); setErrorStatus(null); setFailures(0); setReadPresentation(proved ? readKey : undefined); return; }
@@ -2117,7 +2127,10 @@ export const ChatView = memo(function ChatView({ paneId, presentationKey, finish
     // the layout allowance from the end, however many small moves took it there. Growth never
     // excuses a move up.
     const shrankUnderView = shrunkAbove > READER_ALLOWANCE_PX || shrunk > READER_ALLOWANCE_PX;
-    const heldInPlace = scrollingUp && !byReader && (shrankUnderView || distanceFromBottom <= LAYOUT_ALLOWANCE_PX);
+    // the mount's own settling: no reader input at all yet, and the list still replacing estimates
+    const settling = stickToBottom.current && scrollInputAt.current === -Infinity
+      && performance.now() - mountedAt.current < MOUNT_SETTLE_MS;
+    const heldInPlace = scrollingUp && !byReader && (shrankUnderView || settling || distanceFromBottom <= LAYOUT_ALLOWANCE_PX);
     const leftEnd = scrollingUp && !heldInPlace;
     // Reaching the rounded endpoint clears reading intent unless still paging upward.
     if ((!pagingAway.current || scrollingDown) && distanceFromBottom <= 1) pagingAway.current = false;
@@ -2146,7 +2159,10 @@ export const ChatView = memo(function ChatView({ paneId, presentationKey, finish
   onScrollRef.current = onScroll;
   // the turn at the top of the view and its offset there, or the end while the reader follows it
   const rememberPlace = (node: HTMLDivElement): void => {
-    if (stickToBottom.current) {
+    // Within one screen of the end is following it, however the reader got there: coming back to a
+    // pane should show what it says now, not the last screen replayed a few hundred pixels up.
+    const withinScreen = node.scrollHeight - node.clientHeight - node.scrollTop <= node.clientHeight;
+    if (stickToBottom.current || withinScreen) {
       // End restoration ignores row anchors; only readers away from it need geometry.
       rememberChatPosition(paneStorageId(machineId, paneId), {
         historyId: history.current ?? null, turn: "", offset: 0, atEnd: true,
@@ -2315,11 +2331,25 @@ export const ChatView = memo(function ChatView({ paneId, presentationKey, finish
       document.removeEventListener("keydown", stop, true);
       if (stopRestore.current === stop) stopRestore.current = null;
     };
+    /**
+     * The restore could not be carried out (the row it asked for is not where the list's estimated
+     * heights predicted, or the list moved under it): the reader gets the end, never a transcript's
+     * top with the newest turns a page away.
+     */
+    const landAtEnd = (): void => {
+      stop();
+      pagingAway.current = false; stickToBottom.current = true; manualLayout.current = false;
+      setAway(false); setNewMessages(false);
+      void list.scrollToEnd({ animated: false });
+    };
     const settle = (): void => {
-      if (++frames > 30 || timeline.current !== list || olderCount.current !== olderAt || prependAnchor.current !== null) { stop(); return; }
+      if (++frames > 30 || timeline.current !== list || olderCount.current !== olderAt || prependAnchor.current !== null) { landAtEnd(); return; }
       const row = node.querySelector<HTMLElement>(`[data-chat-row="${CSS.escape(key)}"]`);
       if (row !== null) {
         const delta = row.getBoundingClientRect().top - node.getBoundingClientRect().top - saved.offset;
+        // A virtualized list's estimates can put that row a transcript away from the turn it names;
+        // chasing it would walk the view up, a screenful at a time, to the oldest turn loaded.
+        if (Math.abs(delta) > node.clientHeight * 2) { landAtEnd(); return; }
         if (Math.abs(delta) > 1) { stable = 0; void list.scrollToOffset({ offset: node.scrollTop + delta, animated: false }); }
         else if (++stable >= 2) { stop(); return; }
       }

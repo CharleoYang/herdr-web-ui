@@ -106,6 +106,15 @@ between releases do not reach them. Remote-PC runtime bundles are versioned sepa
   transcript.
 
 ### Fixed
+- Coming back to a pane's chat shows its newest turns again. The chat remembers where the reader
+  left it and puts that turn back on return — but a reader within one screen of the end counts as
+  following it now (an accidental nudge of the wheel no longer parks them there), a mount's own
+  layout — the list replacing estimated row heights, which moves the view up with no input — is no
+  longer read as the reader scrolling away, and a restore that cannot land where it asked (a
+  virtualized list's estimate far from the turn) falls back to the end instead of leaving the
+  reader at the transcript's top. Verified in Chromium on a live pane: at the end -> the end and no
+  jump button; 250 px up (under one screen) -> the end; 1200 px up (reading history) -> back to
+  that turn.
 - A queued message is looked at again every 15 seconds while it waits. Its send used to ride on an
   event of its pane (a turn ending, an attach, a readiness signal); when that event never came — a
   status left at `working`, an attach restored without one — nothing typed it and nothing said why.
