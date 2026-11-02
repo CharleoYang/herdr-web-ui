@@ -95,6 +95,17 @@ between releases do not reach them. Remote-PC runtime bundles are versioned sepa
   default and adjust its code/control contrast to the upstream AA checks.
 
 ### Fixed
+- A pane whose agent has named its session and not written it yet keeps its chat. omp writes its
+  session file with the first answer, and the read refused as `ConversationNotStarted` until then —
+  a subclass of "unavailable", so the chat handed the whole pane to the terminal fallback
+  ("conversation unavailable") for the length of the first answer. The route now answers that case
+  as the transcript the pane will have, with no turns and `session_not_started`, so the chat stays
+  and the turns appear as soon as the file does. Claude and omp share it.
+- The composer's model display is a control again: the OMP model switch had lost its
+  `onSwitchModel` wiring in an earlier upstream merge, so the chip rendered as a plain span and no
+  model could be picked. The wiring is back — the chip types `/switch <selector>` into the pane's
+  own line for an omp agent and re-reads the pane on the answer. Verified in Chromium against a live
+  omp pane: the chip is an enabled button ("切换模型") and its dialog lists 53 models with search.
 - The todo list in the chat's right rail scrolls under the wheel again. Its detail kept
   `overflow-y: auto` with `overscroll-behavior: contain` after the rail had already made it take its
   own height, so it was a scroll container with nothing to scroll and Chrome honoured the

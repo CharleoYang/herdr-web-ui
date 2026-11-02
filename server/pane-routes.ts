@@ -9,7 +9,7 @@ import { mergeCatalogSources } from "./catalog-sources.ts";
 import { rememberPaneCommands, scanPaneCommands } from "./commands.ts";
 import { paneFiles } from "./files.ts";
 import { badRequest, conflictResponse, errorResponse, isCount, isJsonObject, jsonResponse, readJsonObject, requestIdContext, setRequestRoute } from "./http.ts";
-import { conversationImage, ConversationReadPending, ConversationUnavailable, claudePaneSession, forgetPaneTranscriptState, HistoryChanged, paneConversation, paneProcessRoots, paneTranscript, toolOutput } from "./conversation.ts";
+import { conversationImage, ConversationNotStarted, ConversationReadPending, ConversationUnavailable, claudePaneSession, forgetPaneTranscriptState, HistoryChanged, paneConversation, paneProcessRoots, paneTranscript, toolOutput } from "./conversation.ts";
 import { readFileSync } from "node:fs";
 import { applyOfflineRewind, claudeHistoryDir, offlineRewindPlan, rewindPoints } from "./rewind.ts";
 import { driveRewind, RewindStopped, rewindMode, type RewindDriver } from "./rewind-run.ts";
@@ -44,6 +44,28 @@ function pagePromptsOf(raw: string | null): number | undefined {
   if (raw === null) return undefined;
   const parsed = Number(raw);
   return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : undefined;
+}
+
+/**
+ * What a failed conversation read answers. A session the agent has named and not written yet is not
+ * an unavailable conversation: its first answer is still being composed, so the pane's own transcript
+ * source is answered with no turns and `session_not_started`, and the chat stays. Everything else
+ * unavailable falls back to the scrollback transcript, as it always has.
+ */
+export function conversationFailure(paneId: string, error: unknown, requestId?: string): Response {
+  if (error instanceof HistoryChanged || error instanceof DevinHistoryChanged) return jsonResponse({ error: { code: "history_changed", message: error.message } }, 409);
+  if (error instanceof ConversationReadPending) {
+    conversationDiagnostics.unavailable(paneId, error, requestId);
+    return jsonResponse({ error: { code: "conversation_read_pending", message: error.message } }, 503, { "cache-control": "no-store" });
+  }
+  if (error instanceof ConversationNotStarted) {
+    return jsonResponse({ source: error.source, turns: [], session_not_started: true }, 200, { "cache-control": "no-store" });
+  }
+  if (error instanceof ConversationUnavailable) {
+    conversationDiagnostics.unavailable(paneId, error, requestId);
+    return jsonResponse({ source: "scrollback", turns: [], ...(error.screen ? { metadata: error.screen, screen: true } : {}) });
+  }
+  return errorResponse(error);
 }
 
 export async function handlePaneRequest(request: Request, url: URL, pathname: string, options: PaneStores): Promise<Response | null> {
@@ -294,19 +316,7 @@ export async function handlePaneRequest(request: Request, url: URL, pathname: st
       if (request.headers.get("if-none-match")?.replace(/^W\//, "") === etag.slice(2)) return new Response(null, { status: 304, headers });
       return jsonResponse(answer, 200, headers);
     } catch (error) {
-      if (error instanceof HistoryChanged || error instanceof DevinHistoryChanged) return jsonResponse({ error: { code: "history_changed", message: error.message } }, 409);
-      if (error instanceof ConversationReadPending) {
-        conversationDiagnostics.unavailable(paneId, error, requestIdContext.getStore()?.id);
-        return jsonResponse({ error: { code: "conversation_read_pending", message: error.message } }, 503, { "cache-control": "no-store" });
-      }
-      // an unrecognized pane is not an error: the client falls back to the
-      // scrollback transcript, exactly like chatmux's terminal fallback. Its metadata is only
-      // ever what the agent's own status line states
-      if (error instanceof ConversationUnavailable) {
-        conversationDiagnostics.unavailable(paneId, error, requestIdContext.getStore()?.id);
-        return jsonResponse({ source: "scrollback", turns: [], ...(error.screen ? { metadata: error.screen, screen: true } : {}) });
-      }
-      return errorResponse(error);
+      return conversationFailure(paneId, error, requestIdContext.getStore()?.id);
     }
   }
 

@@ -1347,6 +1347,17 @@ export function PaneTerminal({
           ) : null}
           waitingAnswer={waitingAnswer}
           onSend={composerSend}
+          // omp switches models from its own line, so the chip types `/switch <selector>` for it and
+          // the chat re-reads the pane on the answer. An earlier upstream merge dropped this prop,
+          // which left the composer's model display a plain span: nothing could be picked.
+          onSwitchModel={agent === "omp" ? (selector) => {
+            if (agentStatus === "working" || agentStatus === "blocked" || heldRef.current || answering !== null) return t("Wait until the agent is idle to switch models");
+            const sent = sendTerminalLine(`/switch ${selector}`);
+            return sent === false ? false : sent.then((answer) => {
+              if (answer === true) setChatRefresh((current) => current + 1);
+              return answer;
+            });
+          } : undefined}
           onAbort={abortTurn}
           onUploadImage={uploadImage}
         />

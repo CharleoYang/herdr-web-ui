@@ -608,6 +608,13 @@ export interface ConversationResponse {
    */
   screen?: true;
   /**
+   * The agent has named its session and has not written it yet: its first answer is still being
+   * composed (omp writes the file with that answer). `source` is the transcript this pane will have
+   * and `turns` is empty; the chat stays on the conversation rather than falling back to the
+   * terminal, and the file's arrival is the next poll's answer.
+   */
+  session_not_started?: true;
+  /**
    * Where the first turn sits in the transcript: pass it as `before` for the page
    * of turns before these (with `since`, never reaching back past that cursor), or
    * as `from` to keep polling from it. A `from` answer starts later than `from` when
