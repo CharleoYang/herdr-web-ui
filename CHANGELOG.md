@@ -95,6 +95,12 @@ between releases do not reach them. Remote-PC runtime bundles are versioned sepa
   default and adjust its code/control contrast to the upstream AA checks.
 
 ### Changed
+- Every attached terminal runs on the Rust PTY host (`crates/pty-sidecar`) wherever one is built or
+  installed: 0.72–0.83 MB resident per pane against the Node host's 39.4 MB. Built here with
+  `cargo +1.96.1 build --release` (0.4 MB binary, `lto`/`strip`), the default `stable` toolchain on
+  this machine having a broken manifest; `server/pty/host.ts` probes it (`1 1 true`, exit 0) and
+  falls back to `pty-host.mjs` where it fails. Verified on a live pane: 2 Rust hosts at 0.72/0.83 MB,
+  no Node host left, `echo p0-ok` typed and echoed back through it.
 - A Claude Code or OpenCode pane's subagents moved to the chat's rail, beside the conversation: the
   dock that held OMP's checkpoints now lists them too (`SubagentsPanel`), reading the same
   `/api/pane/omo-tasks` the status line used. The status line's background-task list and its count
