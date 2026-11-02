@@ -20,15 +20,17 @@ v1 的一条浏览器连接不是「一个 WS」，而是 **WS + 一组使用该
 
 因此 v2 的归属单元定义为：
 
-> **一个 pane 的归属 = 它的 WS 帧 + 所有以该连接 ID 携带状态的 HTTP 路由（create 首消息、prompt answer、pane 变更、attachment 相关）。**
+> **归属单元 = 一条浏览器连接（一条 WS）+ 它携带状态的全部 HTTP 路由 + 该连接上 attachments/watches 涉及的全部 pane + 与这些 pane 共享 claim 的其他连接。**
 
-切换（T-08）以 pane 为单位一次完成；同一 pane 的 WS 与上述 HTTP **必须同进程**，跨进程混用视为设计错误，由 T-08 的用例拒绝（同 pane 两归属 → 必须失败）。
+第 3 轮指出「按 pane 切」与真实拓扑不符：浏览器只有**一条** socket，`attach()` 只是往同一 socket 加一项（`src/lib/ws.ts:332-343,732-737`、`src/lib/ws.test.ts:807-843` 一 socket 两 pane 的回放用例）；服务端一条连接一个 ID、一份 attachments 与一份 role generation（`server/core/connections.ts:33-49`、`core/socket.ts:89-105,139-157`）。
+
+因此 T-08 的切换是**整条连接闭包**的一次迁移：连接、其 HTTP 状态、其 pane claim、共享这些 pane 的其他连接**同批**迁移；不允许把同一 socket 的 A pane 留给 v1、B pane 交给 v2。若实现成本无法接受，则退化为**全量迁移**（一次性把本地 core 全交给 v2），不做部分组。T-08 必测：一 socket 两 pane、两客户端一 pane、role/吊销传播、首消息 HTTP、重连回放。
 
 ## 2. 安全边界（R1-1）
 
 - **公开端口在 T-11 之前不动**；v2 只监听 loopback。
 - **T-10（访问层对等）是 T-08 的硬前置**（第 2 轮指出 T-08 只依赖 T-04/T-07，已改）。T-10 交付：`peer/转发头/token/device/Portal` 判定 + **ingress 集成**（不只是纯函数）——HTTP 与 WS 两条都断言，含吊销订阅。
-- 若 v2 在 T-08 之后承载某 pane，则该 pane 的 HTTP 与 WS 都由 v2 做访问判定；**v1 绝不再对该 pane 做第二次判定**（避免双判定与绕过），由 T-08 用例断言（同一请求只出现一个 `x-ovis-served-by`）。
+- 若 v2 在 T-08 之后承载某组连接，则该组的 HTTP 与 WS 都由 v2 做访问判定；**v1 不再二次判定**。第 3 轮证明「响应头只出现一个」不能证明这一点（两个判定都写同一个头仍然通过，`local://ovis-v2-review-round3.md` 的 B3 反例）。改为：测试构建在两个真实判定入口记录**请求关联事件**（request id + 判定者 + 结果），断言期望的判定者与**次数**，并注入「双判定」「跳过判定」两个 mutant；provenance 绑定到**被 spawn 的二进制/监听者**与代理的**上游 hop**，不用响应头计数。
 
 ## 3. 传输与背压（R1-3，已闭合）
 
@@ -47,7 +49,12 @@ v1 的一条浏览器连接不是「一个 WS」，而是 **WS + 一组使用该
 
 `scripts/v2-inventory.ts` 扫描**调用点**（`machinePath`/`machineRequest`/`cliProxyRequest`/`fetch`/`*Json` 及 `/api/...` 字面量），并把结果与**人工审过的** `scripts/v2-route-allowlist.json` 做**双向差集**：扫到未审 = 失败；审过但不再被调 = 失败。当前：**18 client / 25 server 帧；98 个路由模板**。
 
-**已知静态盲区（明确写下，不假装完整）**：以表达式拼路径的调用（如 `machineRequest(\`/${encodeURIComponent(id)}/update-bridge\`)`）扫不到；辅助函数前缀以外拼装的路径也扫不到。因此**完备性由运行时对账负责**（T-02）：v1 在 fixture 模式下记录 `method + 归一化 path + local/remote target`，跑遍全部页面/对话框/错误分支（含 POST/DELETE/SSE/登录回调），要求 **trace ⊇ 静态清单**，且 trace 里每个操作都要在 fixture 清单中登记。静态清单是下限，运行时是上限。
+**第 3 轮之后的机制（替换「trace ⊇ 静态清单」这种单向包含）**：
+
+1. 扫描器认 `machineRequest<T>(...)` 泛型、空根（`cliProxyRequest("")` → `/api/cliproxy`）、`apiFetch`/`sendJson`、`src/lib` 与 `src/components` 的 `.ts`/`.tsx`；
+2. **表达式拼的路径不许丢**：登记为 `@expr:<helper>:<模板>`（当前 27 条），必须进人工清单；
+3. 维护**独立的期望操作清单**：`method + 归一化 path + local/remote/portal 面`，由评审逐条确认；
+4. T-02 的对账是**三向**：`期望清单 ⊆ 已执行 trace ⊆ 期望清单`——每个期望操作都必须有 fixture 真正跑到（`fixtures ⊆ trace`），否则失败。只做 `static ⊆ trace` 会在两处都漏时同时通过（第 3 轮已用反例证明）。
 
 ## 7. 架构（阶段标注修正，N3）
 
@@ -78,7 +85,7 @@ provenance 按**面**定义（不是全局停 v1）：原生路由在 v1 停止�
 | T-08 | 归属切换（WS + pane HTTP 一体） | 每 pane 一次判定；拒绝同 pane 双归属 | 帧序等价、双归属被拒、访问判定只出现一次；**前置 T-10** |
 | T-09 | conversation 原生 | ancestry 掩码、工具/通知、子 agent 元数据 | 25 轮+rewind、clear、工具/通知、元数据变更、44 MB 五模式 |
 | T-10 | 访问层对等（含 ingress） | HTTP + WS 两条都走 v2 判定 + 吊销订阅 | v1 `access.test.ts` 全用例 + 直接/经代理两种请求 + 吊销生效 |
-| T-11 | 公开端口切换 + 回退协议 | 排空、租约、sidecar 收尾、`OVIS_V2=0` | 每种 pending 态（queued/held/sending/uncertain）下的切换与恢复各一条；≤5 s 回滚；端口/PID 归属断言 |
+| T-11 | 公开端口切换 + 回退协议 | 停准入 → 失效旧租约 → 保留 queued/held（不自动重放）→ sending 必然落到 definite receipt 或 uncertain → uncertain 永不自动重发 → 确认旧 sidecar 归属结束 → `OVIS_V2=0` | 上述**每一步的期望结果**逐条断言（含 ambiguous terminal delivery 与重启）；≤5 s 回滚；端口/PID 归属 |
 | T-12 | 浸泡 + 影子差分 + 指标 | 30 min / 11 pane / 1 万帧每分 | 进程树 RSS（v2+v1+sidecar）、p95、丢帧；只看 Rust PID 判不通过 |
 | T-13 | 发布与安装 | 资产 + 幂等安装 + 回滚文档 | 干净前缀：装/启/停/重装/回滚；运行中二进制与资产 SHA 绑定 |
 
@@ -91,6 +98,8 @@ provenance 按**面**定义（不是全局停 v1）：原生路由在 v1 停止�
 - 目标 40 MB 只对 **Rust 进程**成立；整机口径必须同时报进程树（含 v1 与 sidecar）。
 
 ## 10. 测量（N1）
+
+目标数值仍是**假设**（第 3 轮指出第 3 稿把它们删掉了）：按键→回显 p95 ≤ 40 ms、切 pane 首帧 ≤ 80 ms、44 MB transcript ≤ 300 ms、冷启 ≤ 100 ms、单二进制 ≤ 25 MB、网关 RSS ≤ 40 MB。下面是各自的测量法。
 
 | 目标 | 方法 |
 |---|---|

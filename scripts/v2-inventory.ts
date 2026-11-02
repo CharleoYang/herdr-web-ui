@@ -36,10 +36,10 @@ function routeOf(call: string, argument: string): string | null {
     .replace(/["'`]$/, "")
     .replace(/\$\{[^}]*\}/g, ":id")
     .replace(/[?#].*$/, "");
-  if (path === "" || path.startsWith("http")) return null;
+  if (path.startsWith("http")) return null;
   // the helper's own prefix: `machinePath(m, "pane/read")` -> /api/pane/read, `machineRequest(m, "/settings")` -> /api/machines/settings
   const prefix = call === "machinePath" ? "/api" : call === "machineRequest" ? "/api/machines" : call === "cliProxyRequest" ? "/api/cliproxy" : "";
-  if (prefix !== "") path = path.startsWith("/") ? `${prefix}${path}` : `${prefix}/${path}`;
+  if (prefix !== "") path = path === "" ? prefix : path.startsWith("/") ? `${prefix}${path}` : `${prefix}/${path}`;
   else if (!path.startsWith("/")) path = `/${path}`;
   if (path === "/api") return null;
   if (!path.startsWith("/api/") && !path.startsWith("/_portal/")) return null;
@@ -50,10 +50,16 @@ function routeOf(call: string, argument: string): string | null {
 /** Routes named as arguments of the calls that take one, plus bare `/api/...` literals. */
 function scan(source: string): string[] {
   const found = new Set<string>();
-  const calls = /\b(machinePath|machineRequest|cliProxyRequest|fetch|request|getJson|postJson|putJson|patchJson|deleteJson)\(\s*(?:[^,()]*,\s*)*?(["'`])([^"'`]*)\2/g;
+  const calls = /\b(machinePath|machineRequest|cliProxyRequest|fetch|request|getJson|postJson|putJson|patchJson|deleteJson|apiFetch|sendJson)(?:<[^>]*>)?\(\s*(?:[^,()]*,\s*)*?(["'`])([^"'`]*)\2/g;
   for (const match of source.matchAll(calls)) {
     const route = routeOf(match[1]!, `${match[2]}${match[3]}${match[2]}`);
     if (route !== null) found.add(route);
+  }
+  // calls whose path is an expression (a template with ${encodeURIComponent(...)}) are registered as
+  // unresolved, so the reviewed manifest has to account for them instead of never seeing them
+  for (const match of source.matchAll(/\b(machinePath|machineRequest|cliProxyRequest)\(\s*(?:[^,()]*,\s*)*`((?:[^`\\]|\\.)*)`/g)) {
+    if (!match[2]!.includes("${")) continue;
+    found.add(`@expr:${match[1]}:${match[2]!.replace(/\$\{[^}]*\}/g, ":id")}`);
   }
   for (const match of source.matchAll(/(["'`])(\/api\/[a-z0-9/:${}_.-]*)\1/gi)) {
     const route = routeOf("literal", `${match[1]}${match[2]}${match[1]}`);
@@ -80,6 +86,8 @@ const server = unionTypes(protocol, "ServerMessage");
 
 const files = [
   ...[...new Bun.Glob("src/lib/**/*.ts").scanSync({ cwd: root })].filter((file) => !isTest(file)),
+  ...[...new Bun.Glob("src/lib/**/*.tsx").scanSync({ cwd: root })].filter((file) => !isTest(file)),
+  ...[...new Bun.Glob("src/components/**/*.ts").scanSync({ cwd: root })].filter((file) => !isTest(file)),
   ...[...new Bun.Glob("src/components/**/*.tsx").scanSync({ cwd: root })].filter((file) => !isTest(file)),
 ];
 const routes = new Set<string>();

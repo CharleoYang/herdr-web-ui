@@ -9,7 +9,7 @@ ClientMessage: `attach`, `conversation-watch`, `detach`, `input`, `insert`, `key
 
 ServerMessage: `attach-resumed`, `conversation-changed`, `conversation-delta`, `error`, `features`, `input-ready`, `insert-result`, `output-recovering`, `pane-exited`, `pane-focused`, `pane-geometry`, `pane-status`, `pending-messages`, `pending-result`, `pong`, `prompt-push`, `pty-data`, `pty-exit`, `role-ack`, `secret-result`, `session-changed`, `snapshot`, `submit-result`, `watch-data`, `watch-end`
 
-## HTTP routes the SPA calls (98 templates; 2 methods observed in api.ts)
+## HTTP routes the SPA calls (128 templates; 2 methods observed in api.ts)
 
 | route | methods (from api.ts) |
 | --- | --- |
@@ -22,6 +22,7 @@ ServerMessage: `attach-resumed`, `conversation-changed`, `conversation-delta`, `
 | `/api/agent/rename` | — |
 | `/api/agents` | — |
 | `/api/auth` | — |
+| `/api/cliproxy` | — |
 | `/api/cliproxy/callback` | — |
 | `/api/cliproxy/login` | — |
 | `/api/connection-diagnostics` | POST |
@@ -38,6 +39,8 @@ ServerMessage: `attach-resumed`, `conversation-changed`, `conversation-delta`, `
 | `/api/layout/ratio` | — |
 | `/api/machines` | — |
 | `/api/machines/events` | — |
+| `/api/machines/settings` | — |
+| `/api/machines/setup` | — |
 | `/api/omp/models` | — |
 | `/api/pane/artifacts` | — |
 | `/api/pane/background-agent` | — |
@@ -111,6 +114,33 @@ ServerMessage: `attach-resumed`, `conversation-changed`, `conversation-delta`, `
 | `/api/worktree/list` | — |
 | `/api/worktree/open` | — |
 | `/api/worktree/remove` | — |
+| `@expr:cliProxyRequest:/login?state=:id` | — |
+| `@expr:machinePath:fs/favicon?:id).toString()}` | — |
+| `@expr:machinePath:fs/file?:id:id` | — |
+| `@expr:machinePath:fs/stat?:id` | — |
+| `@expr:machinePath:pane/artifacts?pane_id=:id` | — |
+| `@expr:machinePath:pane/background-agent?:id` | — |
+| `@expr:machinePath:pane/btw?pane_id=:id` | — |
+| `@expr:machinePath:pane/commands?pane_id=:id` | — |
+| `@expr:machinePath:pane/conversation/image?:id).toString()}` | — |
+| `@expr:machinePath:pane/conversation/tool-output?:id).toString()}` | — |
+| `@expr:machinePath:pane/conversation?:id` | — |
+| `@expr:machinePath:pane/files?:id` | — |
+| `@expr:machinePath:pane/omo-tasks?pane_id=:id` | — |
+| `@expr:machinePath:pane/omp-agents?pane_id=:id` | — |
+| `@expr:machinePath:pane/plan?pane_id=:id` | — |
+| `@expr:machinePath:pane/prompt?pane_id=:id` | — |
+| `@expr:machinePath:pane/read?:id` | — |
+| `@expr:machinePath:pane/rewind?pane_id=:id` | — |
+| `@expr:machinePath:pane/scroll?pane_id=:id` | — |
+| `@expr:machinePath:pane/selection?:id` | — |
+| `@expr:machinePath:plugin/action?plugin_id=:id&log_id=:id` | — |
+| `@expr:machinePath:workspace/diff/file?:id` | — |
+| `@expr:machinePath:workspace/diff/files?:id` | — |
+| `@expr:machinePath:workspace/diff/refs?:id` | — |
+| `@expr:machinePath:workspace/directories?:id` | — |
+| `@expr:machineRequest:/:id` | — |
+| `@expr:machineRequest:/:id/update-bridge` | — |
 
 ## Not a finite route (named by contract, not scanned)
 
