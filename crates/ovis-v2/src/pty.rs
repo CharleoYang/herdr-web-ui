@@ -4,7 +4,7 @@
 //! the consumer ACKs offsets. Above 256 KiB unacknowledged we stop reading; when it drops under
 //! 64 KiB we resume; at 1 MiB the connection is closed with code 4008 — never a growing buffer.
 
-use std::{process::Stdio, sync::Arc};
+use std::{process::Stdio, sync::{Arc, atomic::{AtomicU64, Ordering}}, time::{Duration, Instant}};
 
 use bytes::{BufMut, BytesMut};
 use futures_util::{SinkExt, StreamExt};
@@ -51,9 +51,14 @@ pub async fn attach(stream: tokio_tungstenite::WebSocketStream<TokioIo<hyper::up
         }
     };
     let mut stdout = child.stdout.take().expect("pty stdout");
-    let mut stdin = child.stdin.take().expect("pty stdin");
+    let stdin = child.stdin.take().expect("pty stdin");
+    let mut stdin = stdin;
     let (mut sink, mut source) = stream.split();
     let window = Arc::new(Mutex::new(Window { buffered: 0, acked: 0 }));
+    // one attachment's input order: every write is rechecked against the generation, and a typed
+    // ESC settles longer than ordinary text (v1's 40 ms / 300 ms)
+    let generation = Arc::new(AtomicU64::new(0));
+    let mut last_typed: Option<(Instant, bool)> = None;
     let resume = Arc::new(Notify::new());
     let mut offset: u64 = 0;
     let mut buf = [0u8; 16 * 1024];
@@ -61,8 +66,36 @@ pub async fn attach(stream: tokio_tungstenite::WebSocketStream<TokioIo<hyper::up
     let ack_window = window.clone();
     let ack_resume = resume.clone();
     let acks = async move {
+        let mut stdin = stdin;
+        let mut generation = generation;
         while let Some(Ok(message)) = source.next().await {
             if let Message::Text(text) = message {
+                if text == "detach" {
+                    generation.fetch_add(1, Ordering::SeqCst);
+                    break;
+                }
+                if let Some(input) = text.strip_prefix("input:") {
+                    // the settle wait belongs to the previous write, then the generation is rechecked
+                    if let Some((at, escaped)) = last_typed {
+                        let budget = if escaped { Duration::from_millis(300) } else { Duration::from_millis(40) };
+                        let elapsed = at.elapsed();
+                        if elapsed < budget {
+                            tokio::time::sleep(budget - elapsed).await;
+                        }
+                    }
+                    if generation.load(Ordering::SeqCst) != 0 {
+                        break;
+                    }
+                    let escaped = input.ends_with('\u{1b}');
+                    let frame = serde_json::json!({ "t": "i", "d": input }).to_string() + "\n";
+                    if stdin.write_all(frame.as_bytes()).await.is_err() {
+                        break;
+                    }
+                    last_typed = Some((Instant::now(), escaped));
+                    // test-only observability (never to the client): when the write actually happened
+                    eprintln!("input-write {}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0));
+                    continue;
+                }
                 if let Some(rest) = text.strip_prefix("ack:") {
                     if let Ok(at) = rest.parse::<u64>() {
                         let mut window = ack_window.lock().await;
@@ -123,8 +156,6 @@ pub async fn attach(stream: tokio_tungstenite::WebSocketStream<TokioIo<hyper::up
     };
 
     // stdin stays open: closing it would tell the sidecar to stop (P0's direct-spawn observation)
-    let _stdin = stdin;
-
     tokio::select! {
         _ = acks => {}
         _ = writer => {}
