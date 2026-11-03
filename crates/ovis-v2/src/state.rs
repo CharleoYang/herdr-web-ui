@@ -19,6 +19,7 @@ pub struct PendingItem {
     pub pane_id: String,
     pub text: String,
     pub state: String,
+    pub error: Option<String>,
 }
 
 #[derive(Default)]
@@ -51,6 +52,7 @@ impl Store {
                             pane_id: item.get("pane_id").and_then(Value::as_str).unwrap_or_default().to_string(),
                             text: item.get("text").and_then(Value::as_str).unwrap_or_default().to_string(),
                             state: status,
+                            error: item.get("error").and_then(Value::as_str).map(|code| code.to_string()),
                         });
                     }
                 }
@@ -73,7 +75,7 @@ impl Store {
         json!({
             "next_id": state.next_id,
             "pending": state.pending.iter().map(|item| json!({
-                "id": item.id, "pane_id": item.pane_id, "text": item.text, "state": item.state,
+                "id": item.id, "pane_id": item.pane_id, "text": item.text, "state": item.state, "error": item.error,
             })).collect::<Vec<_>>(),
             "drafts": state.drafts,
         })
@@ -94,19 +96,42 @@ impl Store {
         let mut state = self.state.lock().unwrap();
         let id = format!("p{}", state.next_id);
         state.next_id += 1;
-        state.pending.push(PendingItem { id: id.clone(), pane_id: pane_id.into(), text: text.into(), state: "queued".into() });
+        state.pending.push(PendingItem { id: id.clone(), pane_id: pane_id.into(), text: text.into(), state: "queued".into(), error: None });
         self.persist(&state);
         id
     }
 
-    pub fn resolve(&self, id: &str, outcome: &str) -> bool {
+    pub fn resolve(&self, id: &str, outcome: &str, code: Option<&str>) -> bool {
         let mut state = self.state.lock().unwrap();
         let Some(item) = state.pending.iter_mut().find(|item| item.id == id) else {
             return false;
         };
         item.state = outcome.into();
+        item.error = code.map(|code| code.to_string());
         self.persist(&state);
         true
+    }
+
+    /// v1's rehold (server/core/pending.ts:157-160): a fault re-holds what is queued and most of
+    /// what is held, but never a target-changed or launch-gone hold, and never something in flight
+    /// or already done.
+    pub fn rehold(&self, pane_id: Option<&str>, fault: &str) -> usize {
+        let mut state = self.state.lock().unwrap();
+        let mut changed = 0;
+        for item in state.pending.iter_mut() {
+            if pane_id.is_some_and(|pane| item.pane_id != pane) {
+                continue;
+            }
+            let terminal_hold = matches!(item.error.as_deref(), Some("pending_target_changed") | Some("launch_gone"));
+            let eligible = item.state == "queued" || (item.state == "held" && !terminal_hold);
+            if eligible {
+                item.state = "held".into();
+                item.error = Some(fault.to_string());
+                changed += 1;
+            }
+        }
+        self.persist(&state);
+        changed
     }
 
     pub fn list(&self, pane_id: Option<&str>) -> Vec<PendingItem> {

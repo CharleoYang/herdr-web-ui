@@ -368,7 +368,7 @@ async fn serve(dist: PathBuf, upstream: Option<Arc<str>>, trace: Option<PathBuf>
         let query = request.uri().query().unwrap_or("");
         let pane = query.split('&').find_map(|pair| pair.strip_prefix("pane_id="));
         let items: Vec<serde_json::Value> = store.list(pane).iter().map(|item| serde_json::json!({
-            "id": item.id, "pane_id": item.pane_id, "text": item.text, "state": item.state,
+            "id": item.id, "pane_id": item.pane_id, "text": item.text, "state": item.state, "error": item.error,
         })).collect();
         return Ok(json_response(serde_json::json!({ "pending": items }).to_string()));
     }
@@ -388,8 +388,16 @@ async fn serve(dist: PathBuf, upstream: Option<Arc<str>>, trace: Option<PathBuf>
         let body = request_json(request).await;
         let id = body.get("id").and_then(serde_json::Value::as_str).unwrap_or("");
         let outcome = body.get("outcome").and_then(serde_json::Value::as_str).unwrap_or("done");
-        let ok = store.resolve(id, outcome);
+        let code = body.get("code").and_then(serde_json::Value::as_str);
+        let ok = store.resolve(id, outcome, code);
         return Ok(json_response(serde_json::json!({ "ok": ok }).to_string()));
+    }
+    if (path == "/test/pending/rehold" || path == "/api/pending/rehold") && request.method() == hyper::Method::POST {
+        let body = request_json(request).await;
+        let fault = body.get("fault").and_then(serde_json::Value::as_str).unwrap_or("disconnected");
+        let pane = body.get("pane_id").and_then(serde_json::Value::as_str);
+        let changed = store.rehold(pane, fault);
+        return Ok(json_response(serde_json::json!({ "reheld": changed }).to_string()));
     }
     if path == "/test/composer" || path == "/api/composer" {
         if request.method() == hyper::Method::GET {
