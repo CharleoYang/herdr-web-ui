@@ -17,6 +17,7 @@ use std::{
 
 use bytes::Bytes;
 use http_body_util::{BodyExt, Full};
+mod herdr;
 mod proxy;
 use hyper::{body::Incoming, Request, Response, StatusCode};
 use std::sync::Arc;
@@ -41,6 +42,7 @@ struct Args {
     test_listen: bool,
     upstream: Option<Arc<str>>,
     trace: Option<PathBuf>,
+    rpc_selftest: Option<PathBuf>,
 }
 
 fn parse() -> Result<Args> {
@@ -51,6 +53,7 @@ fn parse() -> Result<Args> {
     let mut test_listen = false;
     let mut upstream: Option<Arc<str>> = None;
     let mut trace: Option<PathBuf> = None;
+    let mut rpc_selftest: Option<PathBuf> = None;
     let mut argv = env::args().skip(1);
     while let Some(arg) = argv.next() {
         match arg.as_str() {
@@ -61,6 +64,7 @@ fn parse() -> Result<Args> {
             "--test-listen" => test_listen = true,
             "--upstream" => upstream = Some(Arc::from(argv.next().ok_or("--upstream needs a URL")?)),
             "--trace" => trace = Some(PathBuf::from(argv.next().ok_or("--trace needs a file")?)),
+            "--selftest-rpc" => rpc_selftest = Some(PathBuf::from(argv.next().ok_or("--selftest-rpc needs a socket path")?)),
             "-h" | "--help" => {
                 println!("{USAGE}");
                 process::exit(0);
@@ -73,7 +77,7 @@ fn parse() -> Result<Args> {
             port = fromEnv.to_string_lossy().parse()?;
         }
     }
-    Ok(Args { dist, port, host, selftest, test_listen, upstream, trace })
+    Ok(Args { dist, port, host, selftest, test_listen, upstream, trace, rpc_selftest })
 }
 
 /// Only a loopback listener: a public bind would move traffic the plan has not migrated yet.
@@ -335,6 +339,10 @@ async fn shutdown_signal() {
 #[tokio::main(flavor = "multi_thread")]
 async fn main() -> Result<()> {
     let args = parse()?;
+    if let Some(socket) = &args.rpc_selftest {
+        herdr::selftest(socket).await;
+        return Ok(());
+    }
     if args.selftest {
         return selftest(args).await;
     }
