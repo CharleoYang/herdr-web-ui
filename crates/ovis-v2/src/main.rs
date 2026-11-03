@@ -22,6 +22,7 @@ mod proxy;
 mod pane_http;
 mod pty;
 mod session;
+mod state;
 use hyper::{body::Incoming, Request, Response, StatusCode};
 use std::sync::Arc;
 use hyper_util::rt::TokioIo;
@@ -35,6 +36,19 @@ fn boxed(body: Bytes) -> Out {
 }
 type Result<T, E = Box<dyn Error + Send + Sync>> = std::result::Result<T, E>;
 
+fn json_response(text: String) -> Response<Out> {
+    let mut response = Response::new(boxed(Bytes::from(text)));
+    response.headers_mut().insert("content-type", "application/json".parse().unwrap());
+    response
+}
+
+async fn request_json(request: Request<Incoming>) -> serde_json::Value {
+    let Ok(collected) = request.into_body().collect().await else {
+        return serde_json::Value::Null;
+    };
+    serde_json::from_slice(&collected.to_bytes()).unwrap_or(serde_json::Value::Null)
+}
+
 const USAGE: &str = "usage: ovis-v2 --dist <dir> [--port <n>] [--host 127.0.0.1] [--selftest] [--test-listen]";
 
 struct Args {
@@ -47,6 +61,7 @@ struct Args {
     trace: Option<PathBuf>,
     rpc_selftest: Option<PathBuf>,
     herdr_socket: Option<PathBuf>,
+    state_path: Option<PathBuf>,
 }
 
 fn parse() -> Result<Args> {
@@ -59,6 +74,7 @@ fn parse() -> Result<Args> {
     let mut trace: Option<PathBuf> = None;
     let mut rpc_selftest: Option<PathBuf> = None;
     let mut herdr_socket: Option<PathBuf> = None;
+    let mut state_path: Option<PathBuf> = None;
     let mut argv = env::args().skip(1);
     while let Some(arg) = argv.next() {
         match arg.as_str() {
@@ -71,6 +87,7 @@ fn parse() -> Result<Args> {
             "--trace" => trace = Some(PathBuf::from(argv.next().ok_or("--trace needs a file")?)),
             "--selftest-rpc" => rpc_selftest = Some(PathBuf::from(argv.next().ok_or("--selftest-rpc needs a socket path")?)),
             "--herdr-socket" => herdr_socket = Some(PathBuf::from(argv.next().ok_or("--herdr-socket needs a path")?)),
+            "--state" => state_path = Some(PathBuf::from(argv.next().ok_or("--state needs a path")?)),
             "-h" | "--help" => {
                 println!("{USAGE}");
                 process::exit(0);
@@ -83,7 +100,7 @@ fn parse() -> Result<Args> {
             port = fromEnv.to_string_lossy().parse()?;
         }
     }
-    Ok(Args { dist, port, host, selftest, test_listen, upstream, trace, rpc_selftest, herdr_socket })
+    Ok(Args { dist, port, host, selftest, test_listen, upstream, trace, rpc_selftest, herdr_socket, state_path })
 }
 
 /// Only a loopback listener: a public bind would move traffic the plan has not migrated yet.
@@ -224,7 +241,7 @@ fn json_error(error: impl std::fmt::Display, status: StatusCode) -> Response<Out
     response
 }
 
-async fn serve(dist: PathBuf, upstream: Option<Arc<str>>, trace: Option<PathBuf>, herdr_socket: Option<PathBuf>, request: Request<Incoming>) -> std::result::Result<Response<Out>, Infallible> {
+async fn serve(dist: PathBuf, upstream: Option<Arc<str>>, trace: Option<PathBuf>, herdr_socket: Option<PathBuf>, store: Arc<state::Store>, request: Request<Incoming>) -> std::result::Result<Response<Out>, Infallible> {
     let path = request.uri().path();
     // the test-only PTY endpoint: a WebSocket with the output window, gated on --test-listen AND
     // the test-listen cargo feature; a production build has no such entry
@@ -274,6 +291,55 @@ async fn serve(dist: PathBuf, upstream: Option<Arc<str>>, trace: Option<PathBuf>
                 return Ok(response);
             }
         }
+    }
+
+    // spec T-07 core: durable pending input and composer drafts (test seam until T-08's real routes)
+    #[cfg(feature = "test-listen")]
+    if path == "/test/state/export" {
+        return Ok(json_response(store.export()));
+    }
+    #[cfg(feature = "test-listen")]
+    if path == "/test/pending" && request.method() == hyper::Method::GET {
+        let query = request.uri().query().unwrap_or("");
+        let pane = query.split('&').find_map(|pair| pair.strip_prefix("pane_id="));
+        let items: Vec<serde_json::Value> = store.list(pane).iter().map(|item| serde_json::json!({
+            "id": item.id, "pane_id": item.pane_id, "text": item.text, "state": item.state,
+        })).collect();
+        return Ok(json_response(serde_json::json!({ "pending": items }).to_string()));
+    }
+    #[cfg(feature = "test-listen")]
+    if path == "/test/pending/submit" && request.method() == hyper::Method::POST {
+        let body = request_json(request).await;
+        let pane = body.get("pane_id").and_then(serde_json::Value::as_str).unwrap_or("");
+        let text = body.get("text").and_then(serde_json::Value::as_str).unwrap_or("");
+        if pane.is_empty() {
+            let mut response = json_response("{\"error\":\"missing pane_id\"}".into());
+            *response.status_mut() = StatusCode::BAD_REQUEST;
+            return Ok(response);
+        }
+        let id = store.submit(pane, text);
+        return Ok(json_response(serde_json::json!({ "id": id }).to_string()));
+    }
+    #[cfg(feature = "test-listen")]
+    if path == "/test/pending/resolve" && request.method() == hyper::Method::POST {
+        let body = request_json(request).await;
+        let id = body.get("id").and_then(serde_json::Value::as_str).unwrap_or("");
+        let outcome = body.get("outcome").and_then(serde_json::Value::as_str).unwrap_or("done");
+        let ok = store.resolve(id, outcome);
+        return Ok(json_response(serde_json::json!({ "ok": ok }).to_string()));
+    }
+    #[cfg(feature = "test-listen")]
+    if path == "/test/composer" {
+        if request.method() == hyper::Method::GET {
+            let query = request.uri().query().unwrap_or("");
+            let pane = query.split('&').find_map(|pair| pair.strip_prefix("pane_id=")).unwrap_or("");
+            return Ok(json_response(serde_json::json!({ "draft": store.draft(pane) }).to_string()));
+        }
+        let body = request_json(request).await;
+        let pane = body.get("pane_id").and_then(serde_json::Value::as_str).unwrap_or("");
+        let draft = body.get("draft").and_then(serde_json::Value::as_str).unwrap_or("");
+        store.set_draft(pane, draft);
+        return Ok(json_response("{\"ok\":true}".into()));
     }
 
     // native pane reads: single herdr calls, with v1's own parameter validation
@@ -410,6 +476,7 @@ async fn run(args: Args) -> Result<()> {
     let upstream = args.upstream.clone();
     let trace = args.trace.clone();
     let herdr_socket = args.herdr_socket.clone();
+    let store = state::Store::load(args.state_path.as_deref().unwrap_or(Path::new("ovis-v2-state.json")));
     let dist = args.dist.canonicalize().unwrap_or_else(|_| args.dist.clone());
     if !dist.is_dir() {
         eprintln!("ovis-v2: --dist {} is not a directory", dist.display());
@@ -444,6 +511,7 @@ async fn run(args: Args) -> Result<()> {
                         let upstream = upstream.clone();
                         let trace = trace.clone();
                         let herdr_socket = herdr_socket.clone();
+                        let store = store.clone();
                         tasks.spawn(async move {
                             let conn = hyper::server::conn::http1::Builder::new()
                                 .serve_connection(io, hyper::service::service_fn(move |request| {
@@ -451,7 +519,8 @@ async fn run(args: Args) -> Result<()> {
                                     let upstream = upstream.clone();
                                     let trace = trace.clone();
                                     let herdr_socket = herdr_socket.clone();
-                                    async move { serve(dist, upstream, trace, herdr_socket, request).await }
+                                    let store = store.clone();
+                                    async move { serve(dist, upstream, trace, herdr_socket, store, request).await }
                                 }))
                                 .with_upgrades();
                             let _ = conn.await;
