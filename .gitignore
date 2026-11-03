@@ -48,3 +48,6 @@ app/www/
 *.jks
 *.keystore
 upload.properties
+
+# Rust build output (crates/ovis-v2 and the PTY sidecar)
+crates/**/target/

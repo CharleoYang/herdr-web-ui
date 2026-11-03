@@ -1,0 +1,25 @@
+[package]
+name = "ovis-v2"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "ovis-v2"
+path = "src/main.rs"
+
+[features]
+# The test-only listener for T-05..T-07 (design §8): absent unless this feature is built on purpose.
+test-listen = []
+
+[dependencies]
+bytes = "1"
+http-body-util = "0.1"
+hyper = { version = "1", features = ["http1", "server"] }
+hyper-util = { version = "0.1", features = ["tokio", "server-graceful", "http1"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal", "net", "time", "io-util", "fs"] }
+
+[profile.release]
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
