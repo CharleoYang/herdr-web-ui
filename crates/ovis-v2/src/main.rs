@@ -298,8 +298,7 @@ async fn serve(dist: PathBuf, upstream: Option<Arc<str>>, trace: Option<PathBuf>
     }
 
     // spec T-09 core: transcript reads with cursor, ETag, truncation and oversize handling
-    #[cfg(feature = "test-listen")]
-    if path == "/test/conversation" {
+    if path == "/test/conversation" || path == "/api/conversation" {
         let query = request.uri().query().unwrap_or("");
         let param = |name: &str| query.split('&').find_map(|pair| pair.strip_prefix(name));
         let session = param("session=").unwrap_or("");
@@ -332,8 +331,7 @@ async fn serve(dist: PathBuf, upstream: Option<Arc<str>>, trace: Option<PathBuf>
     if path == "/test/state/export" {
         return Ok(json_response(store.export()));
     }
-    #[cfg(feature = "test-listen")]
-    if path == "/test/pending" && request.method() == hyper::Method::GET {
+    if (path == "/test/pending" || path == "/api/pending") && request.method() == hyper::Method::GET {
         let query = request.uri().query().unwrap_or("");
         let pane = query.split('&').find_map(|pair| pair.strip_prefix("pane_id="));
         let items: Vec<serde_json::Value> = store.list(pane).iter().map(|item| serde_json::json!({
@@ -341,8 +339,7 @@ async fn serve(dist: PathBuf, upstream: Option<Arc<str>>, trace: Option<PathBuf>
         })).collect();
         return Ok(json_response(serde_json::json!({ "pending": items }).to_string()));
     }
-    #[cfg(feature = "test-listen")]
-    if path == "/test/pending/submit" && request.method() == hyper::Method::POST {
+    if (path == "/test/pending/submit" || path == "/api/pending/submit") && request.method() == hyper::Method::POST {
         let body = request_json(request).await;
         let pane = body.get("pane_id").and_then(serde_json::Value::as_str).unwrap_or("");
         let text = body.get("text").and_then(serde_json::Value::as_str).unwrap_or("");
@@ -354,16 +351,14 @@ async fn serve(dist: PathBuf, upstream: Option<Arc<str>>, trace: Option<PathBuf>
         let id = store.submit(pane, text);
         return Ok(json_response(serde_json::json!({ "id": id }).to_string()));
     }
-    #[cfg(feature = "test-listen")]
-    if path == "/test/pending/resolve" && request.method() == hyper::Method::POST {
+    if (path == "/test/pending/resolve" || path == "/api/pending/resolve") && request.method() == hyper::Method::POST {
         let body = request_json(request).await;
         let id = body.get("id").and_then(serde_json::Value::as_str).unwrap_or("");
         let outcome = body.get("outcome").and_then(serde_json::Value::as_str).unwrap_or("done");
         let ok = store.resolve(id, outcome);
         return Ok(json_response(serde_json::json!({ "ok": ok }).to_string()));
     }
-    #[cfg(feature = "test-listen")]
-    if path == "/test/composer" {
+    if path == "/test/composer" || path == "/api/composer" {
         if request.method() == hyper::Method::GET {
             let query = request.uri().query().unwrap_or("");
             let pane = query.split('&').find_map(|pair| pair.strip_prefix("pane_id=")).unwrap_or("");
