@@ -40,7 +40,7 @@ fi
 mkdir -p "$(dirname "$STATE")"
 args=(--dist "$DIST" --port "$PORT" --state "$STATE")
 if [ -n "$UPSTREAM" ]; then args+=(--upstream "$UPSTREAM"); fi
-if [ -f "$SOCKET" ]; then args+=(--herdr-socket "$SOCKET"); fi
+if [ -e "$SOCKET" ]; then args+=(--herdr-socket "$SOCKET"); fi
 
 echo "v2: http://127.0.0.1:$PORT"
 echo "upstream: ${UPSTREAM:-none}; only the native routes answer without one"
