@@ -4,6 +4,7 @@
 //! the consumer ACKs offsets. Above 256 KiB unacknowledged we stop reading; when it drops under
 //! 64 KiB we resume; at 1 MiB the connection is closed with code 4008 — never a growing buffer.
 
+use std::path::PathBuf;
 use std::{process::Stdio, sync::{Arc, atomic::{AtomicU64, Ordering}}, time::{Duration, Instant}};
 
 use bytes::{BufMut, BytesMut};
@@ -30,7 +31,7 @@ pub struct Window {
 }
 
 /// One attachment: sidecar stdout → frames, client ACKs → the window.
-pub async fn attach(stream: tokio_tungstenite::WebSocketStream<TokioIo<hyper::upgrade::Upgraded>>, cols: u16, rows: u16, command: Vec<String>) {
+pub async fn attach(stream: tokio_tungstenite::WebSocketStream<TokioIo<hyper::upgrade::Upgraded>>, cols: u16, rows: u16, command: Vec<String>, pane_id: Option<String>, socket: Option<PathBuf>) {
     if command.is_empty() {
         return;
     }
@@ -53,19 +54,25 @@ pub async fn attach(stream: tokio_tungstenite::WebSocketStream<TokioIo<hyper::up
     let mut stdout = child.stdout.take().expect("pty stdout");
     let stdin = child.stdin.take().expect("pty stdin");
     let mut stdin = stdin;
-    let (mut sink, mut source) = stream.split();
+    let (sink, mut source) = stream.split();
+    let sink = Arc::new(Mutex::new(sink));
     let window = Arc::new(Mutex::new(Window { buffered: 0, acked: 0 }));
     // one attachment's input order: every write is rechecked against the generation, and a typed
     // ESC settles longer than ordinary text (v1's 40 ms / 300 ms)
     let generation = Arc::new(AtomicU64::new(0));
     let mut last_typed: Option<(Instant, bool)> = None;
+    // v1 rechecks the role on every send, not only at attach time
+    let mut role = "owner";
+    let pane_id = pane_id.unwrap_or_default();
     let resume = Arc::new(Notify::new());
     let mut offset: u64 = 0;
     let mut buf = [0u8; 16 * 1024];
 
     let ack_window = window.clone();
     let ack_resume = resume.clone();
+    let sink_for_acks = sink.clone();
     let acks = async move {
+        let mut sink = sink_for_acks;
         let mut stdin = stdin;
         let mut generation = generation;
         while let Some(Ok(message)) = source.next().await {
@@ -73,6 +80,54 @@ pub async fn attach(stream: tokio_tungstenite::WebSocketStream<TokioIo<hyper::up
                 if text == "detach" {
                     generation.fetch_add(1, Ordering::SeqCst);
                     break;
+                }
+                if let Some(value) = text.strip_prefix("role:") {
+                    role = if value == "viewer" { "viewer" } else { "owner" };
+                    continue;
+                }
+                if let Some(input) = text.strip_prefix("insert:") {
+                    // programmatic insert: no settle wait, and its text is never logged
+                    if role == "viewer" {
+                        let _ = sink.lock().await.send(Message::Text("error:role".into())).await;
+                        continue;
+                    }
+                    let frame = serde_json::json!({ "t": "i", "d": input }).to_string() + "\n";
+                    if stdin.write_all(frame.as_bytes()).await.is_err() { break; }
+                    eprintln!("insert-write {}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0));
+                    continue;
+                }
+                if let Some(input) = text.strip_prefix("secret:") {
+                    // secret input: same write path, but the content is never logged anywhere
+                    if role == "viewer" {
+                        let _ = sink.lock().await.send(Message::Text("error:role".into())).await;
+                        continue;
+                    }
+                    let frame = serde_json::json!({ "t": "i", "d": input }).to_string() + "\n";
+                    if stdin.write_all(frame.as_bytes()).await.is_err() { break; }
+                    continue;
+                }
+                if let Some(keys) = text.strip_prefix("keys:") {
+                    if role == "viewer" {
+                        let _ = sink.lock().await.send(Message::Text("error:role".into())).await;
+                        continue;
+                    }
+                    let keys: Vec<String> = serde_json::from_str(keys).unwrap_or_default();
+                    if let Some(socket) = socket.clone() {
+                        // mirror/Windows: keys are a herdr RPC, not pty bytes
+                        let params = serde_json::json!({ "pane_id": pane_id, "keys": keys });
+                        let socket = socket.clone();
+                        tokio::spawn(async move {
+                            let client = crate::herdr::Herdr::new(&socket, 10_000);
+                            let _ = client.call("1", "pane.send_keys", &params.to_string()).await;
+                        });
+                    } else {
+                        // no herdr socket: the fallback writes the keys into the pty itself
+                        for key in keys {
+                            let frame = serde_json::json!({ "t": "i", "d": key }).to_string() + "\n";
+                            if stdin.write_all(frame.as_bytes()).await.is_err() { break; }
+                        }
+                    }
+                    continue;
                 }
                 if let Some(input) = text.strip_prefix("input:") {
                     // the settle wait belongs to the previous write, then the generation is rechecked
@@ -85,6 +140,10 @@ pub async fn attach(stream: tokio_tungstenite::WebSocketStream<TokioIo<hyper::up
                     }
                     if generation.load(Ordering::SeqCst) != 0 {
                         break;
+                    }
+                    if role == "viewer" {
+                        let _ = sink.lock().await.send(Message::Text("error:role".into())).await;
+                        continue;
                     }
                     let escaped = input.ends_with('\u{1b}');
                     let frame = serde_json::json!({ "t": "i", "d": input }).to_string() + "\n";
@@ -116,7 +175,7 @@ pub async fn attach(stream: tokio_tungstenite::WebSocketStream<TokioIo<hyper::up
     let writer = {
         let window = window.clone();
         let resume = resume.clone();
-        let sink_ref = &mut sink;
+        let sink_ref = sink.clone();
         async move {
             loop {
                 // the window decides whether the next read may happen at all
@@ -126,7 +185,7 @@ pub async fn attach(stream: tokio_tungstenite::WebSocketStream<TokioIo<hyper::up
                         // wait for the consumer to catch up, but only for the stall budget: a consumer
                         // that never ACKs loses the connection with 4008, never an unbounded buffer
                         if tokio::time::timeout(STALL_BUDGET, resume.notified()).await.is_err() {
-                            let _ = sink_ref.send(Message::Close(Some(CloseFrame { code: CloseCode::from(4008u16), reason: "output stalled".into() }))).await;
+                            let _ = sink_ref.lock().await.send(Message::Close(Some(CloseFrame { code: CloseCode::from(4008u16), reason: "output stalled".into() }))).await;
                             break;
                         }
                     }
@@ -138,7 +197,7 @@ pub async fn attach(stream: tokio_tungstenite::WebSocketStream<TokioIo<hyper::up
                 let mut frame = BytesMut::with_capacity(8 + read);
                 frame.put_u64_le(offset);
                 frame.put_slice(&buf[..read]);
-                if sink_ref.send(Message::Binary(frame.to_vec().into())).await.is_err() {
+                if sink_ref.lock().await.send(Message::Binary(frame.to_vec().into())).await.is_err() {
                     break;
                 }
                 offset += read as u64;
@@ -147,7 +206,7 @@ pub async fn attach(stream: tokio_tungstenite::WebSocketStream<TokioIo<hyper::up
                     window.buffered += read;
                     if window.buffered > HARD_CAP {
                         // v1's refusal: the slow consumer loses the connection, not the process's memory
-                        let _ = sink_ref.send(Message::Close(Some(CloseFrame { code: CloseCode::from(4008u16), reason: "output window exceeded".into() }))).await;
+                        let _ = sink_ref.lock().await.send(Message::Close(Some(CloseFrame { code: CloseCode::from(4008u16), reason: "output window exceeded".into() }))).await;
                         break;
                     }
                 }

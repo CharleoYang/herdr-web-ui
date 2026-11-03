@@ -229,10 +229,11 @@ async fn serve(dist: PathBuf, upstream: Option<Arc<str>>, trace: Option<PathBuf>
     // the test-only PTY endpoint: a WebSocket with the output window, gated on --test-listen AND
     // the test-listen cargo feature; a production build has no such entry
     #[cfg(feature = "test-listen")]
-    if path == "/test/pty" && herdr_socket.is_none() {
+    if path == "/test/pty" {
         let allowed = true;
         if allowed {
             let query = request.uri().query().unwrap_or("");
+            let pane_id = query.split('&').find_map(|pair| pair.strip_prefix("pane_id=")).map(|value| value.to_string());
             let command = query
                 .split('&')
                 .find_map(|pair| pair.strip_prefix("cmd="))
@@ -258,7 +259,7 @@ async fn serve(dist: PathBuf, upstream: Option<Arc<str>>, trace: Option<PathBuf>
                     match upgraded.await {
                         Ok(upgraded) => {
                             let stream = tokio_tungstenite::WebSocketStream::from_raw_socket(TokioIo::new(upgraded), tokio_tungstenite::tungstenite::protocol::Role::Server, None).await;
-                            pty::attach(stream, 120, 40, command).await;
+                            pty::attach(stream, 120, 40, command, pane_id, herdr_socket.clone()).await;
                         }
                         Err(error) => eprintln!("pty upgrade failed: {error}"),
                     }
