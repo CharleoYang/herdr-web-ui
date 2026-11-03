@@ -25,6 +25,7 @@ mod pane_http;
 mod pty;
 mod session;
 mod state;
+mod wsproxy;
 use hyper::{body::Incoming, Request, Response, StatusCode};
 use std::sync::Arc;
 use hyper_util::rt::TokioIo;
@@ -42,6 +43,12 @@ fn json_response(text: String) -> Response<Out> {
     let mut response = Response::new(boxed(Bytes::from(text)));
     response.headers_mut().insert("content-type", "application/json".parse().unwrap());
     response
+}
+
+#[derive(Clone, Copy)]
+struct Native {
+    conversation: bool,
+    state: bool,
 }
 
 async fn request_json(request: Request<Incoming>) -> serde_json::Value {
@@ -69,6 +76,8 @@ struct Args {
     origins: Vec<String>,
     revoked: Vec<String>,
     trust_proxy: bool,
+    native_conversation: bool,
+    native_state: bool,
 }
 
 fn parse() -> Result<Args> {
@@ -87,6 +96,8 @@ fn parse() -> Result<Args> {
     let mut origins: Vec<String> = Vec::new();
     let mut revoked: Vec<String> = Vec::new();
     let mut trust_proxy = false;
+    let mut native_conversation = false;
+    let mut native_state = false;
     let mut argv = env::args().skip(1);
     while let Some(arg) = argv.next() {
         match arg.as_str() {
@@ -105,6 +116,8 @@ fn parse() -> Result<Args> {
             "--allow-origin" => origins.extend(argv.next().ok_or("--allow-origin needs a value")?.split(',').map(|v| v.to_string())),
             "--revoke" => revoked.extend(argv.next().ok_or("--revoke needs a value")?.split(',').map(|v| v.to_string())),
             "--trust-proxy" => trust_proxy = true,
+            "--native-conversation" => native_conversation = true,
+            "--native-state" => native_state = true,
             "-h" | "--help" => {
                 println!("{USAGE}");
                 process::exit(0);
@@ -117,7 +130,7 @@ fn parse() -> Result<Args> {
             port = fromEnv.to_string_lossy().parse()?;
         }
     }
-    Ok(Args { dist, port, host, selftest, test_listen, upstream, trace, rpc_selftest, herdr_socket, state_path, transcripts, token, origins, revoked, trust_proxy })
+    Ok(Args { dist, port, host, selftest, test_listen, upstream, trace, rpc_selftest, herdr_socket, state_path, transcripts, token, origins, revoked, trust_proxy, native_conversation, native_state })
 }
 
 /// Only a loopback listener: a public bind would move traffic the plan has not migrated yet.
@@ -131,19 +144,20 @@ fn etag(meta: &std::fs::Metadata) -> String {
     format!("\"{:x}-{:x}\"", meta.len(), modified)
 }
 
+/// Exactly v1's table (server/static.ts MIME): a type v1 does not name must not be invented here.
 fn content_type(path: &Path) -> &'static str {
     match path.extension().and_then(|ext| ext.to_str()).unwrap_or("") {
         "html" => "text/html; charset=utf-8",
-        "js" | "mjs" => "text/javascript; charset=utf-8",
+        "js" => "text/javascript; charset=utf-8",
         "css" => "text/css; charset=utf-8",
         "json" => "application/json; charset=utf-8",
+        "md" => "text/plain; charset=utf-8",
+        "webmanifest" => "application/manifest+json; charset=utf-8",
         "svg" => "image/svg+xml",
         "png" => "image/png",
-        "jpg" | "jpeg" => "image/jpeg",
-        "webp" => "image/webp",
-        "woff2" => "font/woff2",
-        "map" => "application/json; charset=utf-8",
         "ico" => "image/x-icon",
+        "woff" => "font/woff",
+        "woff2" => "font/woff2",
         _ => "application/octet-stream",
     }
 }
@@ -187,11 +201,16 @@ struct FileAnswer {
 /// Reads one asset, honouring a precompressed sibling, an ETag match and a single byte range.
 async fn asset(dist: &Path, request: &Request<Incoming>) -> Option<FileAnswer> {
     let path = resolve(dist, request.uri().path())?;
-    let accept_gzip = request.headers().get("accept-encoding").and_then(|v| v.to_str().ok()).map(|v| v.contains("gzip")).unwrap_or(false);
-    // A range is taken from the identity representation: a slice of a gzip stream cannot be decoded.
+    let accept = request.headers().get("accept-encoding").and_then(|v| v.to_str().ok()).unwrap_or("").to_string();
+    // A range is taken from the identity representation: a slice of a compressed stream cannot be decoded.
     let ranged = request.headers().contains_key("range");
+    let br = PathBuf::from(format!("{}.br", path.display()));
     let gz = PathBuf::from(format!("{}.gz", path.display()));
-    let (chosen, encoding) = if accept_gzip && !ranged && gz.is_file() { (gz, Some("gzip")) } else { (path, None) };
+    // br first (smaller), then gzip; the type below comes from the logical name, never from ".br"/".gz"
+    let path_for_type = path.clone();
+    let (chosen, encoding) = if !ranged && accept.contains("br") && br.is_file() { (br, Some("br")) }
+        else if !ranged && accept.contains("gzip") && gz.is_file() { (gz, Some("gzip")) }
+        else { (path, None) };
     let meta = tokio::fs::metadata(&chosen).await.ok()?;
     let tag = etag(&meta);
     if request.headers().get("if-none-match").and_then(|v| v.to_str().ok()) == Some(tag.as_str()) {
@@ -200,7 +219,7 @@ async fn asset(dist: &Path, request: &Request<Incoming>) -> Option<FileAnswer> {
             status: StatusCode::NOT_MODIFIED,
             etag: tag,
             encoding,
-            content_type: content_type(&chosen),
+            content_type: content_type(&path_for_type),
             range: None,
         });
     }
@@ -226,7 +245,7 @@ async fn asset(dist: &Path, request: &Request<Incoming>) -> Option<FileAnswer> {
             }
         }
     }
-    Some(FileAnswer { body, status, etag: tag, encoding, content_type: content_type(&chosen), range })
+    Some(FileAnswer { body, status, etag: tag, encoding, content_type: content_type(&path_for_type), range })
 }
 
 fn respond(answer: FileAnswer) -> Response<Out> {
@@ -258,7 +277,7 @@ fn json_error(error: impl std::fmt::Display, status: StatusCode) -> Response<Out
     response
 }
 
-async fn serve(dist: PathBuf, upstream: Option<Arc<str>>, trace: Option<PathBuf>, herdr_socket: Option<PathBuf>, store: Arc<state::Store>, transcripts: Option<PathBuf>, access: Arc<access::Access>, request: Request<Incoming>) -> std::result::Result<Response<Out>, Infallible> {
+async fn serve(dist: PathBuf, upstream: Option<Arc<str>>, trace: Option<PathBuf>, herdr_socket: Option<PathBuf>, store: Arc<state::Store>, transcripts: Option<PathBuf>, access: Arc<access::Access>, native: Native, request: Request<Incoming>) -> std::result::Result<Response<Out>, Infallible> {
     let path = request.uri().path();
     if path.starts_with("/api/") {
         let header = |name: &str| request.headers().get(name).and_then(|value| value.to_str().ok()).map(|value| value.to_string());
@@ -331,7 +350,7 @@ async fn serve(dist: PathBuf, upstream: Option<Arc<str>>, trace: Option<PathBuf>
     }
 
     // spec T-09 core: transcript reads with cursor, ETag, truncation and oversize handling
-    if path == "/test/conversation" || path == "/api/conversation" {
+    if path == "/test/conversation" || (native.conversation && path == "/api/conversation") {
         let query = request.uri().query().unwrap_or("");
         let param = |name: &str| query.split('&').find_map(|pair| pair.strip_prefix(name));
         let session = param("session=").unwrap_or("");
@@ -364,7 +383,7 @@ async fn serve(dist: PathBuf, upstream: Option<Arc<str>>, trace: Option<PathBuf>
     if path == "/test/state/export" {
         return Ok(json_response(store.export()));
     }
-    if (path == "/test/pending" || path == "/api/pending") && request.method() == hyper::Method::GET {
+    if (path == "/test/pending" || (native.state && path == "/api/pending")) && request.method() == hyper::Method::GET {
         let query = request.uri().query().unwrap_or("");
         let pane = query.split('&').find_map(|pair| pair.strip_prefix("pane_id="));
         let items: Vec<serde_json::Value> = store.list(pane).iter().map(|item| serde_json::json!({
@@ -372,7 +391,7 @@ async fn serve(dist: PathBuf, upstream: Option<Arc<str>>, trace: Option<PathBuf>
         })).collect();
         return Ok(json_response(serde_json::json!({ "pending": items }).to_string()));
     }
-    if (path == "/test/pending/submit" || path == "/api/pending/submit") && request.method() == hyper::Method::POST {
+    if (path == "/test/pending/submit" || (native.state && path == "/api/pending/submit")) && request.method() == hyper::Method::POST {
         let body = request_json(request).await;
         let pane = body.get("pane_id").and_then(serde_json::Value::as_str).unwrap_or("");
         let text = body.get("text").and_then(serde_json::Value::as_str).unwrap_or("");
@@ -384,7 +403,7 @@ async fn serve(dist: PathBuf, upstream: Option<Arc<str>>, trace: Option<PathBuf>
         let id = store.submit(pane, text);
         return Ok(json_response(serde_json::json!({ "id": id }).to_string()));
     }
-    if (path == "/test/pending/resolve" || path == "/api/pending/resolve") && request.method() == hyper::Method::POST {
+    if (path == "/test/pending/resolve" || (native.state && path == "/api/pending/resolve")) && request.method() == hyper::Method::POST {
         let body = request_json(request).await;
         let id = body.get("id").and_then(serde_json::Value::as_str).unwrap_or("");
         let outcome = body.get("outcome").and_then(serde_json::Value::as_str).unwrap_or("done");
@@ -392,14 +411,14 @@ async fn serve(dist: PathBuf, upstream: Option<Arc<str>>, trace: Option<PathBuf>
         let ok = store.resolve(id, outcome, code);
         return Ok(json_response(serde_json::json!({ "ok": ok }).to_string()));
     }
-    if (path == "/test/pending/rehold" || path == "/api/pending/rehold") && request.method() == hyper::Method::POST {
+    if (path == "/test/pending/rehold" || (native.state && path == "/api/pending/rehold")) && request.method() == hyper::Method::POST {
         let body = request_json(request).await;
         let fault = body.get("fault").and_then(serde_json::Value::as_str).unwrap_or("disconnected");
         let pane = body.get("pane_id").and_then(serde_json::Value::as_str);
         let changed = store.rehold(pane, fault);
         return Ok(json_response(serde_json::json!({ "reheld": changed }).to_string()));
     }
-    if path == "/test/composer" || path == "/api/composer" {
+    if path == "/test/composer" || (native.state && path == "/api/composer") {
         if request.method() == hyper::Method::GET {
             let query = request.uri().query().unwrap_or("");
             let pane = query.split('&').find_map(|pair| pair.strip_prefix("pane_id=")).unwrap_or("");
@@ -500,12 +519,18 @@ async fn serve(dist: PathBuf, upstream: Option<Arc<str>>, trace: Option<PathBuf>
     }
     // the surface this gateway does not own yet goes to v1, streamed, never buffered
     if let Some(upstream) = upstream {
-        if path.starts_with("/api/") || path.starts_with("/_portal/") {
-            if request.headers().contains_key("upgrade") {
-                // the WebSocket handover is T-08's: not silently proxied half way
-                let mut response = Response::new(boxed(Bytes::from_static(b"WebSocket handover is T-08\n")));
-                *response.status_mut() = StatusCode::NOT_IMPLEMENTED;
-                return Ok(response);
+        let upgrade = request.headers().contains_key("upgrade");
+        if path.starts_with("/api/") || path.starts_with("/_portal/") || path == "/ws" || upgrade {
+            if upgrade {
+                // the whole connection goes to the upstream as bytes; see wsproxy
+                return Ok(match wsproxy::proxy_upgrade(request, upstream.as_ref()).await {
+                    Ok(response) => response,
+                    Err(status) => {
+                        let mut response = Response::new(boxed(Bytes::from_static(b"upgrade failed\n")));
+                        *response.status_mut() = status;
+                        response
+                    }
+                });
             }
             if let Some(trace_path) = &trace {
                 // one JSON line per forwarded operation: the T-02 three-way reconciliation reads this
@@ -549,6 +574,7 @@ async fn run(args: Args) -> Result<()> {
     let store = state::Store::load(args.state_path.as_deref().unwrap_or(Path::new("ovis-v2-state.json")));
     let transcripts = args.transcripts.clone();
     let access = Arc::new(access::Access::new(args.token.clone(), args.origins.clone(), args.revoked.clone(), args.trust_proxy));
+    let native = Native { conversation: args.native_conversation, state: args.native_state };
     let dist = args.dist.canonicalize().unwrap_or_else(|_| args.dist.clone());
     if !dist.is_dir() {
         eprintln!("ovis-v2: --dist {} is not a directory", dist.display());
@@ -596,7 +622,7 @@ async fn run(args: Args) -> Result<()> {
                                     let store = store.clone();
                                     let transcripts = transcripts.clone();
                                     let access = access.clone();
-                                    async move { serve(dist, upstream, trace, herdr_socket, store, transcripts, access, request).await }
+                                    async move { serve(dist, upstream, trace, herdr_socket, store, transcripts, access, native, request).await }
                                 }))
                                 .with_upgrades();
                             let _ = conn.await;

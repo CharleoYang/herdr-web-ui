@@ -22,6 +22,12 @@ pub struct Proxy {
 
 pub type BoxedBody = http_body_util::combinators::BoxBody<Bytes, hyper::Error>;
 
+/// The origin the upstream recognizes as its own: v2 has already admitted the browser's Origin,
+/// and leaving v1's Origin check seeing a foreign port would make it answer 403 to our own proxy.
+fn upstream_origin(upstream: &str) -> String {
+    upstream.trim_end_matches('/').to_string()
+}
+
 impl Proxy {
     pub fn new(upstream: Arc<str>) -> Self {
         let connector = HttpConnector::new();
@@ -39,8 +45,16 @@ impl Proxy {
         let mut builder = Request::builder().method(parts.method).uri(uri);
         {
             let headers = builder.headers_mut().expect("headers");
+            let origin = upstream_origin(&self.upstream);
             for (name, value) in parts.headers.iter() {
                 if hop(name.as_str()) {
+                    continue;
+                }
+                if name.as_str().eq_ignore_ascii_case("origin") {
+                    // v2 is the public origin; the upstream must see a request it would accept
+                    if let Ok(rewritten) = origin.parse() {
+                        headers.insert(name, rewritten);
+                    }
                     continue;
                 }
                 headers.insert(name, value.clone());

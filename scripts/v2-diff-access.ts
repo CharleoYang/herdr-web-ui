@@ -41,7 +41,7 @@ async function status(port: number, headers: Record<string, string>, query = "")
   return { status: response.status, body: await response.text() };
 }
 
-const trusted = await start(["--token", "secret", "--allow-origin", "https://good", "--revoke", "dead-device", "--trust-proxy"]);
+const trusted = await start(["--token", "secret", "--allow-origin", "https://good", "--revoke", "dead-device", "--trust-proxy", "--native-state"]);
 try {
   check("the trusted-proxy gateway starts", trusted.port > 0);
   const forwarded = { "x-forwarded-for": "1.2.3.4" };
@@ -76,7 +76,7 @@ try {
   trusted.stop();
 }
 
-const untrusted = await start(["--token", "secret"]);
+const untrusted = await start(["--token", "secret", "--native-state"]);
 try {
   const spoofed = await status(untrusted.port, { "x-forwarded-for": "1.2.3.4", authorization: "Bearer secret" });
   check("forwarding headers from an untrusted peer are 403", spoofed.status === 403 && spoofed.body.includes("forwarded"), `${spoofed.status} ${spoofed.body}`);
