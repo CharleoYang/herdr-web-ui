@@ -17,6 +17,7 @@ use std::{
 
 use bytes::Bytes;
 use http_body_util::{BodyExt, Full};
+mod conversation;
 mod herdr;
 mod proxy;
 mod pane_http;
@@ -62,6 +63,7 @@ struct Args {
     rpc_selftest: Option<PathBuf>,
     herdr_socket: Option<PathBuf>,
     state_path: Option<PathBuf>,
+    transcripts: Option<PathBuf>,
 }
 
 fn parse() -> Result<Args> {
@@ -75,6 +77,7 @@ fn parse() -> Result<Args> {
     let mut rpc_selftest: Option<PathBuf> = None;
     let mut herdr_socket: Option<PathBuf> = None;
     let mut state_path: Option<PathBuf> = None;
+    let mut transcripts: Option<PathBuf> = None;
     let mut argv = env::args().skip(1);
     while let Some(arg) = argv.next() {
         match arg.as_str() {
@@ -88,6 +91,7 @@ fn parse() -> Result<Args> {
             "--selftest-rpc" => rpc_selftest = Some(PathBuf::from(argv.next().ok_or("--selftest-rpc needs a socket path")?)),
             "--herdr-socket" => herdr_socket = Some(PathBuf::from(argv.next().ok_or("--herdr-socket needs a path")?)),
             "--state" => state_path = Some(PathBuf::from(argv.next().ok_or("--state needs a path")?)),
+            "--transcripts" => transcripts = Some(PathBuf::from(argv.next().ok_or("--transcripts needs a path")?)),
             "-h" | "--help" => {
                 println!("{USAGE}");
                 process::exit(0);
@@ -100,7 +104,7 @@ fn parse() -> Result<Args> {
             port = fromEnv.to_string_lossy().parse()?;
         }
     }
-    Ok(Args { dist, port, host, selftest, test_listen, upstream, trace, rpc_selftest, herdr_socket, state_path })
+    Ok(Args { dist, port, host, selftest, test_listen, upstream, trace, rpc_selftest, herdr_socket, state_path, transcripts })
 }
 
 /// Only a loopback listener: a public bind would move traffic the plan has not migrated yet.
@@ -241,7 +245,7 @@ fn json_error(error: impl std::fmt::Display, status: StatusCode) -> Response<Out
     response
 }
 
-async fn serve(dist: PathBuf, upstream: Option<Arc<str>>, trace: Option<PathBuf>, herdr_socket: Option<PathBuf>, store: Arc<state::Store>, request: Request<Incoming>) -> std::result::Result<Response<Out>, Infallible> {
+async fn serve(dist: PathBuf, upstream: Option<Arc<str>>, trace: Option<PathBuf>, herdr_socket: Option<PathBuf>, store: Arc<state::Store>, transcripts: Option<PathBuf>, request: Request<Incoming>) -> std::result::Result<Response<Out>, Infallible> {
     let path = request.uri().path();
     // the test-only PTY endpoint: a WebSocket with the output window, gated on --test-listen AND
     // the test-listen cargo feature; a production build has no such entry
@@ -291,6 +295,36 @@ async fn serve(dist: PathBuf, upstream: Option<Arc<str>>, trace: Option<PathBuf>
                 return Ok(response);
             }
         }
+    }
+
+    // spec T-09 core: transcript reads with cursor, ETag, truncation and oversize handling
+    #[cfg(feature = "test-listen")]
+    if path == "/test/conversation" {
+        let query = request.uri().query().unwrap_or("");
+        let param = |name: &str| query.split('&').find_map(|pair| pair.strip_prefix(name));
+        let session = param("session=").unwrap_or("");
+        // a session id names a file, never a path: no traversal out of the transcripts directory
+        if session.is_empty() || session.contains('/') || session.contains("..") {
+            let mut response = json_response("{\"error\":\"bad session\"}".into());
+            *response.status_mut() = StatusCode::BAD_REQUEST;
+            return Ok(response);
+        }
+        let cursor = param("cursor=").and_then(|value| value.parse::<usize>().ok()).unwrap_or(0);
+        let limit = param("limit=").and_then(|value| value.parse::<usize>().ok()).unwrap_or(100);
+        let budget = param("budget=").and_then(|value| value.parse::<usize>().ok()).unwrap_or(256 * 1024);
+        let directory = transcripts.clone().unwrap_or_else(|| PathBuf::from("."));
+        let file = directory.join(format!("{session}.jsonl"));
+        let if_none_match = request.headers().get("if-none-match").and_then(|value| value.to_str().ok()).map(|value| value.to_string());
+        let page = conversation::read(&file, cursor, limit, budget, if_none_match.as_deref());
+        if page.not_modified {
+            let mut response = Response::new(boxed(Bytes::new()));
+            *response.status_mut() = StatusCode::NOT_MODIFIED;
+            response.headers_mut().insert("etag", page.etag.parse().unwrap());
+            return Ok(response);
+        }
+        let mut response = json_response(page.body.to_string());
+        response.headers_mut().insert("etag", page.etag.parse().unwrap());
+        return Ok(response);
     }
 
     // spec T-07 core: durable pending input and composer drafts (test seam until T-08's real routes)
@@ -477,6 +511,7 @@ async fn run(args: Args) -> Result<()> {
     let trace = args.trace.clone();
     let herdr_socket = args.herdr_socket.clone();
     let store = state::Store::load(args.state_path.as_deref().unwrap_or(Path::new("ovis-v2-state.json")));
+    let transcripts = args.transcripts.clone();
     let dist = args.dist.canonicalize().unwrap_or_else(|_| args.dist.clone());
     if !dist.is_dir() {
         eprintln!("ovis-v2: --dist {} is not a directory", dist.display());
@@ -512,6 +547,7 @@ async fn run(args: Args) -> Result<()> {
                         let trace = trace.clone();
                         let herdr_socket = herdr_socket.clone();
                         let store = store.clone();
+                        let transcripts = transcripts.clone();
                         tasks.spawn(async move {
                             let conn = hyper::server::conn::http1::Builder::new()
                                 .serve_connection(io, hyper::service::service_fn(move |request| {
@@ -520,7 +556,8 @@ async fn run(args: Args) -> Result<()> {
                                     let trace = trace.clone();
                                     let herdr_socket = herdr_socket.clone();
                                     let store = store.clone();
-                                    async move { serve(dist, upstream, trace, herdr_socket, store, request).await }
+                                    let transcripts = transcripts.clone();
+                                    async move { serve(dist, upstream, trace, herdr_socket, store, transcripts, request).await }
                                 }))
                                 .with_upgrades();
                             let _ = conn.await;
