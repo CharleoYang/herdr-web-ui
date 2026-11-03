@@ -1,0 +1,20 @@
+{
+  "comment": "The operations a fixture must actually exercise (E). Every entry here has to be sent at the proxy and appear in its trace, and nothing traced may be outside it. Method + path + target is the key; the local alias spelling is kept on purpose (server/dispatch.ts:266-271).",
+  "operations": [
+    { "method": "GET", "path": "/api/health", "target": "local" },
+    { "method": "GET", "path": "/api/session", "target": "local" },
+    { "method": "GET", "path": "/api/pane/read?pane_id=w:p1&format=text", "target": "local" },
+    { "method": "GET", "path": "/api/pane/read?pane_id=w:p1&format=ansi", "target": "local" },
+    { "method": "GET", "path": "/api/pane/scroll?pane_id=w:p1", "target": "local" },
+    { "method": "POST", "path": "/api/pane/scroll", "target": "local" },
+    { "method": "POST", "path": "/api/pane/find", "target": "local" },
+    { "method": "GET", "path": "/api/pane/selection?pane_id=w:p1", "target": "local" },
+    { "method": "GET", "path": "/api/pane/plan?pane_id=w:p1", "target": "local" },
+    { "method": "GET", "path": "/api/pane/conversation?pane_id=w:p1", "target": "local" },
+    { "method": "GET", "path": "/api/pane/omo-tasks?pane_id=w:p1", "target": "local" },
+    { "method": "GET", "path": "/api/machines/local/pane/read?pane_id=w:p1", "target": "local-alias" },
+    { "method": "POST", "path": "/api/machines/local/tab/create", "target": "local-alias" },
+    { "method": "GET", "path": "/api/machines/events", "target": "sse" },
+    { "method": "POST", "path": "/_portal/auth/logout", "target": "portal" }
+  ]
+}

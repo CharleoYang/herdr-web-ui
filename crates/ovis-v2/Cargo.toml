@@ -15,7 +15,7 @@ test-listen = []
 bytes = "1"
 http-body-util = "0.1"
 hyper = { version = "1", features = ["http1", "server"] }
-hyper-util = { version = "0.1", features = ["tokio", "server-graceful", "http1"] }
+hyper-util = { version = "0.1", features = ["tokio", "server-graceful", "http1", "client-legacy"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal", "net", "time", "io-util", "fs"] }
 
 [profile.release]

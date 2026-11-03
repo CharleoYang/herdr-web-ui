@@ -16,12 +16,19 @@ use std::{
 };
 
 use bytes::Bytes;
-use http_body_util::Full;
+use http_body_util::{BodyExt, Full};
+mod proxy;
 use hyper::{body::Incoming, Request, Response, StatusCode};
+use std::sync::Arc;
 use hyper_util::rt::TokioIo;
 use tokio::net::TcpListener;
 
 type Body = Full<Bytes>;
+type Out = http_body_util::combinators::BoxBody<Bytes, hyper::Error>;
+
+fn boxed(body: Bytes) -> Out {
+    Full::new(body).map_err(|never: Infallible| match never {}).boxed()
+}
 type Result<T, E = Box<dyn Error + Send + Sync>> = std::result::Result<T, E>;
 
 const USAGE: &str = "usage: ovis-v2 --dist <dir> [--port <n>] [--host 127.0.0.1] [--selftest] [--test-listen]";
@@ -32,6 +39,8 @@ struct Args {
     host: IpAddr,
     selftest: bool,
     test_listen: bool,
+    upstream: Option<Arc<str>>,
+    trace: Option<PathBuf>,
 }
 
 fn parse() -> Result<Args> {
@@ -40,6 +49,8 @@ fn parse() -> Result<Args> {
     let mut host: IpAddr = "127.0.0.1".parse()?;
     let mut selftest = false;
     let mut test_listen = false;
+    let mut upstream: Option<Arc<str>> = None;
+    let mut trace: Option<PathBuf> = None;
     let mut argv = env::args().skip(1);
     while let Some(arg) = argv.next() {
         match arg.as_str() {
@@ -48,6 +59,8 @@ fn parse() -> Result<Args> {
             "--host" => host = argv.next().ok_or("--host needs an address")?.parse()?,
             "--selftest" => selftest = true,
             "--test-listen" => test_listen = true,
+            "--upstream" => upstream = Some(Arc::from(argv.next().ok_or("--upstream needs a URL")?)),
+            "--trace" => trace = Some(PathBuf::from(argv.next().ok_or("--trace needs a file")?)),
             "-h" | "--help" => {
                 println!("{USAGE}");
                 process::exit(0);
@@ -60,7 +73,7 @@ fn parse() -> Result<Args> {
             port = fromEnv.to_string_lossy().parse()?;
         }
     }
-    Ok(Args { dist, port, host, selftest, test_listen })
+    Ok(Args { dist, port, host, selftest, test_listen, upstream, trace })
 }
 
 /// Only a loopback listener: a public bind would move traffic the plan has not migrated yet.
@@ -172,8 +185,8 @@ async fn asset(dist: &Path, request: &Request<Incoming>) -> Option<FileAnswer> {
     Some(FileAnswer { body, status, etag: tag, encoding, content_type: content_type(&chosen), range })
 }
 
-fn respond(answer: FileAnswer) -> Response<Body> {
-    let mut response = Response::new(Full::new(answer.body));
+fn respond(answer: FileAnswer) -> Response<Out> {
+    let mut response = Response::new(boxed(answer.body));
     *response.status_mut() = answer.status;
     response.headers_mut().insert("etag", answer.etag.parse().unwrap());
     response.headers_mut().insert("content-type", answer.content_type.parse().unwrap());
@@ -186,11 +199,41 @@ fn respond(answer: FileAnswer) -> Response<Body> {
     response
 }
 
-async fn serve(dist: PathBuf, request: Request<Incoming>) -> std::result::Result<Response<Body>, Infallible> {
+async fn serve(dist: PathBuf, upstream: Option<Arc<str>>, trace: Option<PathBuf>, request: Request<Incoming>) -> std::result::Result<Response<Out>, Infallible> {
+    let path = request.uri().path();
+    // the surface this gateway does not own yet goes to v1, streamed, never buffered
+    if let Some(upstream) = upstream {
+        if path.starts_with("/api/") || path.starts_with("/_portal/") {
+            if request.headers().contains_key("upgrade") {
+                // the WebSocket handover is T-08's: not silently proxied half way
+                let mut response = Response::new(boxed(Bytes::from_static(b"WebSocket handover is T-08\n")));
+                *response.status_mut() = StatusCode::NOT_IMPLEMENTED;
+                return Ok(response);
+            }
+            if let Some(trace_path) = &trace {
+                // one JSON line per forwarded operation: the T-02 three-way reconciliation reads this
+                let line = format!("{{\"method\":\"{}\",\"path\":\"{}\",\"target\":\"upstream\"}}\n", request.method(), path);
+                if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open(trace_path) {
+                    let _ = file.write_all(line.as_bytes());
+                }
+            }
+            let proxy = proxy::Proxy::new(upstream);
+            return Ok(match proxy.forward(request).await {
+                Ok(response) => response,
+                Err(_) => {
+                    let mut response = proxy::unavailable();
+                    let (parts, body) = response.into_parts();
+                    let mut response = Response::new(boxed(body.collect().await.map(|c| c.to_bytes()).unwrap_or_default()));
+                    *response.status_mut() = parts.status;
+                    response
+                }
+            });
+        }
+    }
     let response = match asset(&dist, &request).await {
         Some(answer) => respond(answer),
         None => {
-            let mut response = Response::new(Full::new(Bytes::from_static(b"not found\n")));
+            let mut response = Response::new(boxed(Bytes::from_static(b"not found\n")));
             *response.status_mut() = StatusCode::NOT_FOUND;
             response
         }
@@ -203,6 +246,8 @@ async fn run(args: Args) -> Result<()> {
         eprintln!("ovis-v2: only a loopback listener is allowed (got {})", args.host);
         process::exit(2);
     }
+    let upstream = args.upstream.clone();
+    let trace = args.trace.clone();
     let dist = args.dist.canonicalize().unwrap_or_else(|_| args.dist.clone());
     if !dist.is_dir() {
         eprintln!("ovis-v2: --dist {} is not a directory", dist.display());
@@ -234,11 +279,15 @@ async fn run(args: Args) -> Result<()> {
                         };
                         let io = TokioIo::new(stream);
                         let dist = dist.clone();
+                        let upstream = upstream.clone();
+                        let trace = trace.clone();
                         tasks.spawn(async move {
                             let conn = hyper::server::conn::http1::Builder::new()
                                 .serve_connection(io, hyper::service::service_fn(move |request| {
                                     let dist = dist.clone();
-                                    async move { serve(dist, request).await }
+                                    let upstream = upstream.clone();
+                                    let trace = trace.clone();
+                                    async move { serve(dist, upstream, trace, request).await }
                                 }));
                             let _ = conn.await;
                         });
