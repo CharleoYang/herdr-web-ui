@@ -19,6 +19,7 @@ use bytes::Bytes;
 use http_body_util::{BodyExt, Full};
 mod herdr;
 mod proxy;
+mod session;
 use hyper::{body::Incoming, Request, Response, StatusCode};
 use std::sync::Arc;
 use hyper_util::rt::TokioIo;
@@ -43,6 +44,7 @@ struct Args {
     upstream: Option<Arc<str>>,
     trace: Option<PathBuf>,
     rpc_selftest: Option<PathBuf>,
+    herdr_socket: Option<PathBuf>,
 }
 
 fn parse() -> Result<Args> {
@@ -54,6 +56,7 @@ fn parse() -> Result<Args> {
     let mut upstream: Option<Arc<str>> = None;
     let mut trace: Option<PathBuf> = None;
     let mut rpc_selftest: Option<PathBuf> = None;
+    let mut herdr_socket: Option<PathBuf> = None;
     let mut argv = env::args().skip(1);
     while let Some(arg) = argv.next() {
         match arg.as_str() {
@@ -65,6 +68,7 @@ fn parse() -> Result<Args> {
             "--upstream" => upstream = Some(Arc::from(argv.next().ok_or("--upstream needs a URL")?)),
             "--trace" => trace = Some(PathBuf::from(argv.next().ok_or("--trace needs a file")?)),
             "--selftest-rpc" => rpc_selftest = Some(PathBuf::from(argv.next().ok_or("--selftest-rpc needs a socket path")?)),
+            "--herdr-socket" => herdr_socket = Some(PathBuf::from(argv.next().ok_or("--herdr-socket needs a path")?)),
             "-h" | "--help" => {
                 println!("{USAGE}");
                 process::exit(0);
@@ -77,7 +81,7 @@ fn parse() -> Result<Args> {
             port = fromEnv.to_string_lossy().parse()?;
         }
     }
-    Ok(Args { dist, port, host, selftest, test_listen, upstream, trace, rpc_selftest })
+    Ok(Args { dist, port, host, selftest, test_listen, upstream, trace, rpc_selftest, herdr_socket })
 }
 
 /// Only a loopback listener: a public bind would move traffic the plan has not migrated yet.
@@ -203,8 +207,28 @@ fn respond(answer: FileAnswer) -> Response<Out> {
     response
 }
 
-async fn serve(dist: PathBuf, upstream: Option<Arc<str>>, trace: Option<PathBuf>, request: Request<Incoming>) -> std::result::Result<Response<Out>, Infallible> {
+async fn serve(dist: PathBuf, upstream: Option<Arc<str>>, trace: Option<PathBuf>, herdr_socket: Option<PathBuf>, request: Request<Incoming>) -> std::result::Result<Response<Out>, Infallible> {
     let path = request.uri().path();
+    // a snapshot this gateway answers itself: the RPC read, never a v1 proxy
+    if path == "/api/session" {
+        if let Some(socket) = herdr_socket {
+            let boot = format!("{:x}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0));
+            return Ok(match session::snapshot(&socket, &boot).await {
+                Ok(value) => {
+                    let body = boxed(Bytes::from(value.to_string()));
+                    let mut response = Response::new(body);
+                    response.headers_mut().insert("content-type", "application/json; charset=utf-8".parse().unwrap());
+                    response
+                }
+                Err(error) => {
+                    let body = boxed(Bytes::from(format!("{{\"error\":\"{}\"}}\n", error)));
+                    let mut response = Response::new(body);
+                    *response.status_mut() = StatusCode::BAD_GATEWAY;
+                    response
+                }
+            });
+        }
+    }
     // the surface this gateway does not own yet goes to v1, streamed, never buffered
     if let Some(upstream) = upstream {
         if path.starts_with("/api/") || path.starts_with("/_portal/") {
@@ -252,6 +276,7 @@ async fn run(args: Args) -> Result<()> {
     }
     let upstream = args.upstream.clone();
     let trace = args.trace.clone();
+    let herdr_socket = args.herdr_socket.clone();
     let dist = args.dist.canonicalize().unwrap_or_else(|_| args.dist.clone());
     if !dist.is_dir() {
         eprintln!("ovis-v2: --dist {} is not a directory", dist.display());
@@ -285,13 +310,15 @@ async fn run(args: Args) -> Result<()> {
                         let dist = dist.clone();
                         let upstream = upstream.clone();
                         let trace = trace.clone();
+                        let herdr_socket = herdr_socket.clone();
                         tasks.spawn(async move {
                             let conn = hyper::server::conn::http1::Builder::new()
                                 .serve_connection(io, hyper::service::service_fn(move |request| {
                                     let dist = dist.clone();
                                     let upstream = upstream.clone();
                                     let trace = trace.clone();
-                                    async move { serve(dist, upstream, trace, request).await }
+                                    let herdr_socket = herdr_socket.clone();
+                                    async move { serve(dist, upstream, trace, herdr_socket, request).await }
                                 }));
                             let _ = conn.await;
                         });

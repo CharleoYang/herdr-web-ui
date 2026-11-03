@@ -12,6 +12,7 @@ path = "src/main.rs"
 test-listen = []
 
 [dependencies]
+serde_json = "1"
 bytes = "1"
 http-body-util = "0.1"
 hyper = { version = "1", features = ["http1", "server"] }
