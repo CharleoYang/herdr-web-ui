@@ -20,6 +20,7 @@ use http_body_util::{BodyExt, Full};
 mod herdr;
 mod proxy;
 mod pane_http;
+mod pty;
 mod session;
 use hyper::{body::Incoming, Request, Response, StatusCode};
 use std::sync::Arc;
@@ -225,6 +226,55 @@ fn json_error(error: impl std::fmt::Display, status: StatusCode) -> Response<Out
 
 async fn serve(dist: PathBuf, upstream: Option<Arc<str>>, trace: Option<PathBuf>, herdr_socket: Option<PathBuf>, request: Request<Incoming>) -> std::result::Result<Response<Out>, Infallible> {
     let path = request.uri().path();
+    // the test-only PTY endpoint: a WebSocket with the output window, gated on --test-listen AND
+    // the test-listen cargo feature; a production build has no such entry
+    #[cfg(feature = "test-listen")]
+    if path == "/test/pty" && herdr_socket.is_none() {
+        let allowed = true;
+        if allowed {
+            let query = request.uri().query().unwrap_or("");
+            let command = query
+                .split('&')
+                .find_map(|pair| pair.strip_prefix("cmd="))
+                .map(|raw| raw.split('+').map(|part| part.to_string()).collect::<Vec<_>>())
+                .unwrap_or_default();
+            if command.is_empty() {
+                let mut response = Response::new(boxed(Bytes::from_static(b"{\"error\":\"missing cmd\"}\n")));
+                *response.status_mut() = StatusCode::BAD_REQUEST;
+                return Ok(response);
+            }
+            if request.headers().contains_key("upgrade") {
+                // RFC 6455: the handshake is not complete without Sec-WebSocket-Accept
+                use sha1::{Digest, Sha1};
+                let accept = request.headers().get("sec-websocket-key").and_then(|value| value.to_str().ok()).map(|key| {
+                    let mut sha = Sha1::new();
+                    sha.update(key.as_bytes());
+                    sha.update(b"258EAFA5-E914-47DA-95CA-C5AB0DC85B11");
+                    use base64::Engine;
+                    base64::engine::general_purpose::STANDARD.encode(sha.finalize())
+                });
+                let upgraded = hyper::upgrade::on(request);
+                tokio::spawn(async move {
+                    match upgraded.await {
+                        Ok(upgraded) => {
+                            let stream = tokio_tungstenite::WebSocketStream::from_raw_socket(TokioIo::new(upgraded), tokio_tungstenite::tungstenite::protocol::Role::Server, None).await;
+                            pty::attach(stream, 120, 40, command).await;
+                        }
+                        Err(error) => eprintln!("pty upgrade failed: {error}"),
+                    }
+                });
+                let mut response = Response::new(boxed(Bytes::new()));
+                *response.status_mut() = StatusCode::SWITCHING_PROTOCOLS;
+                response.headers_mut().insert("upgrade", "websocket".parse().unwrap());
+                response.headers_mut().insert("connection", "Upgrade".parse().unwrap());
+                if let Some(accept) = accept {
+                    response.headers_mut().insert("sec-websocket-accept", accept.parse().unwrap());
+                }
+                return Ok(response);
+            }
+        }
+    }
+
     // native pane reads: single herdr calls, with v1's own parameter validation
     if path == "/api/pane/read" {
         if request.method() != hyper::Method::GET {
@@ -401,7 +451,8 @@ async fn run(args: Args) -> Result<()> {
                                     let trace = trace.clone();
                                     let herdr_socket = herdr_socket.clone();
                                     async move { serve(dist, upstream, trace, herdr_socket, request).await }
-                                }));
+                                }))
+                                .with_upgrades();
                             let _ = conn.await;
                         });
                     }
