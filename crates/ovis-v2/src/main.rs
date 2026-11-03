@@ -19,6 +19,7 @@ use bytes::Bytes;
 use http_body_util::{BodyExt, Full};
 mod herdr;
 mod proxy;
+mod pane_http;
 mod session;
 use hyper::{body::Incoming, Request, Response, StatusCode};
 use std::sync::Arc;
@@ -207,8 +208,89 @@ fn respond(answer: FileAnswer) -> Response<Out> {
     response
 }
 
+fn json_value(value: serde_json::Value, key: &str, status: StatusCode) -> Response<Out> {
+    let body = boxed(Bytes::from(serde_json::json!({ key: value }).to_string()));
+    let mut response = Response::new(body);
+    *response.status_mut() = status;
+    response.headers_mut().insert("content-type", "application/json; charset=utf-8".parse().unwrap());
+    response
+}
+
+fn json_error(error: impl std::fmt::Display, status: StatusCode) -> Response<Out> {
+    let body = boxed(Bytes::from(format!("{{\"error\":\"{}\"}}\n", error)));
+    let mut response = Response::new(body);
+    *response.status_mut() = status;
+    response
+}
+
 async fn serve(dist: PathBuf, upstream: Option<Arc<str>>, trace: Option<PathBuf>, herdr_socket: Option<PathBuf>, request: Request<Incoming>) -> std::result::Result<Response<Out>, Infallible> {
     let path = request.uri().path();
+    // native pane reads: single herdr calls, with v1's own parameter validation
+    if path == "/api/pane/read" {
+        if request.method() != hyper::Method::GET {
+            let mut response = Response::new(boxed(Bytes::from_static(b"{\"error\":\"use GET\"}\n")));
+            *response.status_mut() = StatusCode::BAD_REQUEST;
+            return Ok(response);
+        }
+        let query = request.uri().query().unwrap_or("");
+        let pane = query.split('&').find_map(|pair| pair.strip_prefix("pane_id=")).unwrap_or("").to_string();
+        if pane.is_empty() {
+            let mut response = Response::new(boxed(Bytes::from_static(b"{\"error\":\"missing_pane_id\"}\n")));
+            *response.status_mut() = StatusCode::BAD_REQUEST;
+            return Ok(response);
+        }
+        let source = query.split('&').find_map(|pair| pair.strip_prefix("source=")).unwrap_or("visible");
+        let format = query.split('&').find_map(|pair| pair.strip_prefix("format=")).unwrap_or("text");
+        let allowed_source = ["detection", "recent", "recent_unwrapped", "visible"].contains(&source);
+        let allowed_format = ["ansi", "text"].contains(&format);
+        if !allowed_source || !allowed_format {
+            let mut response = Response::new(boxed(Bytes::from_static(b"{\"error\":\"invalid_source_or_format\"}\n")));
+            *response.status_mut() = StatusCode::BAD_REQUEST;
+            return Ok(response);
+        }
+        if let Some(socket) = &herdr_socket {
+            return Ok(match pane_http::read(socket, &pane, source, format).await {
+                Ok(value) => json_value(value, "read", StatusCode::OK),
+                Err(error) => json_error(error, StatusCode::BAD_GATEWAY),
+            });
+        }
+    }
+    if path == "/api/pane/scroll" {
+        let query = request.uri().query().unwrap_or("");
+        let pane = query.split('&').find_map(|pair| pair.strip_prefix("pane_id=")).unwrap_or("").to_string();
+        if pane.is_empty() && request.method() == hyper::Method::GET {
+            let mut response = Response::new(boxed(Bytes::from_static(b"{\"error\":\"missing_pane_id\"}\n")));
+            *response.status_mut() = StatusCode::BAD_REQUEST;
+            return Ok(response);
+        }
+        if let Some(socket) = &herdr_socket {
+            if request.method() == hyper::Method::GET {
+                return Ok(match pane_http::scroll_info(socket, &pane).await {
+                    Ok(value) => json_value(value, "scroll", StatusCode::OK),
+                    Err(error) => json_error(error, StatusCode::BAD_GATEWAY),
+                });
+            }
+            if request.method() == hyper::Method::POST {
+                let body = match request.into_body().collect().await {
+                    Ok(collected) => collected.to_bytes(),
+                    Err(_) => Bytes::new(),
+                };
+                let payload: serde_json::Value = serde_json::from_slice(&body).unwrap_or(serde_json::json!({}));
+                let pane_id = payload.get("pane_id").and_then(|v| v.as_str()).unwrap_or("");
+                let offset = payload.get("offset_from_bottom").and_then(|v| v.as_u64());
+                if pane_id.is_empty() || offset.is_none() {
+                    let mut response = Response::new(boxed(Bytes::from_static(b"{\"error\":\"invalid_scroll_request\"}\n")));
+                    *response.status_mut() = StatusCode::BAD_REQUEST;
+                    return Ok(response);
+                }
+                return Ok(match pane_http::scroll(socket, pane_id, offset.unwrap()).await {
+                    Ok(value) => json_value(value, "scroll", StatusCode::OK),
+                    Err(error) => json_error(error, StatusCode::BAD_GATEWAY),
+                });
+            }
+        }
+    }
+
     // a snapshot this gateway answers itself: the RPC read, never a v1 proxy
     if path == "/api/session" {
         if let Some(socket) = herdr_socket {
