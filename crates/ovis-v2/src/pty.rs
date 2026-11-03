@@ -64,6 +64,8 @@ pub async fn attach(stream: tokio_tungstenite::WebSocketStream<TokioIo<hyper::up
     // v1 rechecks the role on every send, not only at attach time
     let mut role = "owner";
     let pane_id = pane_id.unwrap_or_default();
+    let mut stopped = false;
+    let mut queue: Vec<String> = Vec::new();
     let resume = Arc::new(Notify::new());
     let mut offset: u64 = 0;
     let mut buf = [0u8; 16 * 1024];
@@ -81,6 +83,72 @@ pub async fn attach(stream: tokio_tungstenite::WebSocketStream<TokioIo<hyper::up
                     generation.fetch_add(1, Ordering::SeqCst);
                     break;
                 }
+                if text == "stop" {
+                    // Stop cancels queued typing and blocks later writes until resume
+                    stopped = true;
+                    queue.clear();
+                    continue;
+                }
+                if text == "resume" {
+                    stopped = false;
+                    continue;
+                }
+                if let Some(item) = text.strip_prefix("queue:") {
+                    if role == "viewer" {
+                        let _ = sink.lock().await.send(Message::Text("error:role".into())).await;
+                        continue;
+                    }
+                    if stopped {
+                        let _ = sink.lock().await.send(Message::Text("error:stopped".into())).await;
+                        continue;
+                    }
+                    queue.push(item.to_string());
+                    continue;
+                }
+                if text == "flush" {
+                    if stopped {
+                        queue.clear();
+                        continue;
+                    }
+                    for item in std::mem::take(&mut queue) {
+                        if let Some((at, escaped)) = last_typed {
+                            let budget = if escaped { Duration::from_millis(300) } else { Duration::from_millis(40) };
+                            let elapsed = at.elapsed();
+                            if elapsed < budget {
+                                tokio::time::sleep(budget - elapsed).await;
+                            }
+                        }
+                        if stopped {
+                            break;
+                        }
+                        let escaped = item.ends_with('\u{1b}');
+                        let frame = serde_json::json!({ "t": "i", "d": item }).to_string() + "\n";
+                        if stdin.write_all(frame.as_bytes()).await.is_err() { break; }
+                        last_typed = Some((Instant::now(), escaped));
+                        eprintln!("input-write {}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0));
+                    }
+                    continue;
+                }
+                if let Some(item) = text.strip_prefix("herdr:") {
+                    // herdrTyping: an RPC path, with no PTY attach/ready/held requirement
+                    if role == "viewer" {
+                        let _ = sink.lock().await.send(Message::Text("error:role".into())).await;
+                        continue;
+                    }
+                    match socket.clone() {
+                        Some(socket) => {
+                            let params = serde_json::json!({ "pane_id": pane_id, "text": item });
+                            tokio::spawn(async move {
+                                let client = crate::herdr::Herdr::new(&socket, 10_000);
+                                let _ = client.call("1", "pane.send_text", &params.to_string()).await;
+                            });
+                        }
+                        None => {
+                            let _ = sink.lock().await.send(Message::Text("error:no-herdr".into())).await;
+                        }
+                    }
+                    continue;
+                }
                 if let Some(value) = text.strip_prefix("role:") {
                     role = if value == "viewer" { "viewer" } else { "owner" };
                     continue;
@@ -97,9 +165,18 @@ pub async fn attach(stream: tokio_tungstenite::WebSocketStream<TokioIo<hyper::up
                     continue;
                 }
                 if let Some(input) = text.strip_prefix("secret:") {
-                    // secret input: same write path, but the content is never logged anywhere
+                    // secret input: the content is never logged anywhere
                     if role == "viewer" {
                         let _ = sink.lock().await.send(Message::Text("error:role".into())).await;
+                        continue;
+                    }
+                    if let Some(socket) = socket.clone() {
+                        // mirrorSecret: a mirrored pane's secret goes over RPC, never into a local pty log
+                        let params = serde_json::json!({ "pane_id": pane_id, "text": input });
+                        tokio::spawn(async move {
+                            let client = crate::herdr::Herdr::new(&socket, 10_000);
+                            let _ = client.call("1", "pane.send_text", &params.to_string()).await;
+                        });
                         continue;
                     }
                     let frame = serde_json::json!({ "t": "i", "d": input }).to_string() + "\n";
@@ -130,6 +207,10 @@ pub async fn attach(stream: tokio_tungstenite::WebSocketStream<TokioIo<hyper::up
                     continue;
                 }
                 if let Some(input) = text.strip_prefix("input:") {
+                    if stopped {
+                        let _ = sink.lock().await.send(Message::Text("error:stopped".into())).await;
+                        continue;
+                    }
                     // the settle wait belongs to the previous write, then the generation is rechecked
                     if let Some((at, escaped)) = last_typed {
                         let budget = if escaped { Duration::from_millis(300) } else { Duration::from_millis(40) };

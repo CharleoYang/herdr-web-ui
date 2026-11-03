@@ -34,9 +34,7 @@ const fixture = net.createServer((socket) => {
       if (!line.trim()) continue;
       try {
         const request = JSON.parse(line);
-        if (request.method === "pane.send_keys") {
-          rpcCalls.push({ method: request.method, params: request.params });
-        }
+        rpcCalls.push({ method: request.method, params: request.params });
         socket.write(JSON.stringify({ id: request.id, result: { type: "ok" } }) + "\n");
       } catch { /* ignore malformed */ }
     }
@@ -156,12 +154,15 @@ try {
     session.ws.close();
   }
   {
-    const session = openSession(withSocket.port);
+    const session = openSession(withSocket.port, "w1:p1");
     await session.opened;
+    const before = rpcCalls.length;
     session.ws.send("secret:hunter2");
-    await waitFor(() => session.echoes.join("").includes("hunter2"));
-    check("secret input still reaches the pty", session.echoes.join("").includes("hunter2"));
-    await delay(100);
+    await waitFor(() => rpcCalls.length > before);
+    await delay(150);
+    const call = rpcCalls[before];
+    check("a mirrored secret goes over pane.send_text", call?.method === "pane.send_text" && call?.params?.text === "hunter2", JSON.stringify(call ?? {}));
+    check("a mirrored secret is not written to the local pty", !session.echoes.join("").includes("hunter2"));
     check("secret text never reaches the gateway log", !withSocket.stderr.join("\n").includes("hunter2"));
     session.ws.close();
   }
@@ -186,6 +187,10 @@ try {
   session.ws.send('keys:["a"]');
   await waitFor(() => session.echoes.join("").includes("a"));
   check("with no herdr socket, keys fall back to the pty", session.echoes.join("").includes("a"));
+  session.ws.send("secret:localsecret");
+  await waitFor(() => session.echoes.join("").includes("localsecret"));
+  check("with no herdr socket, a secret is written to the pty", session.echoes.join("").includes("localsecret"));
+  check("a local secret never reaches the gateway log", !withoutSocket.stderr.join("\n").includes("localsecret"));
   session.ws.close();
 } finally {
   withoutSocket.stop();
