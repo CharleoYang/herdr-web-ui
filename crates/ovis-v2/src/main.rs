@@ -17,6 +17,7 @@ use std::{
 
 use bytes::Bytes;
 use http_body_util::{BodyExt, Full};
+mod access;
 mod conversation;
 mod herdr;
 mod proxy;
@@ -64,6 +65,10 @@ struct Args {
     herdr_socket: Option<PathBuf>,
     state_path: Option<PathBuf>,
     transcripts: Option<PathBuf>,
+    token: Option<String>,
+    origins: Vec<String>,
+    revoked: Vec<String>,
+    trust_proxy: bool,
 }
 
 fn parse() -> Result<Args> {
@@ -78,6 +83,10 @@ fn parse() -> Result<Args> {
     let mut herdr_socket: Option<PathBuf> = None;
     let mut state_path: Option<PathBuf> = None;
     let mut transcripts: Option<PathBuf> = None;
+    let mut token: Option<String> = None;
+    let mut origins: Vec<String> = Vec::new();
+    let mut revoked: Vec<String> = Vec::new();
+    let mut trust_proxy = false;
     let mut argv = env::args().skip(1);
     while let Some(arg) = argv.next() {
         match arg.as_str() {
@@ -92,6 +101,10 @@ fn parse() -> Result<Args> {
             "--herdr-socket" => herdr_socket = Some(PathBuf::from(argv.next().ok_or("--herdr-socket needs a path")?)),
             "--state" => state_path = Some(PathBuf::from(argv.next().ok_or("--state needs a path")?)),
             "--transcripts" => transcripts = Some(PathBuf::from(argv.next().ok_or("--transcripts needs a path")?)),
+            "--token" => token = Some(argv.next().ok_or("--token needs a value")?),
+            "--allow-origin" => origins.extend(argv.next().ok_or("--allow-origin needs a value")?.split(',').map(|v| v.to_string())),
+            "--revoke" => revoked.extend(argv.next().ok_or("--revoke needs a value")?.split(',').map(|v| v.to_string())),
+            "--trust-proxy" => trust_proxy = true,
             "-h" | "--help" => {
                 println!("{USAGE}");
                 process::exit(0);
@@ -104,7 +117,7 @@ fn parse() -> Result<Args> {
             port = fromEnv.to_string_lossy().parse()?;
         }
     }
-    Ok(Args { dist, port, host, selftest, test_listen, upstream, trace, rpc_selftest, herdr_socket, state_path, transcripts })
+    Ok(Args { dist, port, host, selftest, test_listen, upstream, trace, rpc_selftest, herdr_socket, state_path, transcripts, token, origins, revoked, trust_proxy })
 }
 
 /// Only a loopback listener: a public bind would move traffic the plan has not migrated yet.
@@ -245,8 +258,28 @@ fn json_error(error: impl std::fmt::Display, status: StatusCode) -> Response<Out
     response
 }
 
-async fn serve(dist: PathBuf, upstream: Option<Arc<str>>, trace: Option<PathBuf>, herdr_socket: Option<PathBuf>, store: Arc<state::Store>, transcripts: Option<PathBuf>, request: Request<Incoming>) -> std::result::Result<Response<Out>, Infallible> {
+async fn serve(dist: PathBuf, upstream: Option<Arc<str>>, trace: Option<PathBuf>, herdr_socket: Option<PathBuf>, store: Arc<state::Store>, transcripts: Option<PathBuf>, access: Arc<access::Access>, request: Request<Incoming>) -> std::result::Result<Response<Out>, Infallible> {
     let path = request.uri().path();
+    if path.starts_with("/api/") {
+        let header = |name: &str| request.headers().get(name).and_then(|value| value.to_str().ok()).map(|value| value.to_string());
+        let token = header("authorization").and_then(|value| value.strip_prefix("Bearer ").map(|rest| rest.to_string()))
+            .or_else(|| request.uri().query().unwrap_or("").split('&').find_map(|pair| pair.strip_prefix("token=")).map(|value| value.to_string()));
+        let origin = header("origin");
+        let device = header("x-device-id");
+        let evidence = access::Evidence {
+            loopback: true,
+            forwarded: header("x-forwarded-for").is_some(),
+            token: token.as_deref(),
+            origin: origin.as_deref(),
+            device: device.as_deref(),
+        };
+        if let access::Decision::Reject(reason) = access.admit(&evidence) {
+            let status = if reason == "token" { StatusCode::UNAUTHORIZED } else { StatusCode::FORBIDDEN };
+            let mut response = json_response(format!("{{\"error\":\"{reason}\"}}"));
+            *response.status_mut() = status;
+            return Ok(response);
+        }
+    }
     // the test-only PTY endpoint: a WebSocket with the output window, gated on --test-listen AND
     // the test-listen cargo feature; a production build has no such entry
     #[cfg(feature = "test-listen")]
@@ -507,6 +540,7 @@ async fn run(args: Args) -> Result<()> {
     let herdr_socket = args.herdr_socket.clone();
     let store = state::Store::load(args.state_path.as_deref().unwrap_or(Path::new("ovis-v2-state.json")));
     let transcripts = args.transcripts.clone();
+    let access = Arc::new(access::Access::new(args.token.clone(), args.origins.clone(), args.revoked.clone(), args.trust_proxy));
     let dist = args.dist.canonicalize().unwrap_or_else(|_| args.dist.clone());
     if !dist.is_dir() {
         eprintln!("ovis-v2: --dist {} is not a directory", dist.display());
@@ -543,6 +577,7 @@ async fn run(args: Args) -> Result<()> {
                         let herdr_socket = herdr_socket.clone();
                         let store = store.clone();
                         let transcripts = transcripts.clone();
+                        let access = access.clone();
                         tasks.spawn(async move {
                             let conn = hyper::server::conn::http1::Builder::new()
                                 .serve_connection(io, hyper::service::service_fn(move |request| {
@@ -552,7 +587,8 @@ async fn run(args: Args) -> Result<()> {
                                     let herdr_socket = herdr_socket.clone();
                                     let store = store.clone();
                                     let transcripts = transcripts.clone();
-                                    async move { serve(dist, upstream, trace, herdr_socket, store, transcripts, request).await }
+                                    let access = access.clone();
+                                    async move { serve(dist, upstream, trace, herdr_socket, store, transcripts, access, request).await }
                                 }))
                                 .with_upgrades();
                             let _ = conn.await;
